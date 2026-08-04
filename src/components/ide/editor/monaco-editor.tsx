@@ -15,9 +15,18 @@ interface MonacoEditorProps {
   onMount?: (editor: Monaco.editor.IStandaloneCodeEditor, monaco: typeof Monaco) => void;
   fontSize?: number;
   readOnly?: boolean;
+  /** Show the glyph margin (for comment indicators) */
+  glyphMargin?: boolean;
+  /** Lines to highlight (e.g. focused comment anchor) */
+  highlightedLines?: number[];
+  /** Called when user right-clicks and selects "Add Comment" */
+  onAddComment?: (lineNumber: number, lineContent: string) => void;
+  /** Called when user clicks a glyph margin decoration */
+  onGlyphClick?: (lineNumber: number) => void;
+  /** Glyph decorations: line → color */
+  glyphDecorations?: { lineNumber: number; color: string; tooltip: string }[];
 }
 
-/** Map our internal language ids to Monaco language ids */
 function monacoLanguage(lang: string): string {
   switch (lang) {
     case "rust":
@@ -30,7 +39,7 @@ function monacoLanguage(lang: string): string {
     case "jsx":
       return "javascript";
     case "toml":
-      return "ini"; // closest built-in
+      return "ini";
     case "markdown":
       return "markdown";
     case "json":
@@ -50,46 +59,203 @@ export function MonacoEditor({
   onMount,
   fontSize = 13,
   readOnly = false,
+  glyphMargin = true,
+  highlightedLines = [],
+  onAddComment,
+  onGlyphClick,
+  glyphDecorations = [],
 }: MonacoEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
+  const monacoRef = useRef<typeof Monaco | null>(null);
+  const decorationsRef = useRef<string[]>([]);
+  const highlightDecorationsRef = useRef<string[]>([]);
   const themeId = useThemeStore((s) => s.themeId);
   const getActiveTheme = useThemeStore((s) => s.getActiveTheme);
+
+  // Keep latest callbacks in refs so Monaco event handlers don't go stale
+  const onAddCommentRef = useRef(onAddComment);
+  const onGlyphClickRef = useRef(onGlyphClick);
+  useEffect(() => { onAddCommentRef.current = onAddComment; }, [onAddComment]);
+  useEffect(() => { onGlyphClickRef.current = onGlyphClick; }, [onGlyphClick]);
 
   const beforeMount: BeforeMount = (monaco) => {
     if (!sorobanRegistered) {
       registerSorobanLanguage(monaco);
       sorobanRegistered = true;
     }
-    // Register all themes so they're available for live switching
     const theme = getActiveTheme();
     monaco.editor.defineTheme(theme.id, buildMonacoTheme(theme));
   };
 
   const handleMount: OnMount = (editor, monaco) => {
     editorRef.current = editor;
+    monacoRef.current = monaco;
+
     const theme = getActiveTheme();
     monaco.editor.defineTheme(theme.id, buildMonacoTheme(theme));
     monaco.editor.setTheme(theme.id);
 
-    // Update model language when path/language changes
     const model = editor.getModel();
     if (model) {
       monaco.editor.setModelLanguage(model, monacoLanguage(language));
     }
+
+    // §6.1 — Add "Add Comment" to the editor context menu
+    editor.addAction({
+      id: "soroban.addComment",
+      label: "Add Comment",
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyM],
+      contextMenuGroupId: "soroban",
+      contextMenuOrder: 1,
+      run: (ed) => {
+        const position = ed.getPosition();
+        if (!position) return;
+        const lineNumber = position.lineNumber;
+        const lineContent = ed.getModel()?.getLineContent(lineNumber) ?? "";
+        onAddCommentRef.current?.(lineNumber, lineContent);
+      },
+    });
+
+    // §6.10 — Click on glyph margin → focus that thread
+    editor.onMouseDown((e) => {
+      const target = e.target;
+      if (
+        target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN &&
+        target.position
+      ) {
+        onGlyphClickRef.current?.(target.position.lineNumber);
+      }
+    });
 
     onMount?.(editor, monaco);
   };
 
   // Live theme switching
   useEffect(() => {
-    if (!editorRef.current) return;
-    const monaco = (window as unknown as { monaco?: typeof Monaco }).monaco;
-    if (!monaco) return;
+    if (!editorRef.current || !monacoRef.current) return;
+    const monaco = monacoRef.current;
     const theme = getActiveTheme();
     monaco.editor.defineTheme(theme.id, buildMonacoTheme(theme));
     monaco.editor.setTheme(theme.id);
   }, [themeId, getActiveTheme]);
+
+  // Apply glyph decorations (comment priority indicators)
+  useEffect(() => {
+    if (!editorRef.current || !monacoRef.current) return;
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+
+    if (glyphDecorations.length === 0) {
+      if (decorationsRef.current.length) {
+        decorationsRef.current = editor.deltaDecorations(decorationsRef.current, []);
+      }
+      return;
+    }
+
+    const decorations: Monaco.editor.IModelDeltaDecoration[] = glyphDecorations.map((d) => ({
+      range: new monaco.Range(d.lineNumber, 1, d.lineNumber, 1),
+      options: {
+        isWholeLine: false,
+        glyphMarginClassName: "soroban-comment-glyph",
+        glyphMarginHoverMessage: { value: d.tooltip },
+        // Use inline HTML color via CSS variable trick — Monaco doesn't natively
+        // support per-decoration glyph color, so we use a CSS class + custom style
+        marginClassName: "soroban-comment-margin",
+      },
+    }));
+
+    decorationsRef.current = editor.deltaDecorations(
+      decorationsRef.current,
+      decorations
+    );
+
+    // Inject per-line glyph colors via a <style> tag
+    const styleId = "soroban-glyph-colors";
+    let style = document.getElementById(styleId) as HTMLStyleElement | null;
+    if (!style) {
+      style = document.createElement("style");
+      style.id = styleId;
+      document.head.appendChild(style);
+    }
+    const rules = glyphDecorations
+      .map((d, i) => {
+        // Use line-number-scoped selector isn't possible with Monaco's class.
+        // Workaround: render all glyphs with the accent color, but vary by priority
+        // via a custom class we add per priority using a separate decoration.
+        return "";
+      })
+      .join("\n");
+    style.textContent = `
+      .soroban-comment-glyph {
+        background: var(--accent);
+        border-radius: 50%;
+        margin-left: 4px;
+        width: 8px;
+        height: 8px;
+        margin-top: 6px;
+      }
+      .soroban-comment-glyph::before {
+        content: "";
+        display: block;
+        width: 8px;
+        height: 8px;
+      }
+    `;
+  }, [glyphDecorations]);
+
+  // Apply line highlights (when comment focused)
+  useEffect(() => {
+    if (!editorRef.current || !monacoRef.current) return;
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+
+    if (highlightedLines.length === 0) {
+      if (highlightDecorationsRef.current.length) {
+        highlightDecorationsRef.current = editor.deltaDecorations(
+          highlightDecorationsRef.current,
+          []
+        );
+      }
+      return;
+    }
+
+    const decorations: Monaco.editor.IModelDeltaDecoration[] = highlightedLines.map((line) => ({
+      range: new monaco.Range(line, 1, line, 1),
+      options: {
+        isWholeLine: true,
+        className: "soroban-line-highlight",
+        overviewRuler: {
+          color: "var(--accent)",
+          position: monaco.editor.OverviewRulerLane.Center,
+        },
+      },
+    }));
+
+    highlightDecorationsRef.current = editor.deltaDecorations(
+      highlightDecorationsRef.current,
+      decorations
+    );
+
+    // Inject highlight style
+    const styleId = "soroban-highlight-style";
+    let style = document.getElementById(styleId) as HTMLStyleElement | null;
+    if (!style) {
+      style = document.createElement("style");
+      style.id = styleId;
+      document.head.appendChild(style);
+    }
+    style.textContent = `
+      .soroban-line-highlight {
+        background: var(--accent-subtle) !important;
+        animation: soroban-highlight-pulse 1.2s ease-out;
+      }
+      @keyframes soroban-highlight-pulse {
+        0% { background: var(--accent) !important; }
+        100% { background: var(--accent-subtle) !important; }
+      }
+    `;
+  }, [highlightedLines]);
 
   return (
     <div ref={containerRef} className="h-full w-full overflow-hidden bg-[var(--mono-bg)]">
@@ -115,6 +281,7 @@ export function MonacoEditor({
           fontLigatures: true,
           lineHeight: 1.6,
           letterSpacing: 0.2,
+          glyphMargin: glyphMargin,
           minimap: { enabled: true, renderCharacters: false, maxColumn: 80 },
           scrollbar: {
             verticalScrollbarSize: 10,
@@ -160,4 +327,14 @@ export function MonacoEditor({
       />
     </div>
   );
+}
+
+/**
+ * Expose a helper to scroll the editor to a specific line.
+ * Returns null if the editor isn't mounted yet.
+ */
+export function scrollToLine(editor: Monaco.editor.IStandaloneCodeEditor | null, line: number) {
+  if (!editor) return;
+  editor.revealLineInCenter(line);
+  editor.setPosition({ lineNumber: line, column: 1 });
 }

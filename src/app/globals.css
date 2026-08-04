@@ -1,0 +1,428 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ============================================================
+   Soroban.Build Design System
+   Token-based theme engine — every theme maps onto these vars.
+   §4 rules: NO gradients, NO neons, flat solid fills only.
+   ============================================================ */
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+
+  /* shadcn aliases (kept for compatibility with installed UI kit) */
+  --color-card: var(--surface-raised);
+  --color-card-foreground: var(--text-primary);
+  --color-popover: var(--surface-raised);
+  --color-popover-foreground: var(--text-primary);
+  --color-primary: var(--accent);
+  --color-primary-foreground: var(--accent-contrast);
+  --color-secondary: var(--surface-sunken);
+  --color-secondary-foreground: var(--text-primary);
+  --color-muted: var(--surface-sunken);
+  --color-muted-foreground: var(--text-muted);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-contrast);
+  --color-destructive: var(--status-error);
+  --color-border: var(--border-subtle);
+  --color-input: var(--border-input);
+  --color-ring: var(--accent);
+
+  /* sidebar aliases (used by shadcn sidebar primitive) */
+  --color-sidebar: var(--surface-panel);
+  --color-sidebar-foreground: var(--text-primary);
+  --color-sidebar-primary: var(--accent);
+  --color-sidebar-primary-foreground: var(--accent-contrast);
+  --color-sidebar-accent: var(--surface-raised);
+  --color-sidebar-accent-foreground: var(--text-primary);
+  --color-sidebar-border: var(--border-subtle);
+  --color-sidebar-ring: var(--accent);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+/* ------------------------------------------------------------
+   Default token values — Midnight (dark) theme.
+   At runtime, ThemeProvider sets data-theme="midnight" on <html>
+   and these :root tokens are overridden by [data-theme="..."].
+   ------------------------------------------------------------ */
+:root {
+  /* radius */
+  --radius: 0.5rem;
+
+  /* === Midnight (dark) — default fallback === */
+  --surface-app: #0D0E11;
+  --surface-panel: #131418;
+  --surface-raised: #1A1B20;
+  --surface-sunken: #0A0B0E;
+  --surface-hover: #202227;
+  --surface-active: #26282E;
+
+  --border-subtle: #1F2024;
+  --border-strong: #2A2C31;
+  --border-input: #2D2F35;
+
+  --text-primary: #E6E7EA;
+  --text-secondary: #A8AAB0;
+  --text-muted: #6E7178;
+  --text-disabled: #4A4D54;
+
+  --accent: #4F8C8C;
+  --accent-hover: #5B9D9D;
+  --accent-active: #69AEAE;
+  --accent-contrast: #FFFFFF;
+  --accent-subtle: rgba(79, 140, 140, 0.16);
+
+  --status-success: #6FA885;
+  --status-warning: #C9A66B;
+  --status-error: #C97A7A;
+  --status-info: #7B96B3;
+
+  /* comment priority palette (muted) */
+  --priority-urgent: #C97A7A;
+  --priority-high: #D29464;
+  --priority-normal: #C9A66B;
+  --priority-low: #7B96B3;
+  --priority-suggestion: #6FA885;
+
+  /* Monaco + xterm tokens (set at runtime by theme engine) */
+  --mono-bg: #0D0E11;
+  --mono-fg: #D8DADE;
+  --mono-gutter: #2A2C31;
+  --mono-lineHighlight: #1A1B20;
+  --mono-selection: rgba(79, 140, 140, 0.24);
+  --mono-cursor: #4F8C8C;
+
+  /* IDE chrome */
+  --collab-cursor-self: #4F8C8C;
+  --shadow-soft: 0 1px 2px rgba(0,0,0,0.04), 0 0 0 1px var(--border-subtle);
+}
+
+/* ============================================================
+   Theme token overrides — applied via [data-theme="..."]
+   Each theme defines only the tokens that change from defaults.
+   ============================================================ */
+
+[data-theme="midnight"] {
+  --surface-app: #0D0E11;
+  --surface-panel: #131418;
+  --surface-raised: #1A1B20;
+  --surface-sunken: #0A0B0E;
+  --surface-hover: #202227;
+  --surface-active: #26282E;
+  --border-subtle: #1F2024;
+  --border-strong: #2A2C31;
+  --border-input: #2D2F35;
+  --text-primary: #E6E7EA;
+  --text-secondary: #A8AAB0;
+  --text-muted: #6E7178;
+  --text-disabled: #4A4D54;
+  --accent: #4F8C8C;
+  --accent-hover: #5B9D9D;
+  --accent-active: #69AEAE;
+  --accent-contrast: #FFFFFF;
+  --accent-subtle: rgba(79, 140, 140, 0.16);
+}
+
+[data-theme="daybreak"] {
+  --surface-app: #FAFAFA;
+  --surface-panel: #FFFFFF;
+  --surface-raised: #FFFFFF;
+  --surface-sunken: #F1F2F4;
+  --surface-hover: #F5F6F8;
+  --surface-active: #ECEDEF;
+  --border-subtle: #E3E4E8;
+  --border-strong: #D1D3D8;
+  --border-input: #DCDEE3;
+  --text-primary: #1A1B1F;
+  --text-secondary: #5A5D65;
+  --text-muted: #8A8D94;
+  --text-disabled: #B5B8BF;
+  --accent: #3F7A7A;
+  --accent-hover: #356868;
+  --accent-active: #2C5757;
+  --accent-contrast: #FFFFFF;
+  --accent-subtle: rgba(63, 122, 122, 0.10);
+  --shadow-soft: 0 1px 2px rgba(0,0,0,0.04), 0 0 0 1px var(--border-subtle);
+}
+
+[data-theme="slate"] {
+  --surface-app: #16191E;
+  --surface-panel: #1C2026;
+  --surface-raised: #232830;
+  --surface-sunken: #111419;
+  --surface-hover: #2A2F37;
+  --surface-active: #313741;
+  --border-subtle: #272C34;
+  --border-strong: #343B45;
+  --border-input: #383F49;
+  --text-primary: #DBE0E5;
+  --text-secondary: #9AA1AB;
+  --text-muted: #666C76;
+  --text-disabled: #42474F;
+  --accent: #6B8AAE;
+  --accent-hover: #7898BC;
+  --accent-active: #85A5C9;
+  --accent-contrast: #FFFFFF;
+  --accent-subtle: rgba(107, 138, 174, 0.16);
+}
+
+[data-theme="frost"] {
+  --surface-app: #F6F8FA;
+  --surface-panel: #FFFFFF;
+  --surface-raised: #FFFFFF;
+  --surface-sunken: #ECEFF3;
+  --surface-hover: #F0F3F7;
+  --surface-active: #E5E9EE;
+  --border-subtle: #DDE2E8;
+  --border-strong: #C7CDD6;
+  --border-input: #D1D7DE;
+  --text-primary: #1F2A36;
+  --text-secondary: #566273;
+  --text-muted: #8590A0;
+  --text-disabled: #B0B8C4;
+  --accent: #4E7A99;
+  --accent-hover: #416885;
+  --accent-active: #355672;
+  --accent-contrast: #FFFFFF;
+  --accent-subtle: rgba(78, 122, 153, 0.10);
+  --shadow-soft: 0 1px 2px rgba(20,30,40,0.05), 0 0 0 1px var(--border-subtle);
+}
+
+[data-theme="parchment"] {
+  --surface-app: #F4EFE5;
+  --surface-panel: #FAF6EC;
+  --surface-raised: #FBF7EE;
+  --surface-sunken: #EAE3D2;
+  --surface-hover: #F0EADD;
+  --surface-active: #E5DCC6;
+  --border-subtle: #DCD2BD;
+  --border-strong: #C8BCA0;
+  --border-input: #D2C8B0;
+  --text-primary: #2B2418;
+  --text-secondary: #665A45;
+  --text-muted: #8C8068;
+  --text-disabled: #B0A488;
+  --accent: #8A6A3F;
+  --accent-hover: #755834;
+  --accent-active: #61472B;
+  --accent-contrast: #FAF6EC;
+  --accent-subtle: rgba(138, 106, 63, 0.12);
+  --shadow-soft: 0 1px 2px rgba(60,40,15,0.05), 0 0 0 1px var(--border-subtle);
+}
+
+[data-theme="ember"] {
+  --surface-app: #1A1614;
+  --surface-panel: #221D1A;
+  --surface-raised: #2A2421;
+  --surface-sunken: #15110F;
+  --surface-hover: #322B27;
+  --surface-active: #3A3128;
+  --border-subtle: #2C2622;
+  --border-strong: #3A3128;
+  --border-input: #3F352E;
+  --text-primary: #E8DCD2;
+  --text-secondary: #A89484;
+  --text-muted: #73665B;
+  --text-disabled: #48403A;
+  --accent: #C5794B;
+  --accent-hover: #D08858;
+  --accent-active: #DC9866;
+  --accent-contrast: #1A1614;
+  --accent-subtle: rgba(197, 121, 75, 0.18);
+}
+
+[data-theme="forest"] {
+  --surface-app: #131715;
+  --surface-panel: #1A201C;
+  --surface-raised: #222923;
+  --surface-sunken: #0E1310;
+  --surface-hover: #283027;
+  --surface-active: #2E382C;
+  --border-subtle: #242B26;
+  --border-strong: #313A30;
+  --border-input: #344035;
+  --text-primary: #D8E0D5;
+  --text-secondary: #94A293;
+  --text-muted: #657065;
+  --text-disabled: #424A42;
+  --accent: #6B9A6B;
+  --accent-hover: #79AB79;
+  --accent-active: #88BC88;
+  --accent-contrast: #0E1310;
+  --accent-subtle: rgba(107, 154, 107, 0.16);
+}
+
+[data-theme="harbor"] {
+  --surface-app: #0F1517;
+  --surface-panel: #161E21;
+  --surface-raised: #1E272B;
+  --surface-sunken: #0A0F11;
+  --surface-hover: #263034;
+  --surface-active: #2D383D;
+  --border-subtle: #1F282C;
+  --border-strong: #2C363B;
+  --border-input: #303B41;
+  --text-primary: #D4DEE0;
+  --text-secondary: #8E9CA0;
+  --text-muted: #5E6A6E;
+  --text-disabled: #3D464A;
+  --accent: #4E8488;
+  --accent-hover: #5A9498;
+  --accent-active: #67A4A8;
+  --accent-contrast: #FFFFFF;
+  --accent-subtle: rgba(78, 132, 136, 0.16);
+}
+
+[data-theme="mono"] {
+  --surface-app: #111111;
+  --surface-panel: #181818;
+  --surface-raised: #202020;
+  --surface-sunken: #0C0C0C;
+  --surface-hover: #262626;
+  --surface-active: #2C2C2C;
+  --border-subtle: #232323;
+  --border-strong: #303030;
+  --border-input: #343434;
+  --text-primary: #E5E5E5;
+  --text-secondary: #A0A0A0;
+  --text-muted: #6E6E6E;
+  --text-disabled: #454545;
+  --accent: #B0B0B0;
+  --accent-hover: #C0C0C0;
+  --accent-active: #D0D0D0;
+  --accent-contrast: #111111;
+  --accent-subtle: rgba(176, 176, 176, 0.12);
+}
+
+[data-theme="contrast"] {
+  --surface-app: #000000;
+  --surface-panel: #0A0A0A;
+  --surface-raised: #141414;
+  --surface-sunken: #000000;
+  --surface-hover: #1E1E1E;
+  --surface-active: #282828;
+  --border-subtle: #2E2E2E;
+  --border-strong: #444444;
+  --border-input: #4A4A4A;
+  --text-primary: #FFFFFF;
+  --text-secondary: #D0D0D0;
+  --text-muted: #A0A0A0;
+  --text-disabled: #707070;
+  --accent: #FFD23F;
+  --accent-hover: #FFDB5C;
+  --accent-active: #FFE479;
+  --accent-contrast: #000000;
+  --accent-subtle: rgba(255, 210, 63, 0.20);
+}
+
+/* Backwards-compat: keep .dark / .light toggling for shadcn primitives
+   that rely on them. ThemeProvider adds .dark when theme is dark. */
+.dark {
+  /* no-op — tokens already come from [data-theme] */
+}
+
+@layer base {
+  * {
+    border-color: var(--border-subtle);
+    outline-color: var(--accent);
+  }
+
+  html, body {
+    height: 100%;
+    overflow: hidden; /* IDE is single-page; panels scroll internally */
+  }
+
+  body {
+    background-color: var(--surface-app);
+    color: var(--text-primary);
+    font-feature-settings: "cv11", "ss01";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Custom scrollbar — thin, restrained, matches theme */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border-strong);
+    border-radius: 5px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
+    background-clip: padding-box;
+    border: 2px solid transparent;
+  }
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  /* Focus ring — visible, never decorative */
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+    border-radius: 2px;
+  }
+
+  /* Selection */
+  ::selection {
+    background: var(--accent-subtle);
+    color: var(--text-primary);
+  }
+}
+
+@layer utilities {
+  /* IDE-specific helpers */
+  .surface-app { background-color: var(--surface-app); }
+  .surface-panel { background-color: var(--surface-panel); }
+  .surface-raised { background-color: var(--surface-raised); }
+  .surface-sunken { background-color: var(--surface-sunken); }
+  .surface-hover:hover { background-color: var(--surface-hover); }
+
+  .text-primary-c { color: var(--text-primary); }
+  .text-secondary-c { color: var(--text-secondary); }
+  .text-muted-c { color: var(--text-muted); }
+
+  .border-subtle-c { border-color: var(--border-subtle); }
+  .border-strong-c { border-color: var(--border-strong); }
+
+  .bg-accent-c { background-color: var(--accent); }
+  .text-accent-c { color: var(--accent); }
+  .bg-accent-subtle { background-color: var(--accent-subtle); }
+
+  /* Skeleton shimmer (subtle, no rainbow) */
+  .skeleton-shimmer {
+    background: linear-gradient(90deg,
+      var(--surface-sunken) 0%,
+      var(--surface-hover) 50%,
+      var(--surface-sunken) 100%);
+    background-size: 200% 100%;
+    animation: shimmer 1.6s ease-in-out infinite;
+  }
+  @keyframes shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+
+  /* Hairline divider — 1px, subtle */
+  .hairline-b { border-bottom: 1px solid var(--border-subtle); }
+  .hairline-t { border-top: 1px solid var(--border-subtle); }
+  .hairline-r { border-right: 1px solid var(--border-subtle); }
+  .hairline-l { border-left: 1px solid var(--border-subtle); }
+}

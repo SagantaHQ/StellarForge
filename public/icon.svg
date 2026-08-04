@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <rect width="256" height="256" rx="56" fill="#0D0E11"/>
+  <g fill="none" stroke="#4F8C8C" stroke-width="14" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Stylized "S" for Soroban + chevron suggesting solidity/structure -->
+    <path d="M 168 80 Q 168 56 128 56 Q 88 56 88 88 Q 88 120 128 128 Q 168 136 168 168 Q 168 200 128 200 Q 88 200 88 176" />
+  </g>
+  <g fill="#4F8C8C">
+    <circle cx="80" cy="80" r="6"/>
+    <circle cx="176" cy="80" r="6"/>
+    <circle cx="80" cy="176" r="6"/>
+    <circle cx="176" cy="176" r="6"/>
+  </g>
+</svg>

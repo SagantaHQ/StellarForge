@@ -1,0 +1,275 @@
+// Soroban.Build Prisma schema
+// Database: PostgreSQL (Neon)
+// Docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  // Needed for Neon pooled connections (pgbouncer)
+  directUrl = env("DIRECT_DATABASE_URL")
+}
+
+// ============================================================
+// Users & Profiles
+// ============================================================
+
+model User {
+  id            String    @id @default(cuid())
+  email         String?   @unique
+  walletAddress String?   @unique
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  lastSeenAt    DateTime?
+
+  profile       Profile?
+  ownedProjects Project[] @relation("OwnedProjects")
+  memberships   ProjectMember[]
+  comments      Comment[]
+  commentResolves Comment[] @relation("ResolvedBy")
+  auditLogs     AuditLog[]
+  collabSessions CollabSessionParticipant[]
+  sharedToMe    SharePermission[] @relation("SharedToUser")
+
+  @@index([walletAddress])
+  @@index([email])
+}
+
+model Profile {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  username      String   @unique
+  displayName   String?
+  avatarUrl     String?
+  bio           String?
+  preferredTheme String?
+  accentColor   String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([username])
+}
+
+// ============================================================
+// Projects & Files
+// ============================================================
+
+model Project {
+  id            String   @id @default(cuid())
+  name          String
+  slug          String   @unique
+  description   String?
+  ownerId       String
+  owner         User     @relation("OwnedProjects", fields: [ownerId], references: [id], onDelete: Cascade)
+  isPublic      Boolean  @default(false)
+  defaultBranch String   @default("main")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  members       ProjectMember[]
+  files         File[]
+  comments      Comment[]
+  collabSessions CollabSession[]
+  sharePermissions SharePermission[]
+  auditLogs     AuditLog[]
+  snapshots     ProjectSnapshot[]
+
+  @@index([ownerId])
+  @@index([slug])
+}
+
+model ProjectMember {
+  id        String   @id @default(cuid())
+  projectId String
+  userId    String
+  role      ProjectRole
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([projectId, userId])
+  @@index([userId])
+}
+
+enum ProjectRole {
+  OWNER
+  MAINTAINER
+  EDITOR
+  VIEWER
+}
+
+model File {
+  id          String   @id @default(cuid())
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  path        String   // full path within project, e.g. "src/lib.rs"
+  content     String   @db.Text
+  language    String
+  gitStatus   String?  // modified | added | untracked
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  deletedAt   DateTime?
+
+  comments    Comment[]
+
+  @@unique([projectId, path])
+  @@index([projectId])
+}
+
+model ProjectSnapshot {
+  id          String   @id @default(cuid())
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  treeJson    String   @db.Text // serialized file tree at snapshot time
+  createdBy   String?
+  createdAt   DateTime @default(now())
+
+  @@index([projectId])
+}
+
+// ============================================================
+// Comments (file-level)
+// ============================================================
+
+model Comment {
+  id            String   @id @default(cuid())
+  projectId     String
+  project       Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  fileId        String
+  file          File     @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  filePath      String   // denormalized for fast lookup without join
+  lineNumber    Int
+  lineSnapshot  String   @db.Text // content of the anchored line at creation time
+  anchorCrdtPos String?  // CRDT position for re-anchoring on edits
+  authorId      String
+  author        User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  body          String   @db.Text
+  priority      CommentPriority
+  status        CommentStatus
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  resolvedAt    DateTime?
+  resolvedById  String?
+  resolvedBy    User?    @relation("ResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
+  isOrphaned    Boolean  @default(false)
+
+  @@index([projectId])
+  @@index([fileId])
+  @@index([authorId])
+}
+
+enum CommentPriority {
+  URGENT
+  HIGH
+  NORMAL
+  LOW
+  SUGGESTION
+}
+
+enum CommentStatus {
+  OPEN
+  RESOLVED
+  DELETED
+}
+
+// ============================================================
+// Collaboration sessions
+// ============================================================
+
+model CollabSession {
+  id            String   @id @default(cuid())
+  projectId     String
+  project       Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  startedAt     DateTime @default(now())
+  endedAt       DateTime?
+  participants  CollabSessionParticipant[]
+
+  @@index([projectId])
+}
+
+model CollabSessionParticipant {
+  id            String   @id @default(cuid())
+  sessionId     String
+  session       CollabSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  joinedAt      DateTime @default(now())
+  leftAt        DateTime?
+  cursorColor   String?
+  lastSeenAt    DateTime?
+
+  @@unique([sessionId, userId])
+  @@index([userId])
+}
+
+// ============================================================
+// Sharing
+// ============================================================
+
+model SharePermission {
+  id          String   @id @default(cuid())
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  shareType   ShareType
+  shareToken  String?  @unique // for public-link shares
+  sharedToId  String?  // for private user shares
+  sharedTo    User?    @relation("SharedToUser", fields: [sharedToId], references: [id], onDelete: Cascade)
+  role        ProjectRole
+  createdAt   DateTime @default(now())
+  revokedAt   DateTime?
+
+  @@index([projectId])
+  @@index([sharedToId])
+}
+
+enum ShareType {
+  PUBLIC_LINK
+  PRIVATE_USER
+}
+
+// ============================================================
+// Audit log
+// ============================================================
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action      AuditAction
+  targetType  String   // "file" | "comment" | "share" | "deploy" | "session"
+  targetId    String?
+  filePath    String?
+  lineRange   String?  // "12-18" for file edits
+  diffHash    String?
+  metadata    Json?
+  timestamp   DateTime @default(now())
+
+  @@index([projectId, timestamp])
+  @@index([userId])
+}
+
+enum AuditAction {
+  FILE_CREATED
+  FILE_UPDATED
+  FILE_DELETED
+  COMMENT_CREATED
+  COMMENT_RESOLVED
+  COMMENT_DELETED
+  SHARE_GRANTED
+  SHARE_REVOKED
+  DEPLOY_TRIGGERED
+  DEPLOY_SUCCEEDED
+  DEPLOY_FAILED
+  SESSION_JOINED
+  SESSION_LEFT
+  AI_EDIT_APPLIED
+}

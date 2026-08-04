@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   X,
   Check,
@@ -22,6 +22,8 @@ import { Slider } from "@/components/ui/slider";
 import { useThemeStore } from "@/stores/theme-store";
 import { BUILT_IN_THEMES } from "@/lib/themes/registry";
 import type { ThemeDefinition } from "@/lib/themes/types";
+import { useAIKeysStore } from "@/stores/ai-keys-store";
+import { PROVIDERS, PROVIDER_LIST, type ProviderId } from "@/lib/ai/providers";
 
 interface SettingsDialogProps {
   open: boolean;
@@ -276,35 +278,285 @@ function AISettings() {
       <div>
         <h3 className="text-sm font-semibold text-[var(--text-primary)] mb-1">AI Provider (BYOK)</h3>
         <p className="text-xs text-[var(--text-muted)] mb-3">
-          Bring your own API key. Keys are stored only in your browser&apos;s IndexedDB and never sent to our servers (except when a provider blocks browser calls via CORS — then a thin proxy routes the request, never storing the key).
+          Bring your own API key. Keys are stored only in your browser (localStorage — production will move to encrypted IndexedDB) and never sent to our servers except as part of the direct provider call. CORS-blocked providers (Anthropic, Bedrock) route through a server-side proxy that never stores the key.
         </p>
-        <div className="grid grid-cols-2 gap-2">
-          {[
-            "OpenAI", "Claude (Anthropic)", "Gemini", "DeepSeek", "Kimi (Moonshot)",
-            "OpenRouter", "Amazon Bedrock", "Cloudflare Workers AI",
-            "Z-AI (GLM)", "Ollama (local)", "Custom OpenAI-compatible",
-          ].map((p) => (
-            <div
-              key={p}
-              className="flex items-center justify-between rounded border border-[var(--border-subtle)] bg-[var(--surface-sunken)] px-3 py-2 text-xs"
-            >
-              <span className="text-[var(--text-secondary)]">{p}</span>
-              <Button size="sm" variant="ghost" className="h-6 text-[10px] text-[var(--accent)] hover:bg-[var(--surface-hover)] px-2">
-                Connect
-              </Button>
-            </div>
-          ))}
-        </div>
+        <ProviderConfigList />
       </div>
 
       <div>
         <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)] mb-2">
-          Approval Flow
+          Approval Flow (§9.5)
         </h4>
-        <SettingRow label="Always allow agent edits" desc="Skip the diff-approval step (use with caution)">
-          <Switch checked={false} onCheckedChange={() => {}} />
-        </SettingRow>
+        <ApprovalSettings />
       </div>
+
+      <div>
+        <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)] mb-2">
+          Context Budget (§9.9)
+        </h4>
+        <ContextBudgetSettings />
+      </div>
+    </div>
+  );
+}
+
+function ProviderConfigList() {
+  const providers = useAIKeysStore((s) => s.providers);
+  const setProvider = useAIKeysStore((s) => s.setProvider);
+  const removeProvider = useAIKeysStore((s) => s.removeProvider);
+  const activeProviderId = useAIKeysStore((s) => s.activeProviderId);
+  const setActiveProvider = useAIKeysStore((s) => s.setActiveProvider);
+
+  return (
+    <div className="space-y-2">
+      {PROVIDER_LIST.map((p) => {
+        const config = providers[p.id];
+        // Ollama doesn't need an API key — it's "configured" if the entry exists
+        const isConfigured = !!config && (p.id === "ollama" ? true : !!config.apiKey);
+        const isActive = activeProviderId === p.id;
+        return (
+          <div
+            key={p.id}
+            className={cn(
+              "rounded-md border p-2.5 transition-colors",
+              isActive
+                ? "border-[var(--accent)] bg-[var(--accent-subtle)]"
+                : "border-[var(--border-subtle)] bg-[var(--surface-sunken)]"
+            )}
+          >
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-medium text-[var(--text-primary)]">{p.name}</span>
+                {p.requiresProxy && (
+                  <span className="rounded bg-[var(--surface-raised)] px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-[var(--text-muted)]">
+                    proxy
+                  </span>
+                )}
+                {p.supportsCaching && (
+                  <span className="rounded bg-[var(--surface-raised)] px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-[var(--text-muted)]">
+                    cache
+                  </span>
+                )}
+                {isConfigured && (
+                  <span className="flex items-center gap-1 text-[10px] text-[var(--status-success)]">
+                    <Check size={9} strokeWidth={2} />
+                    configured
+                  </span>
+                )}
+              </div>
+              {isConfigured && !isActive && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setActiveProvider(p.id)}
+                  className="h-6 text-[10px] text-[var(--accent)] hover:bg-[var(--surface-hover)] px-2"
+                >
+                  Set active
+                </Button>
+              )}
+              {isConfigured && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => removeProvider(p.id)}
+                  className="h-6 text-[10px] text-[var(--text-muted)] hover:text-[var(--status-error)] hover:bg-[var(--surface-hover)] px-2"
+                >
+                  Remove
+                </Button>
+              )}
+            </div>
+            {isConfigured ? (
+              <ProviderModelPicker providerId={p.id} />
+            ) : (
+              <ProviderKeyInput
+                providerId={p.id}
+                requiresBaseUrl={p.id === "custom-openai"}
+                onSubmit={(apiKey, baseUrl) => {
+                  setProvider(p.id, {
+                    apiKey,
+                    model: "",
+                    baseUrl: baseUrl || undefined,
+                    enabled: true,
+                  });
+                  setActiveProvider(p.id);
+                }}
+              />
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ProviderKeyInput({
+  providerId,
+  requiresBaseUrl,
+  onSubmit,
+}: {
+  providerId: string;
+  requiresBaseUrl?: boolean;
+  onSubmit: (apiKey: string, baseUrl?: string) => void;
+}) {
+  const [apiKey, setApiKey] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [showKey, setShowKey] = useState(false);
+
+  return (
+    <div className="space-y-1.5">
+      {requiresBaseUrl && (
+        <input
+          type="url"
+          value={baseUrl}
+          onChange={(e) => setBaseUrl(e.target.value)}
+          placeholder="https://your-provider.com/v1"
+          className="w-full rounded border border-[var(--border-subtle)] bg-[var(--surface-panel)] px-2 py-1 text-[11px] text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
+        />
+      )}
+      <div className="flex items-center gap-1.5">
+        <input
+          type={showKey ? "text" : "password"}
+          value={apiKey}
+          onChange={(e) => setApiKey(e.target.value)}
+          placeholder={providerId === "ollama" ? "(no key needed for local)" : "API key"}
+          className="flex-1 rounded border border-[var(--border-subtle)] bg-[var(--surface-panel)] px-2 py-1 text-[11px] font-mono text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
+        />
+        <button
+          onClick={() => setShowKey((v) => !v)}
+          className="rounded px-1.5 py-1 text-[10px] text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+        >
+          {showKey ? "Hide" : "Show"}
+        </button>
+        <Button
+          size="sm"
+          onClick={() => {
+            if (apiKey || providerId === "ollama") {
+              onSubmit(apiKey, baseUrl);
+            }
+          }}
+          disabled={!apiKey && providerId !== "ollama"}
+          className="h-7 px-2 text-[10px] bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)] disabled:opacity-50"
+        >
+          Save
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function ProviderModelPicker({ providerId }: { providerId: string }) {
+  const providers = useAIKeysStore((s) => s.providers);
+  const setProvider = useAIKeysStore((s) => s.setProvider);
+  const config = providers[providerId as ProviderId];
+  const [models, setModels] = useState<string[]>([]);
+  const [loadingModels, setLoadingModels] = useState(false);
+  const [modelError, setModelError] = useState<string | null>(null);
+  const [showCustom, setShowCustom] = useState(config?.model === "__custom__");
+
+  async function fetchModels() {
+    if (!config?.apiKey) return;
+    setLoadingModels(true);
+    setModelError(null);
+    try {
+      const provider = PROVIDERS[providerId as ProviderId];
+      const list = await provider.listModels(config.apiKey, config.baseUrl);
+      setModels(list);
+    } catch (err) {
+      setModelError(err instanceof Error ? err.message : "Failed to fetch models");
+    } finally {
+      setLoadingModels(false);
+    }
+  }
+
+  useEffect(() => {
+    if (config?.apiKey && models.length === 0 && !loadingModels && !modelError) {
+      fetchModels();
+    }
+  }, [config?.apiKey]);
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-1.5">
+        <select
+          value={config?.model ?? ""}
+          onChange={(e) => {
+            setProvider(providerId as ProviderId, { model: e.target.value });
+            setShowCustom(e.target.value === "__custom__");
+          }}
+          className="flex-1 rounded border border-[var(--border-subtle)] bg-[var(--surface-panel)] px-2 py-1 text-[11px] text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
+        >
+          <option value="">Select model…</option>
+          {models.map((m) => (
+            <option key={m} value={m}>
+              {m}
+            </option>
+          ))}
+          <option value="__custom__">Custom model name…</option>
+        </select>
+        <button
+          onClick={fetchModels}
+          disabled={loadingModels}
+          className="rounded px-1.5 py-1 text-[10px] text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] disabled:opacity-50"
+          title="Refresh model list"
+        >
+          {loadingModels ? "…" : "↻"}
+        </button>
+      </div>
+      {modelError && (
+        <div className="text-[10px] text-[var(--status-error)]">{modelError}</div>
+      )}
+      {showCustom && (
+        <input
+          type="text"
+          value={config?.customModel ?? ""}
+          onChange={(e) =>
+            setProvider(providerId as ProviderId, { customModel: e.target.value })
+          }
+          placeholder="model-name (e.g. gpt-4o-2024-08-06)"
+          className="w-full rounded border border-[var(--border-subtle)] bg-[var(--surface-panel)] px-2 py-1 text-[11px] font-mono text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
+        />
+      )}
+      {config?.model && config.model !== "__custom__" && (
+        <div className="text-[10px] text-[var(--text-muted)]">
+          Active model: <span className="font-mono text-[var(--text-secondary)]">{config.model}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ApprovalSettings() {
+  const allowAlways = useAIKeysStore((s) => s.allowAlways);
+  const setAllowAlways = useAIKeysStore((s) => s.setAllowAlways);
+  return (
+    <SettingRow
+      label="Always allow agent edits"
+      desc="Skip the diff-approval step for the current session (use with caution)"
+    >
+      <Switch checked={allowAlways} onCheckedChange={setAllowAlways} />
+    </SettingRow>
+  );
+}
+
+function ContextBudgetSettings() {
+  const tokenBudget = useAIKeysStore((s) => s.tokenBudget);
+  const setTokenBudget = useAIKeysStore((s) => s.setTokenBudget);
+  return (
+    <div>
+      <label className="text-xs text-[var(--text-secondary)] mb-1.5 block">
+        Token budget: <span className="font-mono text-[var(--text-primary)]">{tokenBudget.toLocaleString()}</span> tokens
+      </label>
+      <Slider
+        value={[tokenBudget]}
+        onValueChange={(v) => setTokenBudget(v[0])}
+        min={4000}
+        max={200000}
+        step={4000}
+        className="w-full"
+      />
+      <p className="mt-1 text-[10px] text-[var(--text-muted)]">
+        Hard cap on context size per request. Lower-priority items (knowledge summary, imported files) are truncated first.
+      </p>
     </div>
   );
 }

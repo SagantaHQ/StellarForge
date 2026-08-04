@@ -141,7 +141,11 @@ export function IdeShell() {
 
           {/* Right panel — agent / compile / test / deploy / git */}
           <Panel defaultSize={24} minSize={15} maxSize={40}>
-            <RightPanel view={rightPanelView} onChangeView={setRightPanelView} />
+            <RightPanel
+              view={rightPanelView}
+              onChangeView={setRightPanelView}
+              onOpenSettings={() => setSettingsOpen(true)}
+            />
           </Panel>
         </PanelGroup>
       </div>

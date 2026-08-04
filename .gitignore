@@ -52,3 +52,13 @@ prompt
 server.log
 # Skills directory
 /skills/
+
+# Soroban.Build-specific
+/tool-results/
+/upload/
+/download/ide-screenshot-*.png
+/.zscripts/
+/worklog.md
+/soroban-build.log
+/tests/
+/bun.lock

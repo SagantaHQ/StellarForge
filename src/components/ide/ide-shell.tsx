@@ -15,8 +15,12 @@ import { RightPanel } from "./panels/right-panel";
 import { StatusBar } from "./panels/status-bar";
 import { CommandPalette } from "./panels/command-palette";
 import { SettingsDialog } from "./panels/settings-dialog";
+import { NewProjectModal } from "./templates/new-project-modal";
+import { ProfileModal } from "./profile/profile-modal";
 import { useThemeStore } from "@/stores/theme-store";
 import { useFileSystemStore } from "@/stores/file-system-store";
+import { useProfileStore } from "@/stores/profile-store";
+import type { Template } from "@/lib/templates/registry";
 import { cn } from "@/lib/utils";
 
 type RightPanelView = "agent" | "compile" | "test" | "deploy" | "git";
@@ -27,11 +31,15 @@ export function IdeShell() {
   const [terminalCollapsed, setTerminalCollapsed] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [newProjectOpen, setNewProjectOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
   const [mobileActivePanel, setMobileActivePanel] = useState<"files" | "editor" | "terminal" | "agent">("editor");
   const [network, setNetwork] = useState("testnet");
 
   const editorFontSize = useThemeStore((s) => s.editorFontSize);
   const createFile = useFileSystemStore((s) => s.createFile);
+  const profile = useProfileStore((s) => s.profile);
+  const setProfile = useProfileStore((s) => s.setProfile);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -70,6 +78,9 @@ export function IdeShell() {
         e.preventDefault();
         setActivityView("git");
         setRightPanelView("git");
+      } else if (cmd && e.shiftKey && e.key.toLowerCase() === "p") {
+        e.preventDefault();
+        setNewProjectOpen(true);
       }
     }
     window.addEventListener("keydown", handler);
@@ -97,8 +108,10 @@ export function IdeShell() {
         branch="main"
         network={network}
         collabUsers={[]}
+        profile={profile}
         onShare={() => setSettingsOpen(true)}
-        onConnectWallet={() => setSettingsOpen(true)}
+        onConnectWallet={() => setProfileOpen(true)}
+        onNewProject={() => setNewProjectOpen(true)}
         onCommandPalette={() => setCommandPaletteOpen(true)}
         onDeploy={() => {
           setActivityView("deploy");
@@ -190,6 +203,45 @@ export function IdeShell() {
       />
 
       <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+
+      <NewProjectModal
+        open={newProjectOpen}
+        onClose={() => setNewProjectOpen(false)}
+        onSelectTemplate={(template: Template) => {
+          // Scaffold the template files into the file system
+          const fs = useFileSystemStore.getState();
+          // Reset to template's file tree
+          // (For now, just create the files one by one)
+          for (const file of template.files) {
+            const pathParts = file.path.split("/");
+            const name = pathParts[pathParts.length - 1];
+            const parentPath = pathParts.length > 1 ? pathParts.slice(0, -1).join("/") : null;
+            fs.createFile(parentPath, name);
+            // Set content after creation
+            setTimeout(() => {
+              fs.updateFileContent(file.path, file.content);
+            }, 50);
+          }
+        }}
+        onSelectBlank={() => {
+          const fs = useFileSystemStore.getState();
+          fs.createFile(null, "lib.rs");
+        }}
+      />
+
+      <ProfileModal
+        open={profileOpen}
+        onClose={() => setProfileOpen(false)}
+        onComplete={(p) => {
+          setProfile({
+            address: p.address,
+            username: p.username,
+            avatarUrl: p.avatarUrl,
+            bio: p.bio,
+            createdAt: Date.now(),
+          });
+        }}
+      />
     </div>
   );
 }

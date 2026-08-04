@@ -10,18 +10,22 @@ import {
   Check,
   Users,
   Bell,
+  Plus,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import type { UserProfile } from "@/stores/profile-store";
 
 interface TopBarProps {
   projectName: string;
   branch: string;
   network: string;
   collabUsers: { name: string; color: string }[];
+  profile?: UserProfile | null;
   onShare: () => void;
   onConnectWallet: () => void;
+  onNewProject: () => void;
   onCommandPalette: () => void;
   onDeploy: () => void;
   onSwitchNetwork: (n: string) => void;
@@ -35,8 +39,10 @@ export function TopBar({
   branch,
   network,
   collabUsers,
+  profile,
   onShare,
   onConnectWallet,
+  onNewProject,
   onCommandPalette,
   onDeploy,
   onSwitchNetwork,
@@ -64,9 +70,14 @@ export function TopBar({
         </div>
 
         <div className="hidden sm:flex items-center gap-2 min-w-0">
-          <span className="text-sm font-medium text-[var(--text-primary)] truncate">
+          <button
+            onClick={onNewProject}
+            className="flex items-center gap-1 text-sm font-medium text-[var(--text-primary)] truncate hover:text-[var(--accent)] transition-colors"
+            title="New project (⌘⇧P)"
+          >
             {projectName}
-          </span>
+            <Plus size={11} strokeWidth={2} className="text-[var(--text-muted)]" />
+          </button>
           <span className="text-[var(--text-muted)]">·</span>
           <button
             className="flex items-center gap-1 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
@@ -90,7 +101,7 @@ export function TopBar({
         </kbd>
       </button>
 
-      {/* Right: collab, network, share, deploy, wallet */}
+      {/* Right: collab, network, share, deploy, wallet/profile */}
       <div className="flex items-center gap-2">
         {/* Collab avatars */}
         <div className="hidden lg:flex items-center -space-x-1.5">
@@ -173,14 +184,34 @@ export function TopBar({
           <span>Deploy</span>
         </Button>
 
+        {/* Wallet / profile button */}
         <Button
           size="sm"
           variant="ghost"
           onClick={onConnectWallet}
           className="h-8 gap-1.5 px-2.5 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
         >
-          <Wallet size={14} strokeWidth={1.75} />
-          <span className="hidden md:inline">Connect</span>
+          {profile ? (
+            <>
+              {profile.avatarUrl ? (
+                <img
+                  src={profile.avatarUrl}
+                  alt={profile.username}
+                  className="h-5 w-5 rounded-full object-cover"
+                />
+              ) : (
+                <div className="flex h-5 w-5 items-center justify-center rounded-full bg-[var(--accent)] text-[9px] font-medium text-[var(--accent-contrast)]">
+                  {profile.username.charAt(0).toUpperCase()}
+                </div>
+              )}
+              <span className="hidden md:inline">{profile.username}</span>
+            </>
+          ) : (
+            <>
+              <Wallet size={14} strokeWidth={1.75} />
+              <span className="hidden md:inline">Connect</span>
+            </>
+          )}
         </Button>
       </div>
     </header>

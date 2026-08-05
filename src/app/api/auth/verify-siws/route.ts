@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifySiws, type SiwsPayload } from "@saganta/stellar-appkit-siws-verify";
-import { Keypair } from "@stellar/stellar-sdk";
+import { StrKey } from "@stellar/stellar-base";
+import nacl from "tweetnacl";
 import { createHash } from "crypto";
 import { db } from "@/lib/db";
 
@@ -80,8 +81,10 @@ export async function POST(req: NextRequest) {
       expectedNonce: nonce,
       verifySignatureFn: ({ message: msg, signature, address }) => {
         try {
-          const keypair = Keypair.fromPublicKey(address);
+          // Decode the StrKey public key to raw 32-byte ed25519 public key
+          const publicKey = StrKey.decodeEd25519PublicKey(address);
           const messageBuffer = Buffer.from(msg, "utf-8");
+
           // Decode signature — accept both hex and base64
           const isHex = /^[0-9a-fA-F]+$/.test(signature) && signature.length % 2 === 0;
           const signatureBuffer = Buffer.from(signature, isHex ? "hex" : "base64");
@@ -93,14 +96,16 @@ export async function POST(req: NextRequest) {
             signatureEncoding: isHex ? "hex" : "base64",
           });
 
-          const valid = keypair.verify(messageBuffer, signatureBuffer);
-          console.log("[SIWS] Verification result:", valid);
+          // Use tweetnacl directly — bypasses @stellar/stellar-sdk wrapper
+          // which may have version-specific issues with verify()
+          const valid = nacl.sign.detached.verify(messageBuffer, signatureBuffer, publicKey);
+          console.log("[SIWS] tweetnacl verify (raw):", valid);
 
           if (!valid) {
-            // Try SHA-256 hash verification (some wallets sign the hash, not raw)
+            // Try SHA-256 hash verification (some wallets sign the hash)
             const hash = createHash("sha256").update(messageBuffer).digest();
-            const hashValid = keypair.verify(hash, signatureBuffer);
-            console.log("[SIWS] SHA-256 hash verification:", hashValid);
+            const hashValid = nacl.sign.detached.verify(hash, signatureBuffer, publicKey);
+            console.log("[SIWS] tweetnacl verify (sha256):", hashValid);
             if (hashValid) return true;
           }
 

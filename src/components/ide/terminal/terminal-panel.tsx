@@ -38,9 +38,12 @@ interface TerminalPanelProps {
   collapsed: boolean;
   onToggleCollapse: () => void;
   height?: number;
+  /** §9.7 — Called when user clicks 'Fix with AI' on a build error.
+   *  Receives the error output + the last command that was run. */
+  onFixWithAI?: (errorOutput: string, command: string) => void;
 }
 
-export function TerminalPanel({ collapsed, onToggleCollapse }: TerminalPanelProps) {
+export function TerminalPanel({ collapsed, onToggleCollapse, onFixWithAI }: TerminalPanelProps) {
   const [tabs, setTabs] = useState<TerminalTab[]>(INITIAL_TABS);
   const [activeTabId, setActiveTabId] = useState<string>(INITIAL_TABS[0].id);
   const [input, setInput] = useState("");
@@ -344,6 +347,20 @@ export function TerminalPanel({ collapsed, onToggleCollapse }: TerminalPanelProp
           <Button
             size="sm"
             variant="ghost"
+            onClick={() => {
+              if (!onFixWithAI) return;
+              // Collect error lines + surrounding context
+              const errorLines = activeTab.lines
+                .filter((l) => l.type === "error" || l.type === "output")
+                .map((l) => l.text)
+                .join("\n");
+              // Find the last input command
+              const lastInput = activeTab.lines
+                .filter((l) => l.type === "input")
+                .map((l) => l.text.replace(/^\$\s*/, ""))
+                .pop() ?? "";
+              onFixWithAI(errorLines, lastInput);
+            }}
             className="h-7 gap-1.5 text-xs text-[var(--accent)] hover:bg-[var(--surface-hover)]"
           >
             <Bot size={13} strokeWidth={1.75} />

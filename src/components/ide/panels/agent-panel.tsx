@@ -20,8 +20,9 @@ import { Button } from "@/components/ui/button";
 import { useAIKeysStore } from "@/stores/ai-keys-store";
 import { useAIChat } from "@/hooks/use-ai-chat";
 import { PROVIDERS, PROVIDER_LIST, type ProviderId, type ChatMessage } from "@/lib/ai/providers";
-import type { ParsedDiff } from "@/lib/ai/context-assembler";
+import { parseDiffFromResponse, type ParsedDiff } from "@/lib/ai/context-assembler";
 import { useFileSystemStore } from "@/stores/file-system-store";
+import { useFixWithAIStore } from "@/stores/fix-with-ai-store";
 
 type AgentScope = "smart-contract" | "ui-frontend" | "general" | "custom";
 
@@ -62,9 +63,60 @@ export function AgentPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
     scope,
   });
 
+  const pendingFix = useFixWithAIStore((s) => s.pendingFix);
+  const consumeFix = useFixWithAIStore((s) => s.consumeFix);
+  const hasProvider = useAIKeysStore((s) => {
+    const cfg = s.providers[s.activeProviderId ?? "" as ProviderId];
+    return !!cfg && (s.activeProviderId === "ollama" ? true : !!cfg.apiKey);
+  });
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [activeTab.messages.length, loading]);
+
+  // §9.7 — Auto-consume pending fix requests from the terminal 'Fix with AI' button
+  useEffect(() => {
+    if (!pendingFix || loading || !hasProvider) return;
+    const fixMessage = `The following command failed:\n\n\`\`\`\n$ ${pendingFix.command}\n\`\`\`\n\nError output:\n\`\`\`\n${pendingFix.errorOutput}\n\`\`\`\n\nDiagnose the error and propose a fix. Explain why the error happened and how the fix resolves it.`;
+    // Add the user message visibly
+    setTabs((prev) =>
+      prev.map((t) =>
+        t.id === activeTabId
+          ? {
+              ...t,
+              messages: [
+                ...t.messages,
+                { role: "user" as const, content: fixMessage, timestamp: Date.now() },
+              ],
+            }
+          : t
+      )
+    );
+    // Send to the provider with the error as context
+    sendMessage(fixMessage, [], undefined).then(({ response }) => {
+      if (response) {
+        setTabs((prev) =>
+          prev.map((t) =>
+            t.id === activeTabId
+              ? {
+                  ...t,
+                  messages: [
+                    ...t.messages,
+                    {
+                      role: "assistant" as const,
+                      content: response.content,
+                      timestamp: Date.now(),
+                    },
+                  ],
+                  pendingDiffs: parseDiffFromResponse(response.content),
+                }
+              : t
+          )
+        );
+      }
+    });
+    consumeFix();
+  }, [pendingFix, loading, hasProvider, activeTabId, sendMessage, consumeFix]);
 
   function handleSend() {
     if (!input.trim() || loading) return;
@@ -158,10 +210,7 @@ export function AgentPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
   }
 
   const activeConfig = activeProviderId ? providers[activeProviderId] : null;
-  // Ollama doesn't need an API key — it's "configured" if the entry exists
-  const hasProvider =
-    !!activeConfig &&
-    (activeProviderId === "ollama" ? true : !!activeConfig.apiKey);
+  // hasProvider is computed above (needed for the §9.7 fix-with-AI effect)
 
   return (
     <div className="flex h-full flex-col">

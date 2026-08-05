@@ -21,6 +21,7 @@ import { useThemeStore } from "@/stores/theme-store";
 import { useFileSystemStore } from "@/stores/file-system-store";
 import { useProfileStore } from "@/stores/profile-store";
 import { useBuildStore } from "@/stores/build-store";
+import { useFixWithAIStore } from "@/stores/fix-with-ai-store";
 import type { Template } from "@/lib/templates/registry";
 import { cn } from "@/lib/utils";
 
@@ -43,6 +44,7 @@ export function IdeShell() {
   const setProfile = useProfileStore((s) => s.setProfile);
   const buildStatus = useBuildStore((s) => s.status);
   const startBuild = useBuildStore((s) => s.startBuild);
+  const requestFix = useFixWithAIStore((s) => s.requestFix);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -154,6 +156,11 @@ export function IdeShell() {
                 <TerminalPanel
                   collapsed={terminalCollapsed}
                   onToggleCollapse={() => setTerminalCollapsed((v) => !v)}
+                  onFixWithAI={(errorOutput, command) => {
+                    requestFix(errorOutput, command);
+                    setActivityView("agent");
+                    setRightPanelView("agent");
+                  }}
                 />
               </Panel>
             </PanelGroup>
@@ -166,6 +173,7 @@ export function IdeShell() {
               view={rightPanelView}
               onChangeView={setRightPanelView}
               onOpenSettings={() => setSettingsOpen(true)}
+              network={network}
             />
           </Panel>
         </PanelGroup>
@@ -385,7 +393,13 @@ function MobilePanel({ active }: { active: "files" | "editor" | "terminal" | "ag
   if (active === "terminal") {
     return (
       <div className="flex-1 overflow-hidden">
-        <TerminalPanel collapsed={false} onToggleCollapse={() => {}} />
+        <TerminalPanel
+          collapsed={false}
+          onToggleCollapse={() => {}}
+          onFixWithAI={(errorOutput, command) => {
+            useFixWithAIStore.getState().requestFix(errorOutput, command);
+          }}
+        />
       </div>
     );
   }

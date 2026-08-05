@@ -16,6 +16,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { AgentPanel } from "./agent-panel";
 import { useBuildStore } from "@/stores/build-store";
+import { useDeployStore } from "@/stores/deploy-store";
 
 type RightPanelView = "agent" | "compile" | "test" | "deploy" | "git";
 
@@ -23,6 +24,7 @@ interface RightPanelProps {
   view: RightPanelView;
   onChangeView: (v: RightPanelView) => void;
   onOpenSettings?: () => void;
+  network?: string;
 }
 
 const VIEW_ITEMS: { id: RightPanelView; icon: LucideIcon; label: string }[] = [
@@ -33,7 +35,7 @@ const VIEW_ITEMS: { id: RightPanelView; icon: LucideIcon; label: string }[] = [
   { id: "git", icon: GitBranch, label: "Git" },
 ];
 
-export function RightPanel({ view, onChangeView, onOpenSettings }: RightPanelProps) {
+export function RightPanel({ view, onChangeView, onOpenSettings, network = "testnet" }: RightPanelProps) {
   return (
     <div className="flex h-full flex-col bg-[var(--surface-panel)]">
       {/* View switcher */}
@@ -63,7 +65,7 @@ export function RightPanel({ view, onChangeView, onOpenSettings }: RightPanelPro
         {view === "agent" && <AgentPanel onOpenSettings={() => onOpenSettings?.()} />}
         {view === "compile" && <CompilePanel />}
         {view === "test" && <TestPanel />}
-        {view === "deploy" && <DeployPanel />}
+        {view === "deploy" && <DeployPanel network={network} />}
         {view === "git" && <GitPanel />}
       </div>
     </div>
@@ -231,42 +233,160 @@ function TestPanel() {
   );
 }
 
-function DeployPanel() {
+function DeployPanel({ network }: { network: string }) {
+  const status = useDeployStore((s) => s.status);
+  const lines = useDeployStore((s) => s.lines);
+  const contractId = useDeployStore((s) => s.contractId);
+  const error = useDeployStore((s) => s.error);
+  const deploy = useDeployStore((s) => s.deploy);
+  const wasmInfo = useBuildStore((s) => s.wasmInfo);
+  const [sourceAccountSecret, setSourceAccountSecret] = useState("");
+  const [showSecret, setShowSecret] = useState(false);
+
   return (
     <div className="flex h-full flex-col p-3 gap-3 overflow-y-auto">
       <h3 className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">
         Deploy Contract
       </h3>
-      <div className="space-y-2">
-        <div className="rounded-md border border-[var(--border-subtle)] p-2.5">
-          <div className="text-[11px] text-[var(--text-muted)] mb-1">WASM file</div>
-          <div className="text-xs font-mono text-[var(--text-primary)]">hello_world.wasm</div>
-          <div className="text-[10px] text-[var(--text-muted)] mt-1">4.2 KB · wasm32v1-none</div>
-        </div>
-        <Button size="sm" className="w-full h-9 gap-2 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)]">
-          <Rocket size={13} strokeWidth={1.75} />
-          Deploy to Testnet
-        </Button>
+
+      {/* WASM info */}
+      <div className="rounded-md border border-[var(--border-subtle)] p-2.5">
+        <div className="text-[11px] text-[var(--text-muted)] mb-1">WASM file</div>
+        {wasmInfo ? (
+          <>
+            <div className="text-xs font-mono text-[var(--text-primary)] truncate">
+              {wasmInfo.path.split("/").pop()}
+            </div>
+            <div className="text-[10px] text-[var(--text-muted)] mt-1">
+              {(wasmInfo.sizeBytes / 1024).toFixed(2)} KB · wasm32v1-none
+            </div>
+          </>
+        ) : (
+          <div className="text-xs text-[var(--text-muted)] italic">
+            No build yet. Run Build first.
+          </div>
+        )}
       </div>
 
+      {/* Source account */}
       <div>
-        <h4 className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)] mb-2">
-          Contract Interaction
-        </h4>
-        <p className="text-[11px] text-[var(--text-muted)] mb-2">
-          Auto-generated from contract spec after deploy.
-        </p>
-        <div className="space-y-1.5">
-          {["get_greeting() → String", "set_greeting(greeting: String) → String", "greet(name: String) → String"].map((fn) => (
-            <div
-              key={fn}
-              className="rounded border border-[var(--border-subtle)] bg-[var(--surface-sunken)] px-2 py-1.5 font-mono text-[11px] text-[var(--text-secondary)]"
-            >
-              {fn}
-            </div>
-          ))}
+        <label className="text-[11px] font-medium text-[var(--text-secondary)] mb-1 block">
+          Source account secret
+        </label>
+        <div className="flex items-center gap-1.5">
+          <input
+            type={showSecret ? "text" : "password"}
+            value={sourceAccountSecret}
+            onChange={(e) => setSourceAccountSecret(e.target.value)}
+            placeholder="S..."
+            className="flex-1 rounded border border-[var(--border-subtle)] bg-[var(--surface-sunken)] px-2 py-1.5 text-[11px] font-mono text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
+          />
+          <button
+            onClick={() => setShowSecret((v) => !v)}
+            className="rounded px-1.5 py-1 text-[10px] text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+          >
+            {showSecret ? "Hide" : "Show"}
+          </button>
         </div>
+        <p className="mt-1 text-[10px] text-[var(--text-muted)]">
+          Secret travels with the deploy request, never stored. In production, sign via wallet instead.
+        </p>
       </div>
+
+      {/* Network */}
+      <div className="flex items-center justify-between text-xs">
+        <span className="text-[var(--text-muted)]">Network</span>
+        <span className="font-medium text-[var(--text-primary)] capitalize">{network}</span>
+      </div>
+
+      {/* Deploy button */}
+      <Button
+        size="sm"
+        onClick={() => deploy({ network, sourceAccountSecret })}
+        disabled={status === "deploying" || !sourceAccountSecret}
+        className="w-full h-9 gap-2 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)] disabled:opacity-50"
+      >
+        {status === "deploying" ? (
+          <Loader2 size={13} strokeWidth={1.75} className="animate-spin" />
+        ) : (
+          <Rocket size={13} strokeWidth={1.75} />
+        )}
+        Deploy to {network}
+      </Button>
+
+      {/* Deploy output */}
+      {lines.length > 0 && (
+        <div>
+          <div className="flex items-center justify-between mb-1.5">
+            <h4 className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">
+              Output
+            </h4>
+            {status === "success" && (
+              <span className="flex items-center gap-1 text-[10px] text-[var(--status-success)]">
+                <Check size={9} strokeWidth={2} />
+                deployed
+              </span>
+            )}
+            {status === "failed" && (
+              <span className="flex items-center gap-1 text-[10px] text-[var(--status-error)]">
+                <X size={9} strokeWidth={2} />
+                failed
+              </span>
+            )}
+          </div>
+          <div className="rounded-md bg-[var(--surface-sunken)] p-2 font-mono text-[10px] space-y-0.5 max-h-32 overflow-y-auto">
+            {lines.map((line, i) => (
+              <div
+                key={i}
+                className={line.type === "stderr" ? "text-[var(--status-error)]" : "text-[var(--text-secondary)]"}
+              >
+                {line.text || "\u00A0"}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Contract ID on success */}
+      {contractId && (
+        <div className="rounded-md border border-[var(--status-success)] bg-[color-mix(in_srgb,var(--status-success)_10%,transparent)] p-2.5">
+          <div className="text-[10px] uppercase tracking-wide text-[var(--status-success)] mb-0.5">
+            Contract deployed
+          </div>
+          <div className="font-mono text-[11px] text-[var(--text-primary)] break-all">
+            {contractId}
+          </div>
+        </div>
+      )}
+
+      {/* Error */}
+      {error && status === "failed" && (
+        <div className="rounded-md border border-[var(--status-error)] bg-[color-mix(in_srgb,var(--status-error)_10%,transparent)] p-2 text-[11px] text-[var(--status-error)]">
+          {error}
+        </div>
+      )}
+
+      {/* Contract interaction (placeholder until deployed) */}
+      {contractId && (
+        <div>
+          <h4 className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)] mb-2">
+            Contract Interaction
+          </h4>
+          <p className="text-[11px] text-[var(--text-muted)] mb-2">
+            Auto-generated from contract spec.
+          </p>
+          <div className="space-y-1.5">
+            {["get_greeting() → String", "set_greeting(greeting: String) → String", "greet(name: String) → String"].map((fn) => (
+              <div
+                key={fn}
+                className="rounded border border-[var(--border-subtle)] bg-[var(--surface-sunken)] px-2 py-1.5 font-mono text-[11px] text-[var(--text-secondary)]"
+              >
+                {fn}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

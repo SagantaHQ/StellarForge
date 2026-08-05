@@ -61,14 +61,17 @@ export async function POST(req: NextRequest) {
     // which fails silently in Turbopack's server runtime.
     const payload: SiwsPayload = { message, signedMessage, signerAddress };
 
-    // Debug: log what we received
-    console.log("[SIWS] Received:", {
-      messagePreview: message?.substring(0, 80),
-      messageLength: message?.length,
-      signedMessagePreview: signedMessage?.substring(0, 30),
-      signedMessageLength: signedMessage?.length,
-      signerAddress: signerAddress?.substring(0, 12),
-      nonce: nonce?.substring(0, 12),
+    // Debug: log what we received — compare with client-side log
+    const messageBuffer = Buffer.from(message, "utf-8");
+    console.log("[SIWS Server] Received:", {
+      messageLength: message.length,
+      messageBytes: messageBuffer.length,
+      messageHex: messageBuffer.toString("hex").substring(0, 100),
+      messageFull: message,
+      signedMessageLength: signedMessage.length,
+      signedMessagePreview: signedMessage.substring(0, 40),
+      signerAddress: signerAddress.substring(0, 12),
+      nonce: nonce.substring(0, 12),
       expectedDomain,
     });
 
@@ -116,10 +119,11 @@ export async function POST(req: NextRequest) {
           reason: result.reason,
           debug: {
             expectedDomain,
-            nonce: nonce?.substring(0, 8) + "...",
-            signerAddress: signerAddress?.substring(0, 8) + "...",
-            signedMessageLength: signedMessage?.length,
-            messageLength: message?.length,
+            serverMessageLength: message.length,
+            serverMessageBytes: messageBuffer.length,
+            serverMessageHex: messageBuffer.toString("hex").substring(0, 200),
+            signedMessageLength: signedMessage.length,
+            signerAddress: signerAddress.substring(0, 12),
           },
         },
         { status: 401 }

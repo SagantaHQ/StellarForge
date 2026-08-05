@@ -120,6 +120,19 @@ export function useStellarWallet() {
       nonce,
     });
 
+    // Debug: log the EXACT message that was signed, so we can compare
+    // it with what the server receives
+    console.log("[SIWS Client] Message signed:", {
+      messageLength: result.message.length,
+      messageBytes: new TextEncoder().encode(result.message).length,
+      messagePreview: result.message.substring(0, 100),
+      messageFull: result.message,
+      signedMessageLength: result.signedMessage.length,
+      signedMessagePreview: result.signedMessage.substring(0, 40),
+      signerAddress: result.signerAddress,
+      nonce,
+    });
+
     return {
       message: result.message,
       signedMessage: result.signedMessage,

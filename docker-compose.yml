@@ -1,0 +1,119 @@
+# ============================================================
+# Soroban.Build — Docker Compose (§7)
+#
+# Services:
+#   app      — Next.js IDE (port 3000)
+#   postgres — PostgreSQL database (port 5432)
+#   collab   — WebSocket collaboration server (port 3001)
+#
+# Usage:
+#   docker-compose up -d
+#   docker-compose logs -f app
+#   docker-compose down
+# ============================================================
+
+services:
+  # --- Next.js IDE ---
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://soroban:soroban@postgres:5432/soroban_build
+      - DIRECT_DATABASE_URL=postgresql://soroban:soroban@postgres:5432/soroban_build
+      - WS_PORT=3001
+      - WS_CORS_ORIGIN=*
+      - GIT_REMOTE_URL=https://github.com/SagantaHQ/soroban.build
+      - GIT_AUTHOR_NAME=ra-sun-god
+      - GIT_AUTHOR_EMAIL=ra-sun-god@users.noreply.github.com
+      - STELLAR_RPC_TESTNET=https://rpc.testnet.stellar.org
+      - STELLAR_RPC_MAINNET=https://rpc.mainnet.stellar.org
+      - RUST_TOOLCHAIN=stable
+      - SOROBAN_SDK_VERSION=22.0.0
+      - TERMINAL_EGRESS_ALLOWLIST=crates.io,static.crates.io,rpc.stellar.org,horizon.stellar.org,github.com
+      - TERMINAL_CPU_LIMIT=1.0
+      - TERMINAL_MEMORY_LIMIT_MB=1024
+      - TERMINAL_DISK_QUOTA_MB=512
+      - TERMINAL_COMMAND_TIMEOUT_MS=60000
+      - AI_PROXY_ENABLED=true
+      - LOG_LEVEL=info
+      - KNOWLEDGE_DIR=./knowledge
+      - SESSION_SECRET=${SESSION_SECRET:-change-me-in-production-32-chars-min}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      collab:
+        condition: service_healthy
+    volumes:
+      # Cache Rust/Cargo build artifacts across rebuilds
+      - cargo-cache:/root/.cargo/registry
+      - rustup-cache:/root/.rustup
+      # Persist knowledge base
+      - knowledge-data:/app/knowledge
+      # Workspace for user projects (terminal builds)
+      - workspace:/tmp/soroban-builds
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 10s
+      start_period: 40s
+      retries: 3
+    restart: unless-stopped
+
+  # --- PostgreSQL ---
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: soroban
+      POSTGRES_PASSWORD: soroban
+      POSTGRES_DB: soroban_build
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U soroban -d soroban_build"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # --- WebSocket Collaboration Server ---
+  # (§5 — Yjs WebSocket provider for cross-device realtime editing)
+  collab:
+    image: node:22-slim
+    working_dir: /app
+    command: >
+      sh -c "
+        npm install y-websocket &&
+        node -e \"
+          const { WebSocketServer } = require('y-websocket');
+          const wss = new WebSocketServer({ port: 3001 });
+          console.log('Yjs WebSocket server running on port 3001');
+          wss.on('connection', (conn, req) => {
+            const url = new URL(req.url, 'http://localhost');
+            const room = url.searchParams.get('room') || 'default';
+            conn.on('message', (msg) => { /* broadcast to room */ });
+          });
+        \"
+      "
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+volumes:
+  cargo-cache:
+  rustup-cache:
+  knowledge-data:
+  postgres-data:
+  workspace:

@@ -7,6 +7,8 @@ import dynamic from "next/dynamic";
 import { useEditorTabsStore } from "@/stores/editor-tabs-store";
 import { useFileSystemStore } from "@/stores/file-system-store";
 import { useCommentsStore, COMMENT_PRIORITY_COLORS } from "@/stores/comments-store";
+import { useAttributionStore } from "@/stores/attribution-store";
+import { useProfileStore } from "@/stores/profile-store";
 import { findFile } from "@/lib/soroban/sample-project";
 import {
   FileCode2,
@@ -59,6 +61,10 @@ export function EditorArea({ fontSize = 13 }: EditorAreaProps) {
   const markDirty = useEditorTabsStore((s) => s.markDirty);
   const tree = useFileSystemStore((s) => s.tree);
   const updateFileContent = useFileSystemStore((s) => s.updateFileContent);
+
+  // Attribution integration (§5.2)
+  const recordEdit = useAttributionStore((s) => s.recordEdit);
+  const profile = useProfileStore((s) => s.profile);
 
   // Comments integration
   const comments = useCommentsStore((s) => s.comments);
@@ -254,6 +260,22 @@ export function EditorArea({ fontSize = 13 }: EditorAreaProps) {
               onChange={(value) => {
                 updateFileContent(activeFile.path, value);
                 markDirty(activeFile.path, true);
+                // §5.2 — Record attribution for edited lines
+                // Track the cursor position as the edited line
+                const editor = editorRef.current;
+                if (editor) {
+                  const pos = editor.getPosition();
+                  if (pos) {
+                    recordEdit(
+                      activeFile.path,
+                      pos.lineNumber,
+                      pos.lineNumber,
+                      profile
+                        ? { id: profile.address, name: profile.username, color: useProfileStore.getState().accentColor }
+                        : { id: "local-user", name: "You", color: "#4F8C8C" }
+                    );
+                  }
+                }
               }}
             />
 

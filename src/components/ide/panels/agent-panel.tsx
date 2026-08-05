@@ -23,6 +23,9 @@ import { PROVIDERS, PROVIDER_LIST, type ProviderId, type ChatMessage } from "@/l
 import { parseDiffFromResponse, type ParsedDiff } from "@/lib/ai/context-assembler";
 import { useFileSystemStore } from "@/stores/file-system-store";
 import { useFixWithAIStore } from "@/stores/fix-with-ai-store";
+import { useAttributionStore } from "@/stores/attribution-store";
+import { useProfileStore } from "@/stores/profile-store";
+import { findFile } from "@/lib/soroban/sample-project";
 
 type AgentScope = "smart-contract" | "ui-frontend" | "general" | "custom";
 
@@ -64,6 +67,7 @@ export function AgentPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
   });
 
   const pendingFix = useFixWithAIStore((s) => s.pendingFix);
+  const recordEdit = useAttributionStore((s) => s.recordEdit);
   const consumeFix = useFixWithAIStore((s) => s.consumeFix);
   const hasProvider = useAIKeysStore((s) => {
     const cfg = s.providers[s.activeProviderId ?? "" as ProviderId];
@@ -166,14 +170,37 @@ export function AgentPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
   }
 
   function handleAcceptDiff(diff: ParsedDiff) {
-    // Apply the diff to the file system
-    const file = useFileSystemStore.getState().tree;
-    const updateFileContent = useFileSystemStore.getState().updateFileContent;
-    // For now, just append a comment showing the diff was accepted
-    // (Real implementation would apply the hunk lines to the file)
-    void file;
-    void updateFileContent;
-    void diff;
+    // §9.5 — Apply the diff to the file system
+    const fs = useFileSystemStore.getState();
+    const file = findFile(fs.tree, diff.filePath);
+
+    if (file) {
+      // Apply the diff hunks to the file content
+      const newContent = applyDiffToFile(file.content, diff);
+      fs.updateFileContent(diff.filePath, newContent);
+
+      // §9.9 — Record AI attribution for the edited lines
+      const provider = activeProviderId ? PROVIDERS[activeProviderId as ProviderId] : null;
+      const model = activeConfig?.model === "__custom__"
+        ? activeConfig?.customModel
+        : activeConfig?.model;
+
+      if (provider && model) {
+        // Record attribution for each hunk's line range
+        for (const hunk of diff.hunks) {
+          recordEdit(
+            diff.filePath,
+            hunk.newStart,
+            hunk.newStart + hunk.lines.filter((l) => l.startsWith("+") && !l.startsWith("+++")).length - 1,
+            profile
+              ? { id: profile.address, name: profile.username, color: useProfileStore.getState().accentColor }
+              : { id: "local-user", name: "You", color: "#4F8C8C" },
+            { provider: provider.name, model }
+          );
+        }
+      }
+    }
+
     setTabs((prev) =>
       prev.map((t) =>
         t.id === activeTabId
@@ -625,4 +652,43 @@ function ProviderPicker({ onClose, onOpenSettings }: { onClose: () => void; onOp
       </div>
     </div>
   );
+}
+
+/**
+ * Apply a parsed diff to file content.
+ * Handles unified diff hunks with +/- line markers.
+ */
+function applyDiffToFile(content: string, diff: ParsedDiff): string {
+  const lines = content.split("\n");
+  // Process hunks in reverse order so line numbers don't shift
+  const sortedHunks = [...diff.hunks].sort((a, b) => b.newStart - a.newStart);
+
+  for (const hunk of sortedHunks) {
+    let insertIdx = hunk.newStart - 1; // 0-indexed
+    // Find the position in the current lines array
+    // Remove old lines (starting at oldStart) and insert new ones
+    const oldLines: string[] = [];
+    const newLines: string[] = [];
+    for (const line of hunk.lines) {
+      if (line.startsWith("-") && !line.startsWith("---")) {
+        oldLines.push(line.substring(1));
+      } else if (line.startsWith("+") && !line.startsWith("+++")) {
+        newLines.push(line.substring(1));
+      } else if (line.startsWith(" ")) {
+        oldLines.push(line.substring(1));
+        newLines.push(line.substring(1));
+      }
+    }
+
+    // Find the old lines in the array and replace with new lines
+    const oldStartIdx = lines.indexOf(oldLines[0], Math.max(0, insertIdx - oldLines.length - 5));
+    if (oldStartIdx >= 0) {
+      lines.splice(oldStartIdx, oldLines.length, ...newLines);
+    } else {
+      // Fallback: just insert at the hunk position
+      lines.splice(insertIdx, 0, ...newLines);
+    }
+  }
+
+  return lines.join("\n");
 }

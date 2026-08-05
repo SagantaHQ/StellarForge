@@ -6,6 +6,7 @@ import type * as Monaco from "monaco-editor";
 import { useThemeStore } from "@/stores/theme-store";
 import { buildMonacoTheme } from "@/lib/themes/mappers";
 import { registerSorobanLanguage } from "./use-monaco";
+import { useAttributionStore } from "@/stores/attribution-store";
 
 interface MonacoEditorProps {
   path: string;
@@ -257,6 +258,100 @@ export function MonacoEditor({
     `;
   }, [highlightedLines]);
 
+  // §5.2 — Line attribution markers (who last edited each line)
+  const attributions = useAttributionStore((s) => s.attributions);
+  const attributionVisible = useAttributionStore((s) => s.visible);
+  const attributionDecorationsRef = useRef<string[]>([]);
+
+  useEffect(() => {
+    if (!editorRef.current || !monacoRef.current) return;
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+
+    const fileAttribs = attributions[path] ?? {};
+    const lines = Object.keys(fileAttribs).map(Number);
+
+    if (!attributionVisible || lines.length === 0) {
+      if (attributionDecorationsRef.current.length) {
+        attributionDecorationsRef.current = editor.deltaDecorations(
+          attributionDecorationsRef.current,
+          []
+        );
+      }
+      return;
+    }
+
+    // Group consecutive lines with the same author into ranges
+    const decorations: Monaco.editor.IModelDeltaDecoration[] = [];
+    let currentAuthor: string | null = null;
+    let rangeStart = 0;
+
+    const sortedLines = lines.sort((a, b) => a - b);
+    for (const line of sortedLines) {
+      const attr = fileAttribs[line];
+      if (!attr) continue;
+      const authorKey = attr.authorId + (attr.viaAI ? "-ai" : "");
+      if (authorKey !== currentAuthor) {
+        if (currentAuthor !== null && rangeStart < line) {
+          // Close previous range
+          const prevAttr = fileAttribs[rangeStart];
+          if (prevAttr) {
+            decorations.push({
+              range: new monaco.Range(rangeStart, 1, line - 1, 1),
+              options: {
+                isWholeLine: true,
+                className: "soroban-attribution-line",
+                marginClassName: "soroban-attribution-margin",
+                hoverMessage: { value: buildAttributionTooltip(prevAttr) },
+              },
+            });
+          }
+        }
+        currentAuthor = authorKey;
+        rangeStart = line;
+      }
+    }
+    // Close the last range
+    if (currentAuthor !== null) {
+      const attr = fileAttribs[rangeStart];
+      if (attr) {
+        const lastLine = sortedLines[sortedLines.length - 1];
+        decorations.push({
+          range: new monaco.Range(rangeStart, 1, lastLine, 1),
+          options: {
+            isWholeLine: true,
+            className: "soroban-attribution-line",
+            marginClassName: "soroban-attribution-margin",
+            hoverMessage: { value: buildAttributionTooltip(attr) },
+          },
+        });
+      }
+    }
+
+    attributionDecorationsRef.current = editor.deltaDecorations(
+      attributionDecorationsRef.current,
+      decorations
+    );
+
+    // Inject attribution styles
+    const styleId = "soroban-attribution-style";
+    let style = document.getElementById(styleId) as HTMLStyleElement | null;
+    if (!style) {
+      style = document.createElement("style");
+      style.id = styleId;
+      document.head.appendChild(style);
+    }
+    style.textContent = `
+      .soroban-attribution-margin {
+        border-left: 2px solid var(--accent);
+        margin-left: 0;
+      }
+      .soroban-attribution-line {
+        background: color-mix(in srgb, var(--accent) 4%, transparent);
+      }
+    `;
+  }, [attributions, path, attributionVisible]);
+
   return (
     <div ref={containerRef} className="h-full w-full overflow-hidden bg-[var(--mono-bg)]">
       <Editor
@@ -337,4 +432,18 @@ export function scrollToLine(editor: Monaco.editor.IStandaloneCodeEditor | null,
   if (!editor) return;
   editor.revealLineInCenter(line);
   editor.setPosition({ lineNumber: line, column: 1 });
+}
+
+function buildAttributionTooltip(attr: {
+  authorName: string;
+  timestamp: number;
+  viaAI?: boolean;
+  aiProvider?: string;
+  aiModel?: string;
+}): string {
+  const time = new Date(attr.timestamp).toLocaleString();
+  if (attr.viaAI) {
+    return `**${attr.authorName}** via AI agent (${attr.aiProvider ?? "?"}/${attr.aiModel ?? "?"})\n\n${time}`;
+  }
+  return `**${attr.authorName}**\n\n${time}`;
 }

@@ -15,6 +15,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { AgentPanel } from "./agent-panel";
+import { ContractInteractionPanel } from "./contract-interaction";
 import { useBuildStore } from "@/stores/build-store";
 import { useDeployStore } from "@/stores/deploy-store";
 
@@ -366,26 +367,9 @@ function DeployPanel({ network }: { network: string }) {
         </div>
       )}
 
-      {/* Contract interaction (placeholder until deployed) */}
+      {/* Contract interaction — auto-generated from contract spec */}
       {contractId && (
-        <div>
-          <h4 className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)] mb-2">
-            Contract Interaction
-          </h4>
-          <p className="text-[11px] text-[var(--text-muted)] mb-2">
-            Auto-generated from contract spec.
-          </p>
-          <div className="space-y-1.5">
-            {["get_greeting() → String", "set_greeting(greeting: String) → String", "greet(name: String) → String"].map((fn) => (
-              <div
-                key={fn}
-                className="rounded border border-[var(--border-subtle)] bg-[var(--surface-sunken)] px-2 py-1.5 font-mono text-[11px] text-[var(--text-secondary)]"
-              >
-                {fn}
-              </div>
-            ))}
-          </div>
-        </div>
+        <ContractInteractionPanel contractId={contractId} />
       )}
     </div>
   );

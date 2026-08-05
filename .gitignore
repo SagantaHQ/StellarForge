@@ -62,4 +62,4 @@ server.log
 /worklog.md
 /soroban-build.log
 /tests/
-/bun.lock
+/bun.lock/test-results/

@@ -571,7 +571,7 @@ function KeybindingsSettings() {
     { keys: "⌃⇧E", action: "Explorer view" },
     { keys: "⌃⇧F", action: "Search view" },
     { keys: "⌃⇧G", action: "Source control view" },
-    { keys: "⌃⇧B", action: "Compile & deploy view" },
+    { keys: "⌃⇧B", action: "Build contract (soroban contract build)" },
     { keys: "⌃⌘I", action: "AI agent view" },
     { keys: "⌃⇧C", action: "Collaboration view" },
     { keys: "⌃⇧L", action: "Toggle dark/light mode" },

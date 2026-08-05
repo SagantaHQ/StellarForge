@@ -20,6 +20,7 @@ import { ProfileModal } from "./profile/profile-modal";
 import { useThemeStore } from "@/stores/theme-store";
 import { useFileSystemStore } from "@/stores/file-system-store";
 import { useProfileStore } from "@/stores/profile-store";
+import { useBuildStore } from "@/stores/build-store";
 import type { Template } from "@/lib/templates/registry";
 import { cn } from "@/lib/utils";
 
@@ -40,6 +41,8 @@ export function IdeShell() {
   const createFile = useFileSystemStore((s) => s.createFile);
   const profile = useProfileStore((s) => s.profile);
   const setProfile = useProfileStore((s) => s.setProfile);
+  const buildStatus = useBuildStore((s) => s.status);
+  const startBuild = useBuildStore((s) => s.startBuild);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -66,8 +69,8 @@ export function IdeShell() {
         setRightPanelView("agent");
       } else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "b") {
         e.preventDefault();
-        setActivityView("deploy");
-        setRightPanelView("deploy");
+        setRightPanelView("compile");
+        startBuild();
       } else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "e") {
         e.preventDefault();
         setActivityView("explorer");
@@ -109,10 +112,15 @@ export function IdeShell() {
         network={network}
         collabUsers={[]}
         profile={profile}
+        building={buildStatus === "building"}
         onShare={() => setSettingsOpen(true)}
         onConnectWallet={() => setProfileOpen(true)}
         onNewProject={() => setNewProjectOpen(true)}
         onCommandPalette={() => setCommandPaletteOpen(true)}
+        onBuild={() => {
+          setRightPanelView("compile");
+          startBuild();
+        }}
         onDeploy={() => {
           setActivityView("deploy");
           setRightPanelView("deploy");
@@ -192,6 +200,10 @@ export function IdeShell() {
         onSave={() => {}}
         onToggleTerminal={() => setTerminalCollapsed((v) => !v)}
         onOpenSettings={() => setSettingsOpen(true)}
+        onBuild={() => {
+          setRightPanelView("compile");
+          startBuild();
+        }}
         onDeploy={() => {
           setActivityView("deploy");
           setRightPanelView("deploy");

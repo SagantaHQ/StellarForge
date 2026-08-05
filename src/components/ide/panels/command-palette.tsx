@@ -15,6 +15,7 @@ import {
   FolderPlus,
   Save,
   RefreshCw,
+  Wrench,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -28,7 +29,7 @@ interface Command {
   icon: LucideIcon;
   shortcut?: string;
   action: () => void;
-  category: "file" | "view" | "theme" | "git" | "agent";
+  category: "file" | "view" | "theme" | "git" | "agent" | "build";
 }
 
 interface CommandPaletteProps {
@@ -39,6 +40,7 @@ interface CommandPaletteProps {
   onSave: () => void;
   onToggleTerminal: () => void;
   onOpenSettings: () => void;
+  onBuild: () => void;
   onDeploy: () => void;
   onOpenAgent: () => void;
 }
@@ -51,6 +53,7 @@ export function CommandPalette({
   onSave,
   onToggleTerminal,
   onOpenSettings,
+  onBuild,
   onDeploy,
   onOpenAgent,
 }: CommandPaletteProps) {
@@ -79,6 +82,7 @@ export function CommandPalette({
     { id: "toggle-terminal", label: "Toggle Terminal", icon: TerminalIcon, shortcut: "⌃`", category: "view", action: () => { onToggleTerminal(); onClose(); } },
     { id: "open-settings", label: "Open Settings", icon: SettingsIcon, shortcut: "⌘,", category: "view", action: () => { onOpenSettings(); onClose(); } },
     { id: "toggle-mode", label: "Toggle Dark/Light", icon: Sun, shortcut: "⌃⇧L", category: "theme", action: () => { toggleMode(); onClose(); } },
+    { id: "build", label: "Build Contract", icon: Wrench, shortcut: "⌃⇧B", category: "build", action: () => { onBuild(); onClose(); } },
     { id: "deploy", label: "Deploy Contract", icon: Rocket, shortcut: "⌃⇧D", category: "git", action: () => { onDeploy(); onClose(); } },
     { id: "open-agent", label: "Open AI Agent", icon: Bot, shortcut: "⌃⌘I", category: "agent", action: () => { onOpenAgent(); onClose(); } },
   ];
@@ -134,6 +138,7 @@ export function CommandPalette({
     file: "File",
     view: "View",
     theme: "Theme",
+    build: "Build",
     git: "Source Control",
     agent: "AI Agent",
   };

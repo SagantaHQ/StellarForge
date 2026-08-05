@@ -8,11 +8,14 @@ import {
   TestTube,
   GitBranch,
   Check,
+  Loader2,
+  X,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { AgentPanel } from "./agent-panel";
+import { useBuildStore } from "@/stores/build-store";
 
 type RightPanelView = "agent" | "compile" | "test" | "deploy" | "git";
 
@@ -68,6 +71,11 @@ export function RightPanel({ view, onChangeView, onOpenSettings }: RightPanelPro
 }
 
 function CompilePanel() {
+  const status = useBuildStore((s) => s.status);
+  const lastOutput = useBuildStore((s) => s.lastOutput);
+  const lastError = useBuildStore((s) => s.lastError);
+  const startBuild = useBuildStore((s) => s.startBuild);
+
   return (
     <div className="flex h-full flex-col p-3 gap-3 overflow-y-auto">
       <div>
@@ -75,8 +83,17 @@ function CompilePanel() {
           Build
         </h3>
         <div className="space-y-2">
-          <Button size="sm" className="w-full h-8 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)] gap-2">
-            <Wrench size={13} strokeWidth={1.75} />
+          <Button
+            size="sm"
+            onClick={() => startBuild()}
+            disabled={status === "building"}
+            className="w-full h-8 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)] gap-2 disabled:opacity-60"
+          >
+            {status === "building" ? (
+              <Loader2 size={13} strokeWidth={1.75} className="animate-spin" />
+            ) : (
+              <Wrench size={13} strokeWidth={1.75} />
+            )}
             soroban contract build
           </Button>
           <Button size="sm" variant="outline" className="w-full h-8 gap-2 border-[var(--border-subtle)]">
@@ -87,15 +104,51 @@ function CompilePanel() {
       </div>
 
       <div>
-        <h3 className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)] mb-2">
-          Output
-        </h3>
-        <div className="rounded-md bg-[var(--surface-sunken)] p-2.5 font-mono text-[11px] text-[var(--text-secondary)] space-y-1">
-          <div>📦 Cargo building...</div>
-          <div>   Compiling hello-world v0.1.0</div>
-          <div>✨ Built hello_world.wasm</div>
-          <div>   Path: target/wasm32v1-none/release/hello_world.wasm</div>
-          <div>   Size: 4.2 KB</div>
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">
+            Output
+          </h3>
+          {status === "building" && (
+            <span className="flex items-center gap-1 text-[10px] text-[var(--text-muted)]">
+              <Loader2 size={9} strokeWidth={2} className="animate-spin" />
+              building…
+            </span>
+          )}
+          {status === "success" && (
+            <span className="flex items-center gap-1 text-[10px] text-[var(--status-success)]">
+              <Check size={9} strokeWidth={2} />
+              success
+            </span>
+          )}
+          {status === "failed" && (
+            <span className="flex items-center gap-1 text-[10px] text-[var(--status-error)]">
+              <X size={9} strokeWidth={2} />
+              failed
+            </span>
+          )}
+        </div>
+        <div className="rounded-md bg-[var(--surface-sunken)] p-2.5 font-mono text-[11px] text-[var(--text-secondary)] space-y-0.5 min-h-[80px]">
+          {status === "idle" && (
+            <div className="text-[var(--text-muted)] italic">
+              No build yet. Click Build to compile.
+            </div>
+          )}
+          {status === "building" && (
+            <>
+              <div>📦 Cargo building...</div>
+              <div className="text-[var(--text-muted)]">   Compiling hello-world v0.1.0</div>
+            </>
+          )}
+          {status === "success" && lastOutput && (
+            lastOutput.split("\n").map((line, i) => (
+              <div key={i} className={line.startsWith("✨") ? "text-[var(--status-success)]" : ""}>
+                {line || "\u00A0"}
+              </div>
+            ))
+          )}
+          {status === "failed" && lastError && (
+            <div className="text-[var(--status-error)] whitespace-pre-wrap">{lastError}</div>
+          )}
         </div>
       </div>
 

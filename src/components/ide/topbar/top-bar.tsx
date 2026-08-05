@@ -11,6 +11,8 @@ import {
   Users,
   Bell,
   Plus,
+  Wrench,
+  Loader2,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -23,10 +25,13 @@ interface TopBarProps {
   network: string;
   collabUsers: { name: string; color: string }[];
   profile?: UserProfile | null;
+  /** Whether a build is currently in progress (shows spinner) */
+  building?: boolean;
   onShare: () => void;
   onConnectWallet: () => void;
   onNewProject: () => void;
   onCommandPalette: () => void;
+  onBuild: () => void;
   onDeploy: () => void;
   onSwitchNetwork: (n: string) => void;
   onToggleMobilePanel?: () => void;
@@ -40,10 +45,12 @@ export function TopBar({
   network,
   collabUsers,
   profile,
+  building = false,
   onShare,
   onConnectWallet,
   onNewProject,
   onCommandPalette,
+  onBuild,
   onDeploy,
   onSwitchNetwork,
 }: TopBarProps) {
@@ -173,6 +180,26 @@ export function TopBar({
         >
           <Share2 size={14} strokeWidth={1.75} />
           <span className="hidden sm:inline">Share</span>
+        </Button>
+
+        {/* Build + Deploy — paired actions. Build = outline (secondary),
+            Deploy = solid accent (primary). Visual hierarchy makes clear
+            that Build is the safe, frequent action; Deploy is the
+            consequential one (writes to chain). */}
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={onBuild}
+          disabled={building}
+          className="h-8 gap-1.5 border-[var(--border-strong)] bg-[var(--surface-sunken)] px-3 text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)] hover:border-[var(--accent)] disabled:opacity-60"
+          title="Build contract (soroban contract build)"
+        >
+          {building ? (
+            <Loader2 size={12} strokeWidth={2} className="animate-spin" />
+          ) : (
+            <Wrench size={12} strokeWidth={1.75} />
+          )}
+          <span className="hidden sm:inline">{building ? "Building…" : "Build"}</span>
         </Button>
 
         <Button

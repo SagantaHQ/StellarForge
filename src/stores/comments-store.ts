@@ -89,47 +89,9 @@ const CURRENT_USER = {
   avatarColor: "#4F8C8C",
 };
 
-// Seed with a couple of example comments on the sample contract
-// Use fixed timestamps for seed data to avoid SSR hydration mismatches.
-// Date.now() is evaluated at module load — different on server vs client.
-const SEED_BASE_TS = 1785890000000; // fixed reference timestamp
-
-const SEED_COMMENTS: Comment[] = [
-  {
-    id: "seed-1",
-    projectPath: "hello-world",
-    filePath: "src/lib.rs",
-    lineNumber: 18,
-    lineSnapshot: "    pub fn __constructor(env: Env) {",
-    anchorCrdtPos: "src/lib.rs:18",
-    authorId: "alice",
-    authorName: "alice",
-    authorAvatarColor: "#C5794B",
-    body: "Should we add input validation here? What happens if greeting is empty?",
-    priority: "normal",
-    status: "open",
-    createdAt: SEED_BASE_TS - 3600_000,
-    updatedAt: SEED_BASE_TS - 3600_000,
-    isOrphaned: false,
-  },
-  {
-    id: "seed-2",
-    projectPath: "hello-world",
-    filePath: "src/lib.rs",
-    lineNumber: 36,
-    lineSnapshot: "    pub fn greet(env: Env, name: String) -> String {",
-    anchorCrdtPos: "src/lib.rs:36",
-    authorId: "bob",
-    authorName: "bob",
-    authorAvatarColor: "#7B96B3",
-    body: "Missing require_auth(env.invoker())? Anyone can call this without authentication.",
-    priority: "urgent",
-    status: "open",
-    createdAt: SEED_BASE_TS - 1800_000,
-    updatedAt: SEED_BASE_TS - 1800_000,
-    isOrphaned: false,
-  },
-];
+// No seed comments — zero mocked data. Comments are created by real users
+// and persisted to Postgres via /api/comments.
+const SEED_COMMENTS: Comment[] = [];
 
 export const useCommentsStore = create<CommentsState>()(
   persist(

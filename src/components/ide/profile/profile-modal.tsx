@@ -43,16 +43,13 @@ const WALLETS = [
   { id: "freighter", name: "Freighter", description: "Browser extension", color: "#4F8C8C" },
   { id: "albedo", name: "Albedo", description: "No-install wallet", color: "#7B96B3" },
   { id: "xbull", name: "xBull", description: "Browser extension", color: "#C9A66B" },
-  { id: "lobstr", name: "Lobstr", description: "Mobile + web", color: "#A88FB3" },
 ];
-
-// Mock taken usernames for the uniqueness check demo
-const TAKEN_USERNAMES = new Set(["alice", "bob", "admin", "root", "soroban", "stellar"]);
 
 export function ProfileModal({ open, onClose, onComplete }: ProfileModalProps) {
   const [step, setStep] = useState<Step>("wallet");
   const [address, setAddress] = useState<string>("");
   const [connecting, setConnecting] = useState(false);
+  const [walletError, setWalletError] = useState<string | null>(null);
   const [username, setUsername] = useState("");
   const [bio, setBio] = useState("");
   const [avatarUrl, setAvatarUrl] = useState<string | undefined>(undefined);
@@ -61,22 +58,19 @@ export function ProfileModal({ open, onClose, onComplete }: ProfileModalProps) {
   const [signError, setSignError] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Real wallet connection via @saganta/stellar-appkit (hooks must be before early return)
+  // Real wallet connection via @saganta/stellar-appkit
   const wallet = useStellarWallet();
 
   const handleConnectWallet = useCallback(async (walletId: string) => {
     setConnecting(true);
+    setWalletError(null);
     try {
-      const addr = await wallet.connect(walletId as "freighter" | "albedo" | "xbull" | "ledger");
+      const addr = await wallet.connect(walletId);
       setAddress(addr);
       setStep("profile");
-    } catch {
-      // Fall back to simulated connection if wallet not installed
-      const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-      let addr = "G";
-      for (let i = 0; i < 55; i++) addr += chars[Math.floor(Math.random() * chars.length)];
-      setAddress(addr);
-      setStep("profile");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setWalletError(msg);
     } finally {
       setConnecting(false);
     }
@@ -89,10 +83,13 @@ export function ProfileModal({ open, onClose, onComplete }: ProfileModalProps) {
         setStep("wallet");
         setAddress("");
         setConnecting(false);
+        setWalletError(null);
         setUsername("");
         setBio("");
         setAvatarUrl(undefined);
         setAsyncUsernameStatus("checking");
+        setSigning(false);
+        setSignError(null);
       }, 200);
     }
   }, [open]);
@@ -119,12 +116,12 @@ export function ProfileModal({ open, onClose, onComplete }: ProfileModalProps) {
           const data = await res.json();
           setAsyncUsernameStatus(data.available ? "available" : "taken");
         } else {
-          // Fallback to local check if API fails
-          setAsyncUsernameStatus(TAKEN_USERNAMES.has(username.toLowerCase()) ? "taken" : "available");
+          // API failed — assume available (let server enforce on save)
+          setAsyncUsernameStatus("available");
         }
       } catch {
-        // Network error — fall back to local check
-        setAsyncUsernameStatus(TAKEN_USERNAMES.has(username.toLowerCase()) ? "taken" : "available");
+        // Network error — assume available (server will enforce)
+        setAsyncUsernameStatus("available");
       }
     }, 350);
     return () => {
@@ -147,7 +144,7 @@ export function ProfileModal({ open, onClose, onComplete }: ProfileModalProps) {
       );
 
       // §11 — Server verifies the signature and saves the profile
-      const result = await wallet.verifyAndSaveProfile(siws, {
+      await wallet.verifyAndSaveProfile(siws, {
         username,
         displayName: undefined,
         bio: bio.trim() || undefined,
@@ -161,33 +158,7 @@ export function ProfileModal({ open, onClose, onComplete }: ProfileModalProps) {
       });
       setStep("done");
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      // If SIWS fails (wallet doesn't support signing), fall back to
-      // saving without signature verification (dev mode)
-      if (msg.includes("signMessage") || msg.includes("does not support")) {
-        try {
-          const res = await fetch("/api/profile", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              walletAddress: address,
-              username,
-              bio: bio.trim() || undefined,
-            }),
-          });
-          if (res.ok) {
-            onComplete({
-              address,
-              username,
-              avatarUrl,
-              bio: bio.trim() || undefined,
-            });
-            setStep("done");
-            return;
-          }
-        } catch {}
-      }
-      setSignError(msg);
+      setSignError(err instanceof Error ? err.message : String(err));
     } finally {
       setSigning(false);
     }
@@ -260,8 +231,31 @@ export function ProfileModal({ open, onClose, onComplete }: ProfileModalProps) {
                   )}
                 </button>
               ))}
+              {walletError && (
+                <div className="rounded-md border border-[var(--status-error)] bg-[color-mix(in_srgb,var(--status-error)_10%,transparent)] p-2.5 flex items-start gap-2">
+                  <AlertCircle size={14} strokeWidth={1.75} className="text-[var(--status-error)] mt-0.5 shrink-0" />
+                  <div className="text-[11px] text-[var(--status-error)]">
+                    {walletError.includes("isn't installed") || walletError.includes("not installed") ? (
+                      <>
+                        <div className="font-medium">Wallet not installed</div>
+                        <div className="mt-0.5 opacity-90">
+                          Install the browser extension:
+                          {walletError.includes("Freighter") && (
+                            <a href="https://freighter.app" target="_blank" rel="noopener" className="ml-1 underline">freighter.app</a>
+                          )}
+                          {walletError.includes("Albedo") && (
+                            <span> Albedo works without installation — try it instead.</span>
+                          )}
+                        </div>
+                      </>
+                    ) : (
+                      <span>{walletError}</span>
+                    )}
+                  </div>
+                </div>
+              )}
               <p className="pt-2 text-[10px] text-[var(--text-muted)]">
-                Uses <code className="font-mono">stellar-appkit</code>. Keys never leave your wallet.
+                Uses <code className="font-mono">@saganta/stellar-appkit</code>. Keys never leave your wallet.
               </p>
             </div>
           )}

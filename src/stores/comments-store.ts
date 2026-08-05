@@ -90,6 +90,10 @@ const CURRENT_USER = {
 };
 
 // Seed with a couple of example comments on the sample contract
+// Use fixed timestamps for seed data to avoid SSR hydration mismatches.
+// Date.now() is evaluated at module load — different on server vs client.
+const SEED_BASE_TS = 1785890000000; // fixed reference timestamp
+
 const SEED_COMMENTS: Comment[] = [
   {
     id: "seed-1",
@@ -104,8 +108,8 @@ const SEED_COMMENTS: Comment[] = [
     body: "Should we add input validation here? What happens if greeting is empty?",
     priority: "normal",
     status: "open",
-    createdAt: Date.now() - 3600_000,
-    updatedAt: Date.now() - 3600_000,
+    createdAt: SEED_BASE_TS - 3600_000,
+    updatedAt: SEED_BASE_TS - 3600_000,
     isOrphaned: false,
   },
   {
@@ -121,8 +125,8 @@ const SEED_COMMENTS: Comment[] = [
     body: "Missing require_auth(env.invoker())? Anyone can call this without authentication.",
     priority: "urgent",
     status: "open",
-    createdAt: Date.now() - 1800_000,
-    updatedAt: Date.now() - 1800_000,
+    createdAt: SEED_BASE_TS - 1800_000,
+    updatedAt: SEED_BASE_TS - 1800_000,
     isOrphaned: false,
   },
 ];

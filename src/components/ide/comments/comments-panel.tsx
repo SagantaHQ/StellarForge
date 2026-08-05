@@ -245,6 +245,13 @@ function CommentRow({
   canDelete: boolean;
 }) {
   const [expanded, setExpanded] = useState(true);
+  // Avoid hydration mismatch: Date.now() differs between server and client.
+  // Only compute relative time after hydration (client-only).
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setMounted(true);
+  }, []);
 
   return (
     <div
@@ -317,7 +324,7 @@ function CommentRow({
             <span>Orphaned</span>
           </span>
         )}
-        <span>· {formatRelative(comment.createdAt)}</span>
+        <span>· {mounted ? formatRelative(comment.createdAt) : "—"}</span>
       </div>
 
       {/* Body */}
@@ -348,6 +355,12 @@ function ResolvedSection({
   onUnresolve: (id: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  // Avoid hydration mismatch for formatRelative
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setMounted(true);
+  }, []);
 
   return (
     <div className="border-t-2 border-[var(--border-subtle)]">
@@ -388,7 +401,7 @@ function ResolvedSection({
                 </button>
               </div>
               <div className="text-[10px] text-[var(--text-muted)] mt-0.5">
-                Resolved by {c.resolvedByName ?? "unknown"} · {c.resolvedAt ? formatRelative(c.resolvedAt) : ""}
+                Resolved by {c.resolvedByName ?? "unknown"} · {mounted && c.resolvedAt ? formatRelative(c.resolvedAt) : ""}
               </div>
             </div>
           ))}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Bot,
   Wrench,
@@ -72,12 +72,20 @@ export function RightPanel({ view, onChangeView, onOpenSettings }: RightPanelPro
 
 function CompilePanel() {
   const status = useBuildStore((s) => s.status);
-  const lastOutput = useBuildStore((s) => s.lastOutput);
-  const lastError = useBuildStore((s) => s.lastError);
+  const lines = useBuildStore((s) => s.lines);
+  const wasmInfo = useBuildStore((s) => s.wasmInfo);
+  const error = useBuildStore((s) => s.error);
   const startBuild = useBuildStore((s) => s.startBuild);
+  const outputRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (outputRef.current) {
+      outputRef.current.scrollTop = outputRef.current.scrollHeight;
+    }
+  }, [lines.length]);
 
   return (
-    <div className="flex h-full flex-col p-3 gap-3 overflow-y-auto">
+    <div className="flex h-full flex-col p-3 gap-3 overflow-hidden">
       <div>
         <h3 className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)] mb-2">
           Build
@@ -96,14 +104,20 @@ function CompilePanel() {
             )}
             soroban contract build
           </Button>
-          <Button size="sm" variant="outline" className="w-full h-8 gap-2 border-[var(--border-subtle)]">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => startBuild({ command: "cargo" })}
+            disabled={status === "building"}
+            className="w-full h-8 gap-2 border-[var(--border-subtle)] disabled:opacity-60"
+          >
             <Wrench size={13} strokeWidth={1.75} />
             cargo build
           </Button>
         </div>
       </div>
 
-      <div>
+      <div className="flex flex-col flex-1 min-h-0">
         <div className="flex items-center justify-between mb-2">
           <h3 className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">
             Output
@@ -127,45 +141,57 @@ function CompilePanel() {
             </span>
           )}
         </div>
-        <div className="rounded-md bg-[var(--surface-sunken)] p-2.5 font-mono text-[11px] text-[var(--text-secondary)] space-y-0.5 min-h-[80px]">
-          {status === "idle" && (
+        <div
+          ref={outputRef}
+          className="flex-1 overflow-y-auto rounded-md bg-[var(--surface-sunken)] p-2.5 font-mono text-[11px] leading-relaxed space-y-0.5 min-h-[120px]"
+        >
+          {status === "idle" && lines.length === 0 && (
             <div className="text-[var(--text-muted)] italic">
               No build yet. Click Build to compile.
             </div>
           )}
+          {lines.map((line, i) => (
+            <div
+              key={i}
+              className={
+                line.type === "stderr"
+                  ? "text-[var(--status-error)]"
+                  : line.text.includes("✨") || line.text.includes("Built")
+                  ? "text-[var(--status-success)]"
+                  : line.text.startsWith("warning")
+                  ? "text-[var(--status-warning)]"
+                  : "text-[var(--text-secondary)]"
+              }
+            >
+              {line.text || "\u00A0"}
+            </div>
+          ))}
           {status === "building" && (
-            <>
-              <div>📦 Cargo building...</div>
-              <div className="text-[var(--text-muted)]">   Compiling hello-world v0.1.0</div>
-            </>
-          )}
-          {status === "success" && lastOutput && (
-            lastOutput.split("\n").map((line, i) => (
-              <div key={i} className={line.startsWith("✨") ? "text-[var(--status-success)]" : ""}>
-                {line || "\u00A0"}
-              </div>
-            ))
-          )}
-          {status === "failed" && lastError && (
-            <div className="text-[var(--status-error)] whitespace-pre-wrap">{lastError}</div>
+            <div className="text-[var(--text-muted)] inline-block">
+              <span className="animate-pulse">▋</span>
+            </div>
           )}
         </div>
-      </div>
 
-      <div>
-        <h3 className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)] mb-2">
-          Diagnostics
-        </h3>
-        <div className="space-y-1">
-          <div className="flex items-center gap-2 rounded px-2 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] cursor-pointer">
-            <Check size={12} className="text-[var(--status-success)]" strokeWidth={2} />
-            <span>No errors</span>
+        {wasmInfo && (
+          <div className="mt-2 rounded-md border border-[var(--border-subtle)] bg-[var(--surface-raised)] p-2">
+            <div className="text-[10px] uppercase tracking-wide text-[var(--text-muted)] mb-0.5">
+              Built WASM
+            </div>
+            <div className="font-mono text-[11px] text-[var(--text-secondary)] truncate">
+              {wasmInfo.path}
+            </div>
+            <div className="text-[10px] text-[var(--text-muted)]">
+              {(wasmInfo.sizeBytes / 1024).toFixed(2)} KB
+            </div>
           </div>
-          <div className="flex items-center gap-2 rounded px-2 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] cursor-pointer">
-            <Check size={12} className="text-[var(--status-warning)]" strokeWidth={2} />
-            <span>No warnings</span>
+        )}
+
+        {error && status === "failed" && (
+          <div className="mt-2 rounded-md border border-[var(--status-error)] bg-[color-mix(in_srgb,var(--status-error)_10%,transparent)] p-2 text-[11px] text-[var(--status-error)]">
+            {error}
           </div>
-        </div>
+        )}
       </div>
     </div>
   );

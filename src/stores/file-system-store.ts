@@ -2,10 +2,28 @@
 
 import { create } from "zustand";
 import { getInitialFileTree, findFile, type TreeNode, type FileNode } from "@/lib/soroban/sample-project";
+import { fileGetAll, fileSet, fileDelete, fileClearAll, metaGet, metaSet } from "@/lib/storage/idb";
+
+/**
+ * §8 — Local-first file system store.
+ *
+ * Files are stored in IndexedDB (not localStorage) for:
+ *   - Much larger storage limit (50MB+ vs 5MB)
+ *   - Structured async storage (doesn't block main thread)
+ *   - Survives browser restarts, works offline
+ *
+ * On mount: loads files from IndexedDB. If empty, seeds from the sample
+ * project. On every mutation: persists to IndexedDB (async, fire-and-forget).
+ *
+ * Sync strategy (§8): when online, changes sync to Postgres. When offline,
+ * changes accumulate locally and merge on reconnect. (Sync layer TBD.)
+ */
 
 interface FileSystemState {
   tree: TreeNode[];
   activeFilePath: string | null;
+  /** Whether the initial load from IndexedDB has completed */
+  hydrated: boolean;
 
   setActiveFile: (path: string) => void;
   getActiveFile: () => FileNode | null;
@@ -15,6 +33,10 @@ interface FileSystemState {
   deleteNode: (path: string) => void;
   renameNode: (path: string, newName: string) => void;
   toggleFolder: (path: string) => void;
+  /** Load files from IndexedDB — called once on mount */
+  hydrate: () => Promise<void>;
+  /** Replace the entire file tree (used by template scaffolding) */
+  replaceTree: (files: { path: string; content: string; language: string }[]) => Promise<void>;
 }
 
 function deepClone(tree: TreeNode[]): TreeNode[] {
@@ -70,11 +92,113 @@ function findFolder(tree: TreeNode[], path: string | null): TreeNode[] | null {
   return search(tree);
 }
 
+/** Persist a single file to IndexedDB (fire-and-forget). */
+function persistFile(file: FileNode) {
+  fileSet(file.path, file.content, file.language, file.gitStatus).catch(() => {});
+}
+
+/** Persist the entire tree to IndexedDB (used on hydrate/replace). */
+async function persistAllFiles(tree: TreeNode[]) {
+  await fileClearAll();
+  const all: FileNode[] = [];
+  function collect(nodes: TreeNode[]) {
+    for (const n of nodes) {
+      if (n.type === "file") all.push(n);
+      else collect(n.children);
+    }
+  }
+  collect(tree);
+  await Promise.all(all.map((f) => fileSet(f.path, f.content, f.language, f.gitStatus)));
+}
+
+/** Rebuild the tree structure from a flat list of files. */
+function buildTreeFromFiles(files: { path: string; content: string; language: string; gitStatus?: string | null }[]): TreeNode[] {
+  const root: TreeNode[] = [];
+  const folderMap = new Map<string, TreeNode>();
+
+  for (const file of files) {
+    const parts = file.path.split("/");
+    const fileName = parts[parts.length - 1];
+    const folderPath = parts.length > 1 ? parts.slice(0, -1).join("/") : null;
+
+    // Create parent folders
+    let currentPath = "";
+    for (let i = 0; i < parts.length - 1; i++) {
+      const folderName = parts[i];
+      const parentPath = currentPath || null;
+      currentPath = currentPath ? `${currentPath}/${folderName}` : folderName;
+
+      if (!folderMap.has(currentPath)) {
+        const folder: TreeNode = {
+          type: "folder",
+          name: folderName,
+          path: currentPath,
+          children: [],
+          expanded: true,
+        };
+        folderMap.set(currentPath, folder);
+        const target = parentPath ? folderMap.get(parentPath)?.children : root;
+        if (target) target.push(folder);
+      }
+    }
+
+    // Add the file
+    const target = folderPath ? folderMap.get(folderPath)?.children : root;
+    if (target) {
+      target.push({
+        type: "file",
+        name: fileName,
+        path: file.path,
+        language: file.language,
+        content: file.content,
+        gitStatus: file.gitStatus ?? null,
+      });
+    }
+  }
+
+  return root;
+}
+
 export const useFileSystemStore = create<FileSystemState>((set, get) => ({
   tree: getInitialFileTree(),
   activeFilePath: "src/lib.rs",
+  hydrated: false,
 
-  setActiveFile: (path) => set({ activeFilePath: path }),
+  hydrate: async () => {
+    try {
+      const stored = await fileGetAll();
+      if (stored.length > 0) {
+        // Rebuild tree from stored files
+        const tree = buildTreeFromFiles(stored);
+        const activePath = await metaGet<string>("activeFilePath");
+        set({
+          tree,
+          activeFilePath: activePath ?? stored[0]?.path ?? null,
+          hydrated: true,
+        });
+      } else {
+        // Seed from sample project
+        const initial = getInitialFileTree();
+        await persistAllFiles(initial);
+        await metaSet("activeFilePath", "src/lib.rs");
+        set({ tree: initial, activeFilePath: "src/lib.rs", hydrated: true });
+      }
+    } catch {
+      // Fallback to sample project if IndexedDB fails
+      set({ hydrated: true });
+    }
+  },
+
+  replaceTree: async (files) => {
+    const tree = buildTreeFromFiles(files);
+    await persistAllFiles(tree);
+    set({ tree, activeFilePath: files[0]?.path ?? null });
+  },
+
+  setActiveFile: (path) => {
+    set({ activeFilePath: path });
+    metaSet("activeFilePath", path).catch(() => {});
+  },
 
   getActiveFile: () => {
     const { tree, activeFilePath } = get();
@@ -83,14 +207,17 @@ export const useFileSystemStore = create<FileSystemState>((set, get) => ({
   },
 
   updateFileContent: (path, content) =>
-    set((s) => ({
-      tree: updateInTree(s.tree, (node) => {
+    set((s) => {
+      const newTree = updateInTree(s.tree, (node) => {
         if (node.type === "file" && node.path === path) {
-          return { ...node, content, gitStatus: node.gitStatus ?? "modified" };
+          const updated = { ...node, content, gitStatus: node.gitStatus ?? "modified" as const };
+          persistFile(updated);
+          return updated;
         }
         return node;
-      }),
-    })),
+      });
+      return { tree: newTree };
+    }),
 
   createFile: (parentPath, name) =>
     set((s) => {
@@ -106,6 +233,7 @@ export const useFileSystemStore = create<FileSystemState>((set, get) => ({
         gitStatus: "untracked",
       };
       parent.push(newFile);
+      persistFile(newFile);
       return { tree: newTree, activeFilePath: newFile.path };
     }),
 
@@ -125,12 +253,14 @@ export const useFileSystemStore = create<FileSystemState>((set, get) => ({
       return { tree: newTree };
     }),
 
-  deleteNode: (path) =>
+  deleteNode: (path) => {
+    fileDelete(path).catch(() => {});
     set((s) => ({
       tree: updateInTree(s.tree, (node) =>
         node.path === path ? null : node
       ),
-    })),
+    }));
+  },
 
   renameNode: (path, newName) =>
     set((s) => ({
@@ -141,12 +271,16 @@ export const useFileSystemStore = create<FileSystemState>((set, get) => ({
           : "";
         const newPath = parentPath ? `${parentPath}/${newName}` : newName;
         if (node.type === "file") {
-          return {
+          const updated = {
             ...node,
             name: newName,
             path: newPath,
             language: detectLanguage(newName),
           };
+          // Delete old path, persist new
+          fileDelete(path).catch(() => {});
+          persistFile(updated);
+          return updated;
         }
         return { ...node, name: newName, path: newPath };
       }),

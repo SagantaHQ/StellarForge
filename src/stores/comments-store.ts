@@ -2,6 +2,7 @@
 
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
+import { createIDBStorage } from "@/lib/storage/zustand-idb-storage";
 
 /**
  * §6 — File-level comments system.
@@ -309,7 +310,7 @@ export const useCommentsStore = create<CommentsState>()(
     }),
     {
       name: "soroban-build:comments",
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => createIDBStorage()),
       partialize: (s) => ({
         comments: s.comments,
         panelPositions: s.panelPositions,

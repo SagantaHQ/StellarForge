@@ -8,9 +8,11 @@ import {
   Wifi,
   Cloud,
   CloudOff,
+  Users,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useCollabStore } from "@/stores/collab-store";
 
 interface StatusBarProps {
   network: string;
@@ -35,6 +37,10 @@ export function StatusBar({
   cursorPos,
   collabCount,
 }: StatusBarProps) {
+  const collabConnected = useCollabStore((s) => s.connected);
+  const collabUsers = useCollabStore((s) => s.users);
+  const activeCollabCount = collabConnected ? collabUsers.length : collabCount;
+
   return (
     <footer
       className="flex h-6 items-center justify-between gap-4 border-t border-[var(--border-subtle)] bg-[var(--accent)] px-3 text-[11px] text-[var(--accent-contrast)]"
@@ -65,10 +71,13 @@ export function StatusBar({
         <span className="hidden md:inline">stellar-cli {stellarCliVersion}</span>
         <span className="hidden md:inline">·</span>
         <span className="capitalize">{network}</span>
-        {collabCount > 0 && (
+        {collabConnected && (
           <>
             <span>·</span>
-            <span>{collabCount} collab</span>
+            <span className="flex items-center gap-1">
+              <Users size={9} strokeWidth={1.75} />
+              {activeCollabCount} {activeCollabCount === 1 ? "user" : "users"}
+            </span>
           </>
         )}
         <span>·</span>

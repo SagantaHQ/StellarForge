@@ -18,6 +18,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import type { UserProfile } from "@/stores/profile-store";
+import { useCollabStore } from "@/stores/collab-store";
 
 interface TopBarProps {
   projectName: string;
@@ -55,6 +56,8 @@ export function TopBar({
   onSwitchNetwork,
 }: TopBarProps) {
   const [networkOpen, setNetworkOpen] = useState(false);
+  const collabConnected = useCollabStore((s) => s.connected);
+  const onlineUsers = useCollabStore((s) => s.users);
 
   return (
     <header
@@ -110,9 +113,9 @@ export function TopBar({
 
       {/* Right: collab, network, share, deploy, wallet/profile */}
       <div className="flex items-center gap-2">
-        {/* Collab avatars */}
+        {/* Collab avatars — show online users when connected, otherwise the passed-in collabUsers */}
         <div className="hidden lg:flex items-center -space-x-1.5">
-          {collabUsers.slice(0, 4).map((user, i) => (
+          {(collabConnected ? onlineUsers : collabUsers).slice(0, 4).map((user, i) => (
             <div
               key={i}
               className="h-6 w-6 rounded-full border-2 border-[var(--surface-panel)] flex items-center justify-center text-[10px] font-medium text-white"
@@ -122,7 +125,12 @@ export function TopBar({
               {user.name.charAt(0).toUpperCase()}
             </div>
           ))}
-          {collabUsers.length === 0 && (
+          {collabConnected && onlineUsers.length > 4 && (
+            <div className="h-6 w-6 rounded-full border-2 border-[var(--surface-panel)] bg-[var(--surface-raised)] flex items-center justify-center text-[10px] font-medium text-[var(--text-secondary)]">
+              +{onlineUsers.length - 4}
+            </div>
+          )}
+          {!collabConnected && collabUsers.length === 0 && (
             <div className="flex items-center gap-1 text-xs text-[var(--text-muted)] px-1">
               <Users size={14} strokeWidth={1.75} />
             </div>
@@ -176,10 +184,19 @@ export function TopBar({
           size="sm"
           variant="ghost"
           onClick={onShare}
-          className="h-8 gap-1.5 px-2.5 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+          className={cn(
+            "h-8 gap-1.5 px-2.5 text-xs transition-colors",
+            collabConnected
+              ? "text-[var(--status-success)] hover:bg-[var(--surface-hover)]"
+              : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+          )}
         >
-          <Share2 size={14} strokeWidth={1.75} />
-          <span className="hidden sm:inline">Share</span>
+          {collabConnected ? (
+            <span className="h-2 w-2 rounded-full bg-[var(--status-success)] animate-pulse" />
+          ) : (
+            <Share2 size={14} strokeWidth={1.75} />
+          )}
+          <span className="hidden sm:inline">{collabConnected ? "Live" : "Share"}</span>
         </Button>
 
         {/* Build + Deploy — paired actions. Build = outline (secondary),

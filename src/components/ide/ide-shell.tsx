@@ -17,8 +17,10 @@ import { CommandPalette } from "./panels/command-palette";
 import { SettingsDialog } from "./panels/settings-dialog";
 import { NewProjectModal } from "./templates/new-project-modal";
 import { ProfileModal } from "./profile/profile-modal";
+import { ShareDialog } from "./collab/share-dialog";
 import { useThemeStore } from "@/stores/theme-store";
 import { useFileSystemStore } from "@/stores/file-system-store";
+import { useEditorTabsStore } from "@/stores/editor-tabs-store";
 import { useProfileStore } from "@/stores/profile-store";
 import { useBuildStore } from "@/stores/build-store";
 import { useFixWithAIStore } from "@/stores/fix-with-ai-store";
@@ -35,16 +37,24 @@ export function IdeShell() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
   const [mobileActivePanel, setMobileActivePanel] = useState<"files" | "editor" | "terminal" | "agent">("editor");
   const [network, setNetwork] = useState("testnet");
 
   const editorFontSize = useThemeStore((s) => s.editorFontSize);
   const createFile = useFileSystemStore((s) => s.createFile);
+  const hydrate = useFileSystemStore((s) => s.hydrate);
+  const fsHydrated = useFileSystemStore((s) => s.hydrated);
   const profile = useProfileStore((s) => s.profile);
   const setProfile = useProfileStore((s) => s.setProfile);
   const buildStatus = useBuildStore((s) => s.status);
   const startBuild = useBuildStore((s) => s.startBuild);
   const requestFix = useFixWithAIStore((s) => s.requestFix);
+
+  // §8 — Hydrate file system from IndexedDB on mount (local-first)
+  useEffect(() => {
+    hydrate();
+  }, [hydrate]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -115,7 +125,7 @@ export function IdeShell() {
         collabUsers={[]}
         profile={profile}
         building={buildStatus === "building"}
-        onShare={() => setSettingsOpen(true)}
+        onShare={() => setShareOpen(true)}
         onConnectWallet={() => setProfileOpen(true)}
         onNewProject={() => setNewProjectOpen(true)}
         onCommandPalette={() => setCommandPaletteOpen(true)}
@@ -224,28 +234,41 @@ export function IdeShell() {
 
       <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
 
+      <ShareDialog open={shareOpen} onClose={() => setShareOpen(false)} />
+
       <NewProjectModal
         open={newProjectOpen}
         onClose={() => setNewProjectOpen(false)}
-        onSelectTemplate={(template: Template) => {
-          // Scaffold the template files into the file system
+        onSelectTemplate={async (template: Template) => {
+          // Scaffold the template files into IndexedDB + file system
           const fs = useFileSystemStore.getState();
-          // Reset to template's file tree
-          // (For now, just create the files one by one)
-          for (const file of template.files) {
-            const pathParts = file.path.split("/");
-            const name = pathParts[pathParts.length - 1];
-            const parentPath = pathParts.length > 1 ? pathParts.slice(0, -1).join("/") : null;
-            fs.createFile(parentPath, name);
-            // Set content after creation
-            setTimeout(() => {
-              fs.updateFileContent(file.path, file.content);
-            }, 50);
+          await fs.replaceTree(
+            template.files.map((f) => ({
+              path: f.path,
+              content: f.content,
+              language: f.language,
+            }))
+          );
+          // Open the first file
+          const firstFile = template.files[0];
+          if (firstFile) {
+            useEditorTabsStore.getState().openTab(firstFile.path, firstFile.path.split("/").pop() ?? firstFile.path);
           }
         }}
-        onSelectBlank={() => {
+        onSelectBlank={async () => {
           const fs = useFileSystemStore.getState();
-          fs.createFile(null, "lib.rs");
+          await fs.replaceTree([
+            {
+              path: "src/lib.rs",
+              content: "#![no_std]\nuse soroban_sdk::{contract, contractimpl, Env};\n\n#[contract]\npub struct Contract;\n\n#[contractimpl]\nimpl Contract {\n    pub fn hello(env: Env) -> soroban_sdk::String {\n        soroban_sdk::String::from_str(&env, \"Hello, Soroban!\")\n    }\n}\n",
+              language: "rust",
+            },
+            {
+              path: "Cargo.toml",
+              content: "[package]\nname = \"my-contract\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\ncrate-type = [\"cdylib\"]\n\n[dependencies]\nsoroban-sdk = \"22.0.0\"\n",
+              language: "toml",
+            },
+          ]);
         }}
       />
 

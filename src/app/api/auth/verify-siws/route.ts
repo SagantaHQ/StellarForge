@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifySiws, type SiwsPayload } from "@saganta/stellar-appkit-siws-verify";
+import { Keypair } from "@stellar/stellar-sdk";
 import { db } from "@/lib/db";
 
 /**
@@ -54,10 +55,26 @@ export async function POST(req: NextRequest) {
       .split(":")[0]; // strip port
 
     // §11 — Verify the SIWS payload using @saganta/stellar-appkit-siws-verify
+    // Pass a custom verifySignatureFn that uses a STATIC import of
+    // @stellar/stellar-sdk — the default verifier uses a dynamic import()
+    // which fails silently in Turbopack's server runtime.
     const payload: SiwsPayload = { message, signedMessage, signerAddress };
     const result = await verifySiws(payload, {
       expectedDomain,
       expectedNonce: nonce,
+      verifySignatureFn: ({ message: msg, signature, address }) => {
+        try {
+          const keypair = Keypair.fromPublicKey(address);
+          const messageBuffer = Buffer.from(msg, "utf-8");
+          // Decode signature — accept both hex and base64
+          const isHex = /^[0-9a-fA-F]+$/.test(signature) && signature.length % 2 === 0;
+          const signatureBuffer = Buffer.from(signature, isHex ? "hex" : "base64");
+          return keypair.verify(messageBuffer, signatureBuffer);
+        } catch (err) {
+          console.error("[SIWS] Signature verification error:", err);
+          return false;
+        }
+      },
     });
 
     if (!result.ok) {
@@ -65,7 +82,12 @@ export async function POST(req: NextRequest) {
         {
           error: "SIWS verification failed",
           reason: result.reason,
-          debug: { expectedDomain, nonce: nonce?.substring(0, 8) + "..." },
+          debug: {
+            expectedDomain,
+            nonce: nonce?.substring(0, 8) + "...",
+            signerAddress: signerAddress?.substring(0, 8) + "...",
+            signedMessageLength: signedMessage?.length,
+          },
         },
         { status: 401 }
       );
@@ -120,22 +142,27 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // Record audit log
-    await db.auditLog.create({
-      data: {
-        projectId: "default",
-        userId: user.id,
-        action: "SHARE_GRANTED",
-        targetType: "user",
-        targetId: user.id,
-        metadata: {
-          username: usernameLower,
-          action: "profile_created_via_siws",
-          siwsVerified: true,
-          signerAddress,
+    // Record audit log (skip if no project exists — audit log is optional)
+    try {
+      await db.auditLog.create({
+        data: {
+          projectId: "default",
+          userId: user.id,
+          action: "SHARE_GRANTED",
+          targetType: "user",
+          targetId: user.id,
+          metadata: {
+            username: usernameLower,
+            action: "profile_created_via_siws",
+            siwsVerified: true,
+            signerAddress,
+          },
         },
-      },
-    });
+      });
+    } catch {
+      // Audit log is best-effort — don't fail the profile save if it errors
+      // (e.g. foreign key constraint on projectId)
+    }
 
     return NextResponse.json({
       verified: true,

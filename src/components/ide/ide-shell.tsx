@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import {
   PanelGroup,
   Panel,
@@ -25,6 +25,7 @@ import { useProfileStore } from "@/stores/profile-store";
 import { useBuildStore } from "@/stores/build-store";
 import { useFixWithAIStore } from "@/stores/fix-with-ai-store";
 import type { Template } from "@/lib/templates/registry";
+import { flattenFiles } from "@/lib/soroban/sample-project";
 import { cn } from "@/lib/utils";
 
 type RightPanelView = "agent" | "compile" | "test" | "deploy" | "git";
@@ -306,23 +307,122 @@ function SidePanel({
 }
 
 function SearchPanel() {
+  const [query, setQuery] = useState("");
+  const [replace, setReplace] = useState("");
+  const [caseSensitive, setCaseSensitive] = useState(false);
+
+  const tree = useFileSystemStore((s) => s.tree);
+  const setActiveFile = useFileSystemStore((s) => s.setActiveFile);
+  const openTab = useEditorTabsStore((s) => s.openTab);
+
+  // Compute search results synchronously (debounced via query change)
+  const results = useMemo(() => {
+    if (!query.trim()) return [];
+    const allFiles = flattenFiles(tree);
+    const searchResults: {
+      filePath: string;
+      matches: { line: number; text: string; preview: string }[];
+    }[] = [];
+    const flags = caseSensitive ? "g" : "gi";
+    const regex = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), flags);
+
+    for (const file of allFiles) {
+      const lines = file.content.split("\n");
+      const matches: { line: number; text: string; preview: string }[] = [];
+      for (let i = 0; i < lines.length; i++) {
+        if (regex.test(lines[i])) {
+          const preview = lines[i].trim().substring(0, 80);
+          matches.push({ line: i + 1, text: lines[i], preview });
+        }
+        regex.lastIndex = 0;
+      }
+      if (matches.length > 0) {
+        searchResults.push({ filePath: file.path, matches });
+      }
+    }
+    return searchResults;
+  }, [query, caseSensitive, tree]);
+
+  const totalMatches = results.reduce((sum, r) => sum + r.matches.length, 0);
+
+  function handleResultClick(filePath: string, line: number) {
+    setActiveFile(filePath);
+    openTab(filePath, filePath.split("/").pop() ?? filePath);
+  }
+
   return (
     <div className="flex h-full flex-col bg-[var(--surface-panel)]">
       <div className="px-3 py-2.5">
         <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">Search</span>
       </div>
-      <div className="px-3 pb-2">
+      <div className="px-3 pb-2 space-y-1.5">
         <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          autoFocus
           placeholder="Search across files…"
           className="w-full rounded border border-[var(--border-subtle)] bg-[var(--surface-sunken)] px-2 py-1.5 text-[13px] text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
         />
         <input
+          value={replace}
+          onChange={(e) => setReplace(e.target.value)}
           placeholder="Replace…"
-          className="mt-1.5 w-full rounded border border-[var(--border-subtle)] bg-[var(--surface-sunken)] px-2 py-1.5 text-[13px] text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
+          className="w-full rounded border border-[var(--border-subtle)] bg-[var(--surface-sunken)] px-2 py-1.5 text-[13px] text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
         />
+        <div className="flex items-center gap-2 text-[10px]">
+          <button
+            onClick={() => setCaseSensitive((v) => !v)}
+            className={cn(
+              "rounded px-1.5 py-0.5 transition-colors",
+              caseSensitive
+                ? "bg-[var(--accent-subtle)] text-[var(--accent)]"
+                : "text-[var(--text-muted)] hover:bg-[var(--surface-hover)]"
+            )}
+          >
+            Aa
+          </button>
+          {query && (
+            <span className="text-[var(--text-muted)]">
+              {totalMatches} {totalMatches === 1 ? "result" : "results"} in {results.length} {results.length === 1 ? "file" : "files"}
+            </span>
+          )}
+        </div>
       </div>
-      <div className="flex-1 overflow-y-auto px-3 py-2 text-xs text-[var(--text-muted)]">
-        No results yet. Type a query above.
+      <div className="flex-1 overflow-y-auto">
+        {results.length === 0 && query && (
+          <div className="px-3 py-4 text-xs text-[var(--text-muted)]">
+            No results found.
+          </div>
+        )}
+        {results.map((result) => (
+          <div key={result.filePath} className="border-b border-[var(--border-subtle)]">
+            <div className="px-3 py-1 text-[11px] font-medium text-[var(--text-secondary)] bg-[var(--surface-sunken)]">
+              {result.filePath}
+              <span className="ml-2 text-[var(--text-muted)]">
+                {result.matches.length} {result.matches.length === 1 ? "match" : "matches"}
+              </span>
+            </div>
+            {result.matches.slice(0, 20).map((match, i) => (
+              <button
+                key={i}
+                onClick={() => handleResultClick(result.filePath, match.line)}
+                className="flex w-full items-baseline gap-2 px-3 py-1 text-left hover:bg-[var(--surface-hover)] transition-colors"
+              >
+                <span className="text-[10px] font-mono text-[var(--text-muted)] shrink-0">
+                  {match.line}
+                </span>
+                <span className="text-[11px] font-mono text-[var(--text-secondary)] truncate">
+                  {match.preview}
+                </span>
+              </button>
+            ))}
+            {result.matches.length > 20 && (
+              <div className="px-3 py-1 text-[10px] text-[var(--text-muted)]">
+                +{result.matches.length - 20} more matches
+              </div>
+            )}
+          </div>
+        ))}
       </div>
     </div>
   );

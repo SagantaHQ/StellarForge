@@ -87,10 +87,20 @@ export function ProfileModal({ open, onClose, onComplete }: ProfileModalProps) {
     if (step !== "profile") return;
     if (!username || username.length < 3 || !/^[a-z0-9_]+$/i.test(username)) return;
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      // In production: server-side check via /api/users/check-username?u=...
-      const isTaken = TAKEN_USERNAMES.has(username.toLowerCase());
-      setAsyncUsernameStatus(isTaken ? "taken" : "available");
+    debounceRef.current = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/profile/check-username?u=${encodeURIComponent(username)}`);
+        if (res.ok) {
+          const data = await res.json();
+          setAsyncUsernameStatus(data.available ? "available" : "taken");
+        } else {
+          // Fallback to local check if API fails
+          setAsyncUsernameStatus(TAKEN_USERNAMES.has(username.toLowerCase()) ? "taken" : "available");
+        }
+      } catch {
+        // Network error — fall back to local check
+        setAsyncUsernameStatus(TAKEN_USERNAMES.has(username.toLowerCase()) ? "taken" : "available");
+      }
     }, 350);
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);

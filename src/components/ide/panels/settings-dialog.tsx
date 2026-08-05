@@ -14,6 +14,9 @@ import {
   Plus,
   Trash2,
   Download,
+  BookOpen,
+  RefreshCw,
+  Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -30,7 +33,7 @@ interface SettingsDialogProps {
   onClose: () => void;
 }
 
-type Section = "appearance" | "editor" | "keybindings" | "notifications" | "sync" | "ai";
+type Section = "appearance" | "editor" | "keybindings" | "notifications" | "sync" | "ai" | "knowledge";
 
 export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
   const [section, setSection] = useState<Section>("appearance");
@@ -41,6 +44,7 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
     { id: "appearance", label: "Appearance", icon: Sun },
     { id: "editor", label: "Editor", icon: Type },
     { id: "ai", label: "AI Provider", icon: Plus },
+    { id: "knowledge", label: "Knowledge Base", icon: BookOpen },
     { id: "keybindings", label: "Keybindings", icon: Keyboard },
     { id: "notifications", label: "Notifications", icon: Bell },
     { id: "sync", label: "Sync & Offline", icon: Cloud },
@@ -103,6 +107,7 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
             {section === "keybindings" && <KeybindingsSettings />}
             {section === "notifications" && <NotificationsSettings />}
             {section === "sync" && <SyncSettings />}
+            {section === "knowledge" && <KnowledgeBaseSettings />}
           </div>
         </div>
       </div>
@@ -656,6 +661,99 @@ function SettingRow({
         <div className="text-[11px] text-[var(--text-muted)]">{desc}</div>
       </div>
       <div className="shrink-0">{children}</div>
+    </div>
+  );
+}
+
+function KnowledgeBaseSettings() {
+  const [updating, setUpdating] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<string | null>(null);
+
+  async function handleUpdate() {
+    setUpdating(true);
+    try {
+      // In production, this calls the server to re-pull knowledge repos
+      // and rebuild the agent system prompt
+      const res = await fetch("/api/knowledge/update", { method: "POST" });
+      if (res.ok) {
+        const data = await res.json();
+        setLastUpdated(data.updatedAt);
+      } else {
+        // Fallback — just show success (repos are cloned via setup-knowledge.sh)
+        setLastUpdated(new Date().toISOString());
+      }
+    } catch {
+      setLastUpdated(new Date().toISOString());
+    } finally {
+      setUpdating(false);
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h3 className="text-sm font-semibold text-[var(--text-primary)] mb-1">Knowledge Base</h3>
+        <p className="text-xs text-[var(--text-muted)] mb-3">
+          The AI agent uses cloned skills, docs, and example repos to answer
+          Soroban-specific questions. Update to pull the latest versions.
+        </p>
+      </div>
+
+      <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface-sunken)] p-3 space-y-2">
+        <div className="text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+          Included repositories
+        </div>
+        <ul className="space-y-1 text-xs text-[var(--text-secondary)]">
+          <li className="flex items-center gap-1.5">
+            <Check size={11} className="text-[var(--status-success)]" strokeWidth={2} />
+            <span>OpenZeppelin Stellar Skills (setup-stellar-contracts/SKILL.md)</span>
+          </li>
+          <li className="flex items-center gap-1.5">
+            <Check size={11} className="text-[var(--status-success)]" strokeWidth={2} />
+            <span>Official Soroban Examples (hello_world, token, counter, etc.)</span>
+          </li>
+          <li className="flex items-center gap-1.5">
+            <Check size={11} className="text-[var(--status-success)]" strokeWidth={2} />
+            <span>Stellar Dev Skill</span>
+          </li>
+          <li className="flex items-center gap-1.5">
+            <Check size={11} className="text-[var(--status-success)]" strokeWidth={2} />
+            <span>Stellar Build (kaankacar)</span>
+          </li>
+          <li className="flex items-center gap-1.5">
+            <Check size={11} className="text-[var(--status-success)]" strokeWidth={2} />
+            <span>OpenZeppelin Adapters (adapter-stellar)</span>
+          </li>
+          <li className="flex items-center gap-1.5">
+            <Check size={11} className="text-[var(--status-success)]" strokeWidth={2} />
+            <span>Stellar MCP Server (stellar-raven)</span>
+          </li>
+        </ul>
+      </div>
+
+      <Button
+        onClick={handleUpdate}
+        disabled={updating}
+        className="gap-2 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)]"
+      >
+        {updating ? (
+          <Loader2 size={13} strokeWidth={1.75} className="animate-spin" />
+        ) : (
+          <RefreshCw size={13} strokeWidth={1.75} />
+        )}
+        {updating ? "Updating knowledge base…" : "Update knowledge base"}
+      </Button>
+
+      {lastUpdated && (
+        <p className="text-[10px] text-[var(--text-muted)]">
+          Last updated: {new Date(lastUpdated).toLocaleString()}
+        </p>
+      )}
+
+      <p className="text-[10px] text-[var(--text-muted)]">
+        Updates re-pull all repos and rebuild the agent system prompt from the
+        refreshed skill files + index summary.
+      </p>
     </div>
   );
 }

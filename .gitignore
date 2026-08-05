@@ -61,5 +61,6 @@ server.log
 /.zscripts/
 /worklog.md
 /soroban-build.log
-/tests/
-/bun.lock/test-results/
+/bun.lock
+/knowledge/
+/test-results/

@@ -7,6 +7,7 @@ import { useThemeStore } from "@/stores/theme-store";
 import { buildMonacoTheme } from "@/lib/themes/mappers";
 import { registerSorobanLanguage } from "./use-monaco";
 import { useAttributionStore } from "@/stores/attribution-store";
+import { lintSorobanSecurity, lintResultsToMarkers } from "@/lib/soroban/security-linter";
 
 interface MonacoEditorProps {
   path: string;
@@ -351,6 +352,26 @@ export function MonacoEditor({
       }
     `;
   }, [attributions, path, attributionVisible]);
+
+  // §13.9 — Security linting (Soroban-specific static analysis)
+  useEffect(() => {
+    if (!editorRef.current || !monacoRef.current) return;
+    if (language !== "rust" && language !== "soroban") return;
+
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    const model = editor.getModel();
+    if (!model) return;
+
+    // Debounce linting
+    const timer = setTimeout(() => {
+      const lintResults = lintSorobanSecurity(value);
+      const markers = lintResultsToMarkers(lintResults);
+      monaco.editor.setModelMarkers(model, "soroban-security", markers);
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [value, language]);
 
   return (
     <div ref={containerRef} className="h-full w-full overflow-hidden bg-[var(--mono-bg)]">

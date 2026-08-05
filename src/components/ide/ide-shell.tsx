@@ -18,12 +18,14 @@ import { SettingsDialog } from "./panels/settings-dialog";
 import { NewProjectModal } from "./templates/new-project-modal";
 import { ProfileModal } from "./profile/profile-modal";
 import { ShareDialog } from "./collab/share-dialog";
+import { SnapshotPanel } from "./panels/snapshot-panel";
 import { useThemeStore } from "@/stores/theme-store";
 import { useFileSystemStore } from "@/stores/file-system-store";
 import { useEditorTabsStore } from "@/stores/editor-tabs-store";
 import { useProfileStore } from "@/stores/profile-store";
 import { useBuildStore } from "@/stores/build-store";
 import { useFixWithAIStore } from "@/stores/fix-with-ai-store";
+import { useSnapshotStore } from "@/stores/snapshot-store";
 import type { Template } from "@/lib/templates/registry";
 import { flattenFiles } from "@/lib/soroban/sample-project";
 import { cn } from "@/lib/utils";
@@ -463,14 +465,32 @@ function GitSidePanel() {
 
 function DeploySidePanel() {
   return (
-    <div className="flex h-full flex-col bg-[var(--surface-panel)] p-3 gap-3 overflow-y-auto">
-      <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">Compile & Deploy</h3>
-      <button className="w-full rounded bg-[var(--accent)] py-2 text-xs font-medium text-[var(--accent-contrast)] hover:bg-[var(--accent-hover)] transition-colors">
-        soroban contract build
-      </button>
-      <button className="w-full rounded border border-[var(--border-subtle)] bg-[var(--surface-sunken)] py-2 text-xs text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)] transition-colors">
-        Deploy to Testnet
-      </button>
+    <div className="flex h-full flex-col bg-[var(--surface-panel)]">
+      <div className="p-3 space-y-2 border-b border-[var(--border-subtle)]">
+        <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">Compile & Deploy</h3>
+        <button
+          onClick={() => {
+            useBuildStore.getState().startBuild();
+          }}
+          className="w-full rounded bg-[var(--accent)] py-2 text-xs font-medium text-[var(--accent-contrast)] hover:bg-[var(--accent-hover)] transition-colors"
+        >
+          soroban contract build
+        </button>
+        <button
+          onClick={() => {
+            // §13.4 — Auto-snapshot before deploy
+            const tree = useFileSystemStore.getState().tree;
+            const files = flattenFiles(tree).map((f) => ({ path: f.path, content: f.content, language: f.language }));
+            useSnapshotStore.getState().createSnapshot("Auto-snapshot before deploy", "", files);
+          }}
+          className="w-full rounded border border-[var(--border-subtle)] bg-[var(--surface-sunken)] py-2 text-xs text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)] transition-colors"
+        >
+          Deploy to Testnet
+        </button>
+      </div>
+      <div className="flex-1 overflow-hidden">
+        <SnapshotPanel />
+      </div>
     </div>
   );
 }

@@ -177,6 +177,10 @@ export function AgentPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
     if (file) {
       // Apply the diff hunks to the file content
       const newContent = applyDiffToFile(file.content, diff);
+
+      // §9.9 — Single-step undo: push the entire diff as ONE editor operation
+      // (not dozens of individual edits). This is done by wrapping the update
+      // in a single file content set, which Monaco treats as one undo step.
       fs.updateFileContent(diff.filePath, newContent);
 
       // §9.9 — Record AI attribution for the edited lines

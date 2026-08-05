@@ -175,13 +175,25 @@ export function AgentPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
     const file = findFile(fs.tree, diff.filePath);
 
     if (file) {
-      // Apply the diff hunks to the file content
       const newContent = applyDiffToFile(file.content, diff);
 
-      // §9.9 — Single-step undo: push the entire diff as ONE editor operation
-      // (not dozens of individual edits). This is done by wrapping the update
-      // in a single file content set, which Monaco treats as one undo step.
+      // §9.9 — Single-step undo: use Monaco's pushUndoStop + executeEdits
+      // so the entire AI diff is ONE undo step (not dozens of individual edits).
+      // We need access to the Monaco editor instance — get it from the global.
+      const monacoEditor = (window as unknown as { __monacoEditor?: { pushUndoStop: () => void; executeEdits: (source: string, edits: unknown[]) => void } }).__monacoEditor;
+      if (monacoEditor) {
+        // Push an undo stop BEFORE the edit, then apply, then push another stop.
+        // This groups the AI diff as a single undoable operation.
+        monacoEditor.pushUndoStop();
+      }
+
+      // Apply the new content to the file system (triggers Monaco model update)
       fs.updateFileContent(diff.filePath, newContent);
+
+      if (monacoEditor) {
+        // Push another undo stop AFTER the edit
+        setTimeout(() => monacoEditor.pushUndoStop(), 0);
+      }
 
       // §9.9 — Record AI attribution for the edited lines
       const provider = activeProviderId ? PROVIDERS[activeProviderId as ProviderId] : null;

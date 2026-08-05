@@ -36,8 +36,6 @@ export default defineConfig({
     trace: "on-first-retry",
     screenshot: "only-on-failure",
     video: "retain-on-failure",
-    // Clear IndexedDB + localStorage before each test for deterministic state
-    storageState: undefined,
   },
   projects: [
     {

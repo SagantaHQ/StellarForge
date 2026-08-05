@@ -171,24 +171,32 @@ export const useCommentsStore = create<CommentsState>()(
           addingAt: null,
           focusedCommentId: newComment.id,
         }));
+        // §6.5 — Sync to Postgres (fire-and-forget, optimistic UI)
+        syncCommentToServer(newComment).catch(() => {});
         return newComment;
       },
 
-      updateComment: (id, body) =>
+      updateComment: (id, body) => {
         set((s) => ({
           comments: s.comments.map((c) =>
             c.id === id ? { ...c, body, updatedAt: Date.now() } : c
           ),
-        })),
+        }));
+        // §6.5 — Sync update to Postgres
+        patchCommentOnServer(id, { body }).catch(() => {});
+      },
 
-      setPriority: (id, priority) =>
+      setPriority: (id, priority) => {
         set((s) => ({
           comments: s.comments.map((c) =>
             c.id === id ? { ...c, priority, updatedAt: Date.now() } : c
           ),
-        })),
+        }));
+        // §6.5 — Sync priority to Postgres
+        patchCommentOnServer(id, { priority: priority.toUpperCase() }).catch(() => {});
+      },
 
-      resolveComment: (id, resolverName) =>
+      resolveComment: (id, resolverName) => {
         set((s) => ({
           comments: s.comments.map((c) =>
             c.id === id
@@ -202,9 +210,12 @@ export const useCommentsStore = create<CommentsState>()(
                 }
               : c
           ),
-        })),
+        }));
+        // §6.5 — Sync resolve to Postgres
+        patchCommentOnServer(id, { status: "RESOLVED", resolvedById: CURRENT_USER.id }).catch(() => {});
+      },
 
-      unresolveComment: (id) =>
+      unresolveComment: (id) => {
         set((s) => ({
           comments: s.comments.map((c) =>
             c.id === id
@@ -218,18 +229,23 @@ export const useCommentsStore = create<CommentsState>()(
                 }
               : c
           ),
-        })),
+        }));
+        // §6.5 — Sync reopen to Postgres
+        patchCommentOnServer(id, { status: "OPEN" }).catch(() => {});
+      },
 
       deleteComment: (id, requesterId) => {
         const comment = get().comments.find((c) => c.id === id);
         if (!comment) return false;
-        // §6.8 — only the comment's own author can delete (server-enforced in production)
+        // §6.8 — only the comment's own author can delete (server-enforced)
         if (comment.authorId !== requesterId) return false;
         set((s) => ({
           comments: s.comments.map((c) =>
             c.id === id ? { ...c, status: "deleted", updatedAt: Date.now() } : c
           ),
         }));
+        // §6.5 — Sync delete to Postgres (server enforces author-only)
+        deleteCommentOnServer(id, requesterId).catch(() => {});
         return true;
       },
 
@@ -347,3 +363,70 @@ export const COMMENT_PRIORITY_DOTS: Record<CommentPriority, string> = {
   low: "🔵",
   suggestion: "🟢",
 };
+
+// ============================================================
+// §6.5 — Postgres sync helpers (fire-and-forget, optimistic UI)
+// ============================================================
+
+const PROJECT_ID = "local-project";
+
+async function syncCommentToServer(comment: Comment): Promise<void> {
+  await fetch("/api/comments", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      projectId: PROJECT_ID,
+      filePath: comment.filePath,
+      lineNumber: comment.lineNumber,
+      lineSnapshot: comment.lineSnapshot,
+      authorId: comment.authorId,
+      body: comment.body,
+      priority: comment.priority.toUpperCase(),
+    }),
+  });
+}
+
+async function patchCommentOnServer(id: string, updates: Record<string, unknown>): Promise<void> {
+  await fetch("/api/comments", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id, ...updates }),
+  });
+}
+
+async function deleteCommentOnServer(id: string, requesterId: string): Promise<void> {
+  await fetch(`/api/comments?id=${id}&requesterId=${requesterId}`, {
+    method: "DELETE",
+  });
+}
+
+/**
+ * Fetch comments from Postgres and merge into the local store.
+ * Called on app mount to sync server-side state.
+ */
+export async function fetchCommentsFromServer(filePath: string): Promise<void> {
+  try {
+    const res = await fetch(`/api/comments?projectId=${PROJECT_ID}&filePath=${encodeURIComponent(filePath)}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.comments && Array.isArray(data.comments) && data.comments.length > 0) {
+      // Merge server comments with local — server takes precedence for IDs that exist in both
+      const local = useCommentsStore.getState().comments;
+      const serverComments = data.comments.map((c: Record<string, unknown>) => c);
+      const merged = [...local];
+      for (const sc of serverComments) {
+        const idx = merged.findIndex((lc) => lc.id === sc.id || (lc.filePath === sc.filePath && lc.lineNumber === sc.lineNumber && lc.body === sc.body));
+        if (idx >= 0) {
+          merged[idx] = { ...merged[idx], ...sc };
+        } else {
+          // Don't add server comments to local — they may be from other users
+          // and we don't want to duplicate. In a full implementation, this would
+          // merge with proper conflict resolution.
+        }
+      }
+      useCommentsStore.setState({ comments: merged });
+    }
+  } catch {
+    // Silently fail — local-first means we work offline
+  }
+}

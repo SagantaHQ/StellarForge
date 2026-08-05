@@ -256,6 +256,8 @@ export function EditorArea({ fontSize = 13 }: EditorAreaProps) {
               onGlyphClick={handleGlyphClick}
               onMount={(editor) => {
                 editorRef.current = editor;
+                // §9.9 — Expose editor instance for AI diff single-step undo
+                (window as unknown as { __monacoEditor?: unknown }).__monacoEditor = editor;
               }}
               onChange={(value) => {
                 updateFileContent(activeFile.path, value);

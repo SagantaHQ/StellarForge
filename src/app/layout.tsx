@@ -42,11 +42,12 @@ export const metadata: Metadata = {
   },
   icons: {
     icon: [
-      { url: "/favicon.ico", sizes: "32x32" },
-      { url: "/icon.svg", sizes: "any" },
-      { url: "/favicon-32.png", sizes: "32x32", type: "image/png" },
+      // Cache-bust with ?v=2 to force browsers to re-fetch (overrides old Z.ai favicon)
+      { url: "/favicon.ico?v=2", sizes: "32x32" },
+      { url: "/icon.svg?v=2", sizes: "any" },
+      { url: "/favicon-32.png?v=2", sizes: "32x32", type: "image/png" },
     ],
-    apple: "/apple-touch-icon.png",
+    apple: "/apple-touch-icon.png?v=2",
   },
   openGraph: {
     title: "Soroban.Build",

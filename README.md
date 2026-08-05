@@ -40,9 +40,12 @@ This is the **M1 Foundation + M2 IDE shell** deliverable — a working vertical 
 
 ## Local development
 
+### Quick start (recommended — BM2 process manager)
+
 ```bash
-# 1. Install deps
+# 1. Install deps + BM2
 bun install
+bun add -g bm2
 
 # 2. Copy env and fill in values
 cp .env.example .env
@@ -50,10 +53,28 @@ cp .env.example .env
 # 3. Push database schema
 bun run db:push
 
-# 4. Start dev server
-bun run dev
+# 4. Start dev server via BM2 (stable, auto-restart on crash)
+bun run dev:bm2
 # → http://localhost:3000 lands directly in the IDE
 ```
+
+### BM2 commands
+
+```bash
+bun run dev:bm2           # Start dev server (managed by BM2)
+bun run dev:bm2:status    # Check status
+bun run dev:bm2:logs      # View recent logs
+bun run dev:bm2:restart   # Restart server
+bun run dev:bm2:stop      # Stop server
+```
+
+### Fallback (plain bun)
+
+```bash
+bun run dev               # Direct next dev (no process manager)
+```
+
+**Why BM2?** The Next.js dev server with Turbopack + Monaco editor + Yjs can be memory-intensive. BM2 provides auto-restart on crash, memory limits (`maxMemoryRestart: 3G`), and log management — keeping the dev server stable even under heavy load.
 
 ---
 

@@ -152,7 +152,11 @@ export function useStellarWallet() {
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText }));
-      throw new Error(err.error ?? `Verification failed (${res.status})`);
+      // Include the reason from the server for better error messages
+      const msg = err.reason
+        ? `${err.error}: ${err.reason}`
+        : err.error ?? `Verification failed (${res.status})`;
+      throw new Error(msg);
     }
 
     return res.json();

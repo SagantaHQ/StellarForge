@@ -22,8 +22,6 @@ import { db } from "@/lib/db";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const APP_DOMAIN = process.env.NEXT_PUBLIC_APP_DOMAIN || "localhost";
-
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -43,10 +41,22 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // §11 — Derive the expected domain from the request itself.
+    // The client uses window.location.hostname in the SIWS message, so the
+    // server must match against the same domain the user sees — not a
+    // static env variable that might be "localhost" while the user is on
+    // a preview URL like preview-xxx.space-z.ai.
+    const origin = req.headers.get("origin") || req.headers.get("host") || "";
+    const expectedDomain = origin
+      .replace(/^https?:\/\//, "")
+      .replace(/^\/+/, "")
+      .split("/")[0]
+      .split(":")[0]; // strip port
+
     // §11 — Verify the SIWS payload using @saganta/stellar-appkit-siws-verify
     const payload: SiwsPayload = { message, signedMessage, signerAddress };
     const result = await verifySiws(payload, {
-      expectedDomain: APP_DOMAIN,
+      expectedDomain,
       expectedNonce: nonce,
     });
 
@@ -55,6 +65,7 @@ export async function POST(req: NextRequest) {
         {
           error: "SIWS verification failed",
           reason: result.reason,
+          debug: { expectedDomain, nonce: nonce?.substring(0, 8) + "..." },
         },
         { status: 401 }
       );

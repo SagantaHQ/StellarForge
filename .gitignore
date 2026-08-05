@@ -57,6 +57,7 @@ server.log
 /tool-results/
 /upload/
 /download/ide-screenshot-*.png
+/download/preview-*.png
 /.zscripts/
 /worklog.md
 /soroban-build.log

@@ -66,34 +66,66 @@ export function ContractInteractionPanel({ contractId }: ContractInteractionPane
   async function handleInvoke(fn: ContractFunction) {
     setLoading(fn.name);
     try {
-      // In production, this would call the deployed contract via stellar-sdk:
-      //   const result = await contract.invoke(fn.name, args);
-      // For now, simulate based on the function name
       const args = fn.args
         .filter((a) => a.name !== "env" && a.name !== "_env")
         .map((a) => getArgValue(fn.name, a.name));
 
-      await new Promise((r) => setTimeout(r, 500));
+      // Build the stellar CLI invoke command
+      // stellar contract invoke --id <contractId> --fn <fnName> --arg <val> --network <network>
+      const argFlags = args.flatMap((val) => ["--arg", val]);
+      const command = [
+        "stellar", "contract", "invoke",
+        "--id", contractId!,
+        "--fn", fn.name,
+        ...argFlags,
+        "--network", "testnet",
+      ].join(" ");
 
-      // Simulated results based on known functions
-      let result: unknown;
-      if (fn.name === "hello" || fn.name === "greet") {
-        result = args[0] ? `Hello, ${args[0]}!` : "Hello, World!";
-      } else if (fn.name === "get_greeting") {
-        result = "Hello";
-      } else if (fn.name === "get_value" || fn.name === "total_supply") {
-        result = args[0] ?? "0";
-      } else if (fn.name === "increment") {
-        result = (parseInt(args[0] ?? "0") + 1).toString();
-      } else if (fn.name === "balance_of") {
-        result = "1000000";
-      } else if (fn.returnType === "()") {
-        result = "()";
+      // Execute via the terminal API
+      const { useFileSystemStore } = await import("@/stores/file-system-store");
+      const { flattenFiles } = await import("@/lib/soroban/sample-project");
+      const tree = useFileSystemStore.getState().tree;
+      const files = flattenFiles(tree).map((f) => ({ path: f.path, content: f.content }));
+
+      const res = await fetch("/api/terminal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: "local-project",
+          command,
+          files,
+        }),
+      });
+
+      const data = await res.json() as {
+        exitCode: number;
+        stdout: string;
+        stderr: string;
+      };
+
+      if (data.exitCode === 0 && data.stdout.trim()) {
+        // Parse the result from stellar CLI output
+        const result = data.stdout.trim().split("\n").pop() ?? data.stdout.trim();
+        setResults((prev) => ({ ...prev, [fn.name]: result }));
+      } else if (data.stderr) {
+        setResults((prev) => ({
+          ...prev,
+          [fn.name]: `Error: ${data.stderr.trim()}`,
+        }));
       } else {
-        result = `(simulated) ${fn.returnType}`;
+        // If stellar CLI isn't installed, fall back to simulation
+        let result: unknown;
+        if (fn.name === "hello" || fn.name === "greet") {
+          result = args[0] ? `Hello, ${args[0]}!` : "Hello, World!";
+        } else if (fn.name === "get_greeting") {
+          result = "Hello";
+        } else if (fn.returnType === "()") {
+          result = "()";
+        } else {
+          result = `(stellar CLI not available — install with: cargo install stellar-cli)`;
+        }
+        setResults((prev) => ({ ...prev, [fn.name]: result }));
       }
-
-      setResults((prev) => ({ ...prev, [fn.name]: result }));
     } catch (err) {
       setResults((prev) => ({
         ...prev,

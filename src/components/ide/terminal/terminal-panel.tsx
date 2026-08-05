@@ -65,7 +65,7 @@ export function TerminalPanel({ collapsed, onToggleCollapse, onFixWithAI }: Term
     );
   }
 
-  function executeCommand(cmd: string) {
+  async function executeCommand(cmd: string) {
     const trimmed = cmd.trim();
     if (!trimmed) return;
 
@@ -78,82 +78,71 @@ export function TerminalPanel({ collapsed, onToggleCollapse, onFixWithAI }: Term
       )
     );
 
-    // Simulated command responses (real PTY would be wired in production)
-    setTimeout(() => {
-      const response = simulateCommand(trimmed);
-      response.forEach((line) => addLine(activeTabId, line));
-    }, 200);
-
     setInput("");
-  }
 
-  function simulateCommand(cmd: string): TerminalLine[] {
-    const [bin, ...args] = cmd.split(/\s+/);
-    switch (bin) {
-      case "cargo":
-        if (args[0] === "build") {
-          return [
-            { type: "output", text: "   Compiling hello-world v0.1.0 (/workspace)" },
-            { type: "output", text: "    Finished dev [unoptimized + debuginfo] target(s) in 0.42s" },
-          ];
-        }
-        if (args[0] === "test") {
-          return [
-            { type: "output", text: "   Compiling hello-world v0.1.0" },
-            { type: "output", text: "    Finished test [unoptimized + debuginfo] target(s) in 0.61s" },
-            { type: "output", text: "     Running unittests src/lib.rs" },
-            { type: "output", text: "" },
-            { type: "output", text: "running 3 tests" },
-            { type: "output", text: "test test::test_default_greeting ... ok" },
-            { type: "output", text: "test test::test_personalized_greet ... ok" },
-            { type: "output", text: "test test::test_set_greeting_persists ... ok" },
-            { type: "output", text: "" },
-            { type: "output", text: "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out" },
-          ];
-        }
-        return [{ type: "error", text: `cargo: unknown subcommand '${args[0] ?? ""}'` }];
+    // Handle built-in commands locally
+    if (trimmed === "clear") {
+      setTabs((prev) =>
+        prev.map((t) => (t.id === activeTabId ? { ...t, lines: [] } : t))
+      );
+      return;
+    }
+    if (trimmed === "help") {
+      addLine(activeTabId, { type: "output", text: "Available commands: cargo, stellar, soroban, rustup, ls, cat, pwd, echo, grep, find, git, wc, head, tail, clear, help" });
+      return;
+    }
 
-      case "stellar":
-        if (args[0] === "contract" && args[1] === "build") {
-          return [
-            { type: "output", text: "📦 Cargo building..." },
-            { type: "output", text: "   Compiling hello-world v0.1.0" },
-            { type: "output", text: "✨ Built hello_world.wasm" },
-            { type: "output", text: "   Path: target/wasm32v1-none/release/hello_world.wasm" },
-            { type: "output", text: "   Size: 4.2 KB" },
-          ];
-        }
-        if (args[0] === "account" && args[1] === "balance") {
-          return [
-            { type: "output", text: "Account: GDF...XQPK" },
-            { type: "output", text: "Balance: 1,250.00000 XLM" },
-          ];
-        }
-        return [{ type: "error", text: `stellar: unknown command '${args.join(" ")}'` }];
+    // §15.4 — Execute via the sandboxed terminal API
+    try {
+      // Get current files from the file system store
+      const { useFileSystemStore } = await import("@/stores/file-system-store");
+      const { flattenFiles } = await import("@/lib/soroban/sample-project");
+      const tree = useFileSystemStore.getState().tree;
+      const files = flattenFiles(tree).map((f) => ({ path: f.path, content: f.content }));
 
-      case "ls":
-        return [{ type: "output", text: "Cargo.toml  README.md  src/  target/  ui/" }];
+      const res = await fetch("/api/terminal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: "local-project",
+          command: trimmed,
+          files,
+        }),
+      });
 
-      case "pwd":
-        return [{ type: "output", text: "/workspace/hello-world" }];
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        addLine(activeTabId, { type: "error", text: err.error ?? `HTTP ${res.status}` });
+        return;
+      }
 
-      case "clear":
-        setTabs((prev) =>
-          prev.map((t) => (t.id === activeTabId ? { ...t, lines: [] } : t))
-        );
-        return [];
+      const data = await res.json() as {
+        exitCode: number;
+        stdout: string;
+        stderr: string;
+      };
 
-      case "help":
-        return [
-          { type: "output", text: "Available commands (simulated in this preview):" },
-          { type: "output", text: "  cargo build | test      Build or test the contract" },
-          { type: "output", text: "  stellar contract build  Build the .wasm" },
-          { type: "output", text: "  stellar account balance Check balance" },
-          { type: "output", text: "  ls, pwd, clear, help    Standard shell utilities" },
-        ];
-
-      default:
-        return [{ type: "error", text: `command not found: ${bin}` }];
+      // Stream stdout lines
+      if (data.stdout) {
+        data.stdout.split("\n").forEach((line) => {
+          if (line.length > 0) addLine(activeTabId, { type: "output", text: line });
+        });
+      }
+      // Stream stderr lines
+      if (data.stderr) {
+        data.stderr.split("\n").forEach((line) => {
+          if (line.length > 0) addLine(activeTabId, { type: "error", text: line });
+        });
+      }
+      // Empty line after output for readability
+      if (!data.stdout && !data.stderr) {
+        addLine(activeTabId, { type: "output", text: "" });
+      }
+    } catch (err) {
+      addLine(activeTabId, {
+        type: "error",
+        text: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 

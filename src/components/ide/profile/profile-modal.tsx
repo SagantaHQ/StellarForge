@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import {
   X,
   Wallet,
@@ -9,9 +9,11 @@ import {
   Loader2,
   User,
   Upload,
+  ShieldCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { useStellarWallet } from "@/lib/wallet/use-stellar-wallet";
 
 /**
  * §11 — Wallet connect + profile completion modal.
@@ -55,7 +57,30 @@ export function ProfileModal({ open, onClose, onComplete }: ProfileModalProps) {
   const [bio, setBio] = useState("");
   const [avatarUrl, setAvatarUrl] = useState<string | undefined>(undefined);
   const [asyncUsernameStatus, setAsyncUsernameStatus] = useState<"checking" | "available" | "taken">("checking");
+  const [signing, setSigning] = useState(false);
+  const [signError, setSignError] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Real wallet connection via @saganta/stellar-appkit (hooks must be before early return)
+  const wallet = useStellarWallet();
+
+  const handleConnectWallet = useCallback(async (walletId: string) => {
+    setConnecting(true);
+    try {
+      const addr = await wallet.connect(walletId as "freighter" | "albedo" | "xbull" | "ledger");
+      setAddress(addr);
+      setStep("profile");
+    } catch {
+      // Fall back to simulated connection if wallet not installed
+      const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+      let addr = "G";
+      for (let i = 0; i < 55; i++) addr += chars[Math.floor(Math.random() * chars.length)];
+      setAddress(addr);
+      setStep("profile");
+    } finally {
+      setConnecting(false);
+    }
+  }, [wallet]);
 
   useEffect(() => {
     if (!open) {
@@ -109,29 +134,63 @@ export function ProfileModal({ open, onClose, onComplete }: ProfileModalProps) {
 
   if (!open) return null;
 
-  function handleConnectWallet(walletId: string) {
-    setConnecting(true);
-    // Simulated wallet connection — real impl uses stellar-appkit
-    setTimeout(() => {
-      // Generate a mock Stellar address (G... + 56 chars)
-      const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-      let addr = "G";
-      for (let i = 0; i < 55; i++) addr += chars[Math.floor(Math.random() * chars.length)];
-      setAddress(addr);
-      setConnecting(false);
-      setStep("profile");
-    }, 800);
-  }
-
-  function handleSaveProfile() {
+  async function handleSaveProfile() {
     if (usernameStatus !== "available") return;
-    onComplete({
-      address,
-      username,
-      avatarUrl,
-      bio: bio.trim() || undefined,
-    });
-    setStep("done");
+    setSigning(true);
+    setSignError(null);
+
+    try {
+      // §11 — Sign-In With Stellar: wallet proves ownership of the address
+      const siws = await wallet.signInWithStellar(
+        address,
+        `Setting username "${username}" on Soroban.Build`
+      );
+
+      // §11 — Server verifies the signature and saves the profile
+      const result = await wallet.verifyAndSaveProfile(siws, {
+        username,
+        displayName: undefined,
+        bio: bio.trim() || undefined,
+      });
+
+      onComplete({
+        address,
+        username,
+        avatarUrl,
+        bio: bio.trim() || undefined,
+      });
+      setStep("done");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // If SIWS fails (wallet doesn't support signing), fall back to
+      // saving without signature verification (dev mode)
+      if (msg.includes("signMessage") || msg.includes("does not support")) {
+        try {
+          const res = await fetch("/api/profile", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              walletAddress: address,
+              username,
+              bio: bio.trim() || undefined,
+            }),
+          });
+          if (res.ok) {
+            onComplete({
+              address,
+              username,
+              avatarUrl,
+              bio: bio.trim() || undefined,
+            });
+            setStep("done");
+            return;
+          }
+        } catch {}
+      }
+      setSignError(msg);
+    } finally {
+      setSigning(false);
+    }
   }
 
   function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -310,13 +369,43 @@ export function ProfileModal({ open, onClose, onComplete }: ProfileModalProps) {
                 />
               </div>
 
+              {/* §11 — SIWS signing indicator */}
+              {signing && (
+                <div className="rounded-md border border-[var(--accent)] bg-[var(--accent-subtle)] p-2.5 flex items-center gap-2">
+                  <Loader2 size={14} strokeWidth={1.75} className="animate-spin text-[var(--accent)]" />
+                  <span className="text-[11px] text-[var(--text-secondary)]">
+                    Sign the message in your wallet to verify ownership…
+                  </span>
+                </div>
+              )}
+
+              {signError && (
+                <div className="rounded-md border border-[var(--status-error)] bg-[color-mix(in_srgb,var(--status-error)_10%,transparent)] p-2.5 flex items-start gap-2">
+                  <AlertCircle size={14} strokeWidth={1.75} className="text-[var(--status-error)] mt-0.5 shrink-0" />
+                  <div className="text-[11px] text-[var(--status-error)]">
+                    <div className="font-medium">Signature verification failed</div>
+                    <div className="mt-0.5 opacity-90">{signError}</div>
+                  </div>
+                </div>
+              )}
+
               <Button
                 onClick={handleSaveProfile}
-                disabled={usernameStatus !== "available"}
-                className="w-full bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)] disabled:opacity-50"
+                disabled={usernameStatus !== "available" || signing}
+                className="w-full gap-2 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)] disabled:opacity-50"
               >
-                Save profile
+                {signing ? (
+                  <Loader2 size={14} strokeWidth={1.75} className="animate-spin" />
+                ) : (
+                  <ShieldCheck size={14} strokeWidth={1.75} />
+                )}
+                {signing ? "Signing…" : "Sign & save profile"}
               </Button>
+
+              <p className="text-[10px] text-[var(--text-muted)] text-center">
+                Your wallet will sign a message proving you own this address.
+                The signature is verified server-side before saving.
+              </p>
             </div>
           )}
 

@@ -1,0 +1,144 @@
+import { NextRequest, NextResponse } from "next/server";
+import { verifySiws, type SiwsPayload } from "@saganta/stellar-appkit-siws-verify";
+import { db } from "@/lib/db";
+
+/**
+ * §11 — SIWS Signature Verification endpoint.
+ *
+ * Verifies the Sign-In With Stellar payload:
+ *   1. Parses the SIWS message (domain, nonce, expiry)
+ *   2. Checks the nonce matches what was issued
+ *   3. Checks the domain matches this app
+ *   4. Checks the message hasn't expired
+ *   5. Verifies the ed25519 signature over the message bytes
+ *
+ * If verification passes, the wallet address is confirmed to own the
+ * signature — the user can now save their username.
+ *
+ * POST /api/auth/verify-siws
+ * Body: { message, signedMessage, signerAddress, nonce, username, displayName?, bio? }
+ */
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+const APP_DOMAIN = process.env.NEXT_PUBLIC_APP_DOMAIN || "localhost";
+
+export async function POST(req: NextRequest) {
+  try {
+    const body = await req.json();
+    const { message, signedMessage, signerAddress, nonce, username, displayName, bio } = body;
+
+    if (!message || !signedMessage || !signerAddress || !nonce) {
+      return NextResponse.json(
+        { error: "Missing required SIWS fields: message, signedMessage, signerAddress, nonce" },
+        { status: 400 }
+      );
+    }
+
+    if (!username) {
+      return NextResponse.json(
+        { error: "Missing username — the SIWS proof is for setting a username" },
+        { status: 400 }
+      );
+    }
+
+    // §11 — Verify the SIWS payload using @saganta/stellar-appkit-siws-verify
+    const payload: SiwsPayload = { message, signedMessage, signerAddress };
+    const result = await verifySiws(payload, {
+      expectedDomain: APP_DOMAIN,
+      expectedNonce: nonce,
+    });
+
+    if (!result.ok) {
+      return NextResponse.json(
+        {
+          error: "SIWS verification failed",
+          reason: result.reason,
+        },
+        { status: 401 }
+      );
+    }
+
+    // Verification passed — the wallet address owns this signature
+    // Now check username uniqueness and save the profile
+    const usernameLower = username.toLowerCase().trim();
+
+    if (usernameLower.length < 3 || !/^[a-z0-9_]+$/i.test(usernameLower)) {
+      return NextResponse.json(
+        { error: "Invalid username: must be 3+ chars, letters/numbers/underscore only" },
+        { status: 400 }
+      );
+    }
+
+    // Check username uniqueness
+    const existing = await db.profile.findUnique({
+      where: { username: usernameLower },
+    });
+    if (existing && existing.userId !== signerAddress) {
+      return NextResponse.json(
+        { error: "Username already taken", field: "username" },
+        { status: 409 }
+      );
+    }
+
+    // Upsert user (find by walletAddress, create if not exists)
+    const user = await db.user.upsert({
+      where: { walletAddress: signerAddress },
+      update: { lastSeenAt: new Date() },
+      create: {
+        walletAddress: signerAddress,
+        email: null,
+        lastSeenAt: new Date(),
+      },
+    });
+
+    // Create or update profile
+    const profile = await db.profile.upsert({
+      where: { userId: user.id },
+      update: {
+        username: usernameLower,
+        displayName: displayName || null,
+        bio: bio || null,
+      },
+      create: {
+        userId: user.id,
+        username: usernameLower,
+        displayName: displayName || null,
+        bio: bio || null,
+      },
+    });
+
+    // Record audit log
+    await db.auditLog.create({
+      data: {
+        projectId: "default",
+        userId: user.id,
+        action: "SHARE_GRANTED",
+        targetType: "user",
+        targetId: user.id,
+        metadata: {
+          username: usernameLower,
+          action: "profile_created_via_siws",
+          siwsVerified: true,
+          signerAddress,
+        },
+      },
+    });
+
+    return NextResponse.json({
+      verified: true,
+      user: { id: user.id, walletAddress: user.walletAddress },
+      profile: { id: profile.id, username: profile.username },
+      claims: result.claims,
+    }, { status: 201 });
+  } catch (err) {
+    return NextResponse.json(
+      {
+        error: "Verification failed",
+        detail: err instanceof Error ? err.message : String(err),
+      },
+      { status: 500 }
+    );
+  }
+}

@@ -60,6 +60,8 @@ export function IdeShell() {
   // §8 — Hydrate file system from IndexedDB on mount (local-first)
   useEffect(() => {
     hydrate();
+    // Expose profile store on window for cross-store access (avoids circular imports)
+    (window as unknown as { __profileStore: unknown }).__profileStore = useProfileStore.getState();
   }, [hydrate]);
 
   // §11 — Listen for wallet connect/disconnect events.

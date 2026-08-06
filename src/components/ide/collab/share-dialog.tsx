@@ -41,6 +41,32 @@ export function ShareDialog({ open, onClose }: ShareDialogProps) {
 
   if (!open) return null;
 
+  // Gate: must be logged in to share
+  if (!profile) {
+    return (
+      <div
+        className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+        onClick={onClose}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Share project"
+      >
+        <div
+          className="w-full max-w-md rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-panel)] p-6 text-center shadow-2xl"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <p className="text-sm text-[var(--text-secondary)] mb-2">Login required</p>
+          <p className="text-xs text-[var(--text-muted)] mb-4">
+            Connect your wallet and complete your profile to enable collaboration.
+          </p>
+          <Button onClick={onClose} className="bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)]">
+            Close
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   const shareUrl = roomId
     ? `${window.location.origin}${window.location.pathname}#room=${roomId}&role=${role}`
     : window.location.href;

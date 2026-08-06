@@ -89,6 +89,13 @@ const CURRENT_USER = {
   avatarColor: "#4F8C8C",
 };
 
+function colorFromAddress(addr: string): string {
+  const palette = ["#4F8C8C", "#C5794B", "#7B96B3", "#6FA885", "#A88FB3", "#C9A66B", "#D29464", "#9A88A8"];
+  let hash = 0;
+  for (let i = 0; i < addr.length; i++) { hash = ((hash << 5) - hash) + addr.charCodeAt(i); hash |= 0; }
+  return palette[Math.abs(hash) % palette.length];
+}
+
 // No seed comments — zero mocked data. Comments are created by real users
 // and persisted to Postgres via /api/comments.
 const SEED_COMMENTS: Comment[] = [];
@@ -111,6 +118,13 @@ export const useCommentsStore = create<CommentsState>()(
       cancelAdding: () => set({ addingAt: null }),
 
       addComment: (input) => {
+        // Gate: must be logged in to comment
+        // Lazy import to avoid circular dependency
+        const profileState = (window as unknown as { __profileStore?: { isLoggedIn: () => boolean; profile: { address: string; username: string } | null } }).__profileStore;
+        if (profileState && !profileState.isLoggedIn()) {
+          return {} as Comment; // silently fail — UI should check before showing
+        }
+        const profile = profileState?.profile;
         const newComment: Comment = {
           id: `c-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           projectPath: "hello-world",
@@ -118,9 +132,9 @@ export const useCommentsStore = create<CommentsState>()(
           lineNumber: input.lineNumber,
           lineSnapshot: input.lineSnapshot,
           anchorCrdtPos: `${input.filePath}:${input.lineNumber}`,
-          authorId: CURRENT_USER.id,
-          authorName: CURRENT_USER.name,
-          authorAvatarColor: CURRENT_USER.avatarColor,
+          authorId: profile?.address ?? CURRENT_USER.id,
+          authorName: profile?.username ?? CURRENT_USER.name,
+          authorAvatarColor: profile ? colorFromAddress(profile.address) : CURRENT_USER.avatarColor,
           body: input.body,
           priority: input.priority,
           status: "open",

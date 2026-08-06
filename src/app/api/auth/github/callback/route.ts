@@ -44,35 +44,66 @@ function decodeState(state: string): StatePayload | null {
 /**
  * Detect the app's public URL — same logic as the initiation route.
  * See /api/auth/github/route.ts for the full explanation.
+ *
+ * The browser's `origin`/`referer` headers are the most reliable signal
+ * because they always contain the public URL the user sees, even when
+ * the request passes through reverse proxies that rewrite the `host`
+ * header to an internal hostname.
  */
 function detectAppUrl(req: NextRequest): string {
+  // 1. Explicit env var override
   if (process.env.NEXT_PUBLIC_APP_URL) {
     return process.env.NEXT_PUBLIC_APP_URL.replace(/\/$/, "");
   }
 
-  const forwardedProto = req.headers.get("x-forwarded-proto");
-  const forwardedHost = req.headers.get("x-forwarded-host");
-  const host = forwardedHost || req.headers.get("host");
-
-  if (!host) {
-    return "http://localhost:3000";
-  }
-
-  const isLocalhost =
+  const isLocalhost = (host: string) =>
     host.includes("localhost") ||
     host.includes("127.0.0.1") ||
-    host.includes("[::1]");
+    host.includes("[::1]") ||
+    host.includes("0.0.0.0");
 
-  let proto: string;
-  if (isLocalhost) {
-    proto = "http";
-  } else if (forwardedProto) {
-    proto = forwardedProto.split(",")[0].trim();
-  } else {
-    proto = "https";
+  const withProtocol = (host: string) => {
+    const proto = isLocalhost(host) ? "http" : "https";
+    return `${proto}://${host}`;
+  };
+
+  // 2. Origin header
+  const origin = req.headers.get("origin");
+  if (origin) {
+    try {
+      const parsed = new URL(origin);
+      return `${parsed.protocol}//${parsed.host}`;
+    } catch {
+      // fall through
+    }
   }
 
-  return `${proto}://${host}`;
+  // 3. Referer header
+  const referer = req.headers.get("referer");
+  if (referer) {
+    try {
+      const parsed = new URL(referer);
+      return `${parsed.protocol}//${parsed.host}`;
+    } catch {
+      // fall through
+    }
+  }
+
+  // 4. x-forwarded-host (force https for non-localhost)
+  const forwardedHost = req.headers.get("x-forwarded-host");
+  if (forwardedHost) {
+    const host = forwardedHost.split(",")[0].trim();
+    const proto = isLocalhost(host) ? "http" : "https";
+    return `${proto}://${host}`;
+  }
+
+  // 5. host header
+  const host = req.headers.get("host");
+  if (host) {
+    return withProtocol(host);
+  }
+
+  return "http://localhost:3000";
 }
 
 export async function GET(req: NextRequest) {

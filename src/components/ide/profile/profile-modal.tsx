@@ -37,6 +37,8 @@ interface ProfileModalProps {
   open: boolean;
   onClose: () => void;
   onComplete: (profile: { address: string; username: string; avatarUrl?: string; bio?: string }) => void;
+  /** Existing profile — when set, opens in "edit mode" (username locked) */
+  existingProfile?: { address: string; username: string; avatarUrl?: string; bio?: string } | null;
 }
 
 const WALLETS = [
@@ -45,7 +47,7 @@ const WALLETS = [
   { id: "xbull", name: "xBull", description: "Browser extension", color: "#C9A66B" },
 ];
 
-export function ProfileModal({ open, onClose, onComplete }: ProfileModalProps) {
+export function ProfileModal({ open, onClose, onComplete, existingProfile }: ProfileModalProps) {
   const [step, setStep] = useState<Step>("wallet");
   const [address, setAddress] = useState<string>("");
   const [connecting, setConnecting] = useState(false);
@@ -60,6 +62,20 @@ export function ProfileModal({ open, onClose, onComplete }: ProfileModalProps) {
   const modalRef = useRef<HTMLElement | null>(null);
 
   const wallet = useStellarWallet();
+
+  // When opening with an existing profile, pre-fill fields and skip to profile step
+  useEffect(() => {
+    if (open && existingProfile) {
+      setUsername(existingProfile.username || "");
+      setBio(existingProfile.bio || "");
+      setAvatarUrl(existingProfile.avatarUrl);
+      setAddress(existingProfile.address);
+      setStep("profile");
+      if (existingProfile.username) {
+        setAsyncUsernameStatus("available");
+      }
+    }
+  }, [open, existingProfile]);
 
   const handleConnectWallet = useCallback(async (walletId: string) => {
     setConnecting(true);
@@ -319,12 +335,18 @@ export function ProfileModal({ open, onClose, onComplete }: ProfileModalProps) {
               {/* Username */}
               <div>
                 <label className="text-[11px] font-medium text-[var(--text-secondary)] mb-1 block">
-                  Username <span className="text-[var(--status-error)]">*</span>
+                  Username{" "}
+                  {existingProfile?.username ? (
+                    <span className="text-[var(--text-muted)]">(locked)</span>
+                  ) : (
+                    <span className="text-[var(--status-error)]">*</span>
+                  )}
                 </label>
                 <div className="relative">
                   <input
                     value={username}
-                    onChange={(e) => setUsername(e.target.value)}
+                    onChange={(e) => !existingProfile?.username && setUsername(e.target.value)}
+                    readOnly={!!existingProfile?.username}
                     placeholder="e.g. soroban-dev"
                     className={cn(
                       "w-full rounded border bg-[var(--surface-sunken)] px-2.5 py-1.5 text-[13px] text-[var(--text-primary)] outline-none transition-colors placeholder:text-[var(--text-muted)]",

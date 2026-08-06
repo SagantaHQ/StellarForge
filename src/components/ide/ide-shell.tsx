@@ -50,6 +50,7 @@ export function IdeShell() {
   const fsHydrated = useFileSystemStore((s) => s.hydrated);
   const profile = useProfileStore((s) => s.profile);
   const setProfile = useProfileStore((s) => s.setProfile);
+  const clearProfile = useProfileStore((s) => s.clearProfile);
   const buildStatus = useBuildStore((s) => s.status);
   const startBuild = useBuildStore((s) => s.startBuild);
   const requestFix = useFixWithAIStore((s) => s.requestFix);
@@ -130,6 +131,22 @@ export function IdeShell() {
         building={buildStatus === "building"}
         onShare={() => setShareOpen(true)}
         onConnectWallet={() => setProfileOpen(true)}
+        onOpenWalletModal={async () => {
+          const { useStellarWallet } = await import("@/lib/wallet/use-stellar-wallet");
+          // Open the saganta-appkit-modal
+          const modal = document.querySelector<HTMLElement & { open: () => void }>("saganta-appkit-modal");
+          if (modal?.open) {
+            modal.open();
+          } else {
+            // If modal not mounted yet, trigger wallet connect flow
+            setProfileOpen(true);
+          }
+        }}
+        onOpenProfile={() => setProfileOpen(true)}
+        onOpenSettings={() => setSettingsOpen(true)}
+        onLogout={() => {
+          clearProfile();
+        }}
         onNewProject={() => setNewProjectOpen(true)}
         onCommandPalette={() => setCommandPaletteOpen(true)}
         onBuild={() => {
@@ -278,6 +295,7 @@ export function IdeShell() {
       <ProfileModal
         open={profileOpen}
         onClose={() => setProfileOpen(false)}
+        existingProfile={profile}
         onComplete={(p) => {
           setProfile({
             address: p.address,

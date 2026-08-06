@@ -13,6 +13,9 @@ import {
   Plus,
   Wrench,
   Loader2,
+  Settings as SettingsIcon,
+  UserCircle,
+  LogOut,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -30,6 +33,10 @@ interface TopBarProps {
   building?: boolean;
   onShare: () => void;
   onConnectWallet: () => void;
+  onOpenWalletModal: () => void;
+  onOpenProfile: () => void;
+  onOpenSettings: () => void;
+  onLogout: () => void;
   onNewProject: () => void;
   onCommandPalette: () => void;
   onBuild: () => void;
@@ -49,6 +56,10 @@ export function TopBar({
   building = false,
   onShare,
   onConnectWallet,
+  onOpenWalletModal,
+  onOpenProfile,
+  onOpenSettings,
+  onLogout,
   onNewProject,
   onCommandPalette,
   onBuild,
@@ -56,6 +67,7 @@ export function TopBar({
   onSwitchNetwork,
 }: TopBarProps) {
   const [networkOpen, setNetworkOpen] = useState(false);
+  const [avatarMenuOpen, setAvatarMenuOpen] = useState(false);
   const collabConnected = useCollabStore((s) => s.connected);
   const onlineUsers = useCollabStore((s) => s.users);
 
@@ -228,35 +240,123 @@ export function TopBar({
           <span>Deploy</span>
         </Button>
 
-        {/* Wallet / profile button */}
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={onConnectWallet}
-          className="h-8 gap-1.5 px-2.5 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-        >
-          {profile ? (
-            <>
+        {/* Wallet / profile button — shows dropdown when logged in */}
+        {profile ? (
+          <div className="relative">
+            <button
+              onClick={() => setAvatarMenuOpen((v) => !v)}
+              className="flex h-8 items-center gap-1.5 rounded-md px-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] transition-colors"
+              aria-label="Account menu"
+              aria-expanded={avatarMenuOpen}
+            >
               {profile.avatarUrl ? (
                 <img
                   src={profile.avatarUrl}
                   alt={profile.username}
-                  className="h-5 w-5 rounded-full object-cover"
+                  className="h-6 w-6 rounded-full object-cover"
                 />
               ) : (
-                <div className="flex h-5 w-5 items-center justify-center rounded-full bg-[var(--accent)] text-[9px] font-medium text-[var(--accent-contrast)]">
+                <div className="flex h-6 w-6 items-center justify-center rounded-full bg-[var(--accent)] text-[10px] font-medium text-[var(--accent-contrast)]">
                   {profile.username.charAt(0).toUpperCase()}
                 </div>
               )}
-              <span className="hidden md:inline">{profile.username}</span>
-            </>
-          ) : (
-            <>
-              <Wallet size={14} strokeWidth={1.75} />
-              <span className="hidden md:inline">Connect</span>
-            </>
-          )}
-        </Button>
+              <span className="hidden md:inline max-w-[80px] truncate">{profile.username}</span>
+              <ChevronDown size={10} strokeWidth={2} className="text-[var(--text-muted)]" />
+            </button>
+
+            {avatarMenuOpen && (
+              <>
+                <div
+                  className="fixed inset-0 z-40"
+                  onClick={() => setAvatarMenuOpen(false)}
+                />
+                <div className="absolute right-0 top-full mt-1 z-50 min-w-[200px] rounded-md border border-[var(--border-subtle)] bg-[var(--surface-panel)] py-1 shadow-xl">
+                  {/* Profile header */}
+                  <div className="border-b border-[var(--border-subtle)] px-3 py-2">
+                    <div className="flex items-center gap-2">
+                      {profile.avatarUrl ? (
+                        <img
+                          src={profile.avatarUrl}
+                          alt={profile.username}
+                          className="h-8 w-8 rounded-full object-cover"
+                        />
+                      ) : (
+                        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--accent)] text-[12px] font-medium text-[var(--accent-contrast)]">
+                          {profile.username.charAt(0).toUpperCase()}
+                        </div>
+                      )}
+                      <div className="min-w-0">
+                        <div className="text-[12px] font-medium text-[var(--text-primary)] truncate">
+                          {profile.username}
+                        </div>
+                        <div className="text-[10px] font-mono text-[var(--text-muted)] truncate">
+                          {profile.address.substring(0, 8)}…{profile.address.slice(-4)}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Menu items */}
+                  <button
+                    onClick={() => {
+                      setAvatarMenuOpen(false);
+                      onOpenWalletModal();
+                    }}
+                    className="flex w-full items-center gap-2.5 px-3 py-2 text-[12px] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] transition-colors"
+                  >
+                    <Wallet size={14} strokeWidth={1.75} className="text-[var(--text-muted)]" />
+                    <span>Wallet</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setAvatarMenuOpen(false);
+                      onOpenProfile();
+                    }}
+                    className="flex w-full items-center gap-2.5 px-3 py-2 text-[12px] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] transition-colors"
+                  >
+                    <UserCircle size={14} strokeWidth={1.75} className="text-[var(--text-muted)]" />
+                    <span>Profile</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setAvatarMenuOpen(false);
+                      onOpenSettings();
+                    }}
+                    className="flex w-full items-center gap-2.5 px-3 py-2 text-[12px] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] transition-colors"
+                  >
+                    <SettingsIcon size={14} strokeWidth={1.75} className="text-[var(--text-muted)]" />
+                    <span>Settings</span>
+                  </button>
+
+                  <div className="border-t border-[var(--border-subtle)] my-1" />
+
+                  <button
+                    onClick={() => {
+                      setAvatarMenuOpen(false);
+                      onLogout();
+                    }}
+                    className="flex w-full items-center gap-2.5 px-3 py-2 text-[12px] text-[var(--status-error)] hover:bg-[color-mix(in_srgb,var(--status-error)_8%,transparent)] transition-colors"
+                  >
+                    <LogOut size={14} strokeWidth={1.75} />
+                    <span>Disconnect</span>
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        ) : (
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={onConnectWallet}
+            className="h-8 gap-1.5 px-2.5 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+          >
+            <Wallet size={14} strokeWidth={1.75} />
+            <span className="hidden md:inline">Connect</span>
+          </Button>
+        )}
       </div>
     </header>
   );

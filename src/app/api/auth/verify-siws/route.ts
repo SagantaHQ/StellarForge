@@ -1,39 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifySiws, type SiwsPayload } from "@saganta/stellar-appkit-siws-verify";
-import { StrKey } from "@stellar/stellar-base";
-import nacl from "tweetnacl";
-import { createHash } from "crypto";
+import { verifySiws } from "@saganta/stellar-appkit-siws-verify";
 import { db } from "@/lib/db";
 
 /**
  * §11 — SIWS Signature Verification endpoint.
  *
- * Freighter (and other SEP-0053 compliant wallets) sign:
- *   sha256("Stellar Signed Message:\n" + utf8(message))
- * NOT the raw message bytes.
+ * Uses @saganta/stellar-appkit-siws-verify which handles:
+ *   - Parsing the SIWS message (domain, nonce, expiry)
+ *   - Checking domain + nonce + expiry
+ *   - Verifying the ed25519 signature
+ *   - SEP-0053 message encoding (Freighter signs sha256 of prefixed message)
  *
- * The @saganta/stellar-appkit v0.1.5 connector returns `signedData` which
- * is the base64-encoded SEP-0053 hash to verify against.
- *
- * For wallets that sign raw bytes (like Albedo), `signedData` is absent
- * and we verify against the raw message bytes.
- */
-
-/**
- * §11 — SIWS Signature Verification endpoint.
- *
- * Verifies the Sign-In With Stellar payload:
- *   1. Parses the SIWS message (domain, nonce, expiry)
- *   2. Checks the nonce matches what was issued
- *   3. Checks the domain matches this app
- *   4. Checks the message hasn't expired
- *   5. Verifies the ed25519 signature over the message bytes
- *
- * If verification passes, the wallet address is confirmed to own the
- * signature — the user can now save their username.
+ * The library accepts `signedData` (the SEP-0053 hash from the connector)
+ * and handles verification internally — no custom verifySignatureFn needed.
  *
  * POST /api/auth/verify-siws
- * Body: { message, signedMessage, signerAddress, nonce, username, displayName?, bio? }
+ * Body: { message, signedMessage, signerAddress, signedData?, nonce, username, ... }
  */
 
 export const runtime = "nodejs";
@@ -42,7 +24,7 @@ export const dynamic = "force-dynamic";
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { message, signedMessage, signerAddress, nonce, username, displayName, bio, signedData } = body;
+    const { message, signedMessage, signerAddress, signedData, nonce, username, displayName, bio } = body;
 
     if (!message || !signedMessage || !signerAddress || !nonce) {
       return NextResponse.json(
@@ -58,109 +40,33 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // §11 — Derive the expected domain from the request itself.
-    // The client uses window.location.hostname in the SIWS message, so the
-    // server must match against the same domain the user sees — not a
-    // static env variable that might be "localhost" while the user is on
-    // a preview URL like preview-xxx.space-z.ai.
+    // Derive the expected domain from the request — matches what the client
+    // used in window.location.hostname when building the SIWS message.
     const origin = req.headers.get("origin") || req.headers.get("host") || "";
     const expectedDomain = origin
       .replace(/^https?:\/\//, "")
       .replace(/^\/+/, "")
       .split("/")[0]
-      .split(":")[0]; // strip port
+      .split(":")[0];
 
-    // §11 — Verify the SIWS payload using @saganta/stellar-appkit-siws-verify
-    // Pass a custom verifySignatureFn that uses a STATIC import of
-    // @stellar/stellar-sdk — the default verifier uses a dynamic import()
-    // which fails silently in Turbopack's server runtime.
-    const payload: SiwsPayload = { message, signedMessage, signerAddress };
-
-    // Debug: log what we received — compare with client-side log
-    const messageBuffer = Buffer.from(message, "utf-8");
-    console.log("[SIWS Server] Received:", {
-      messageLength: message.length,
-      messageBytes: messageBuffer.length,
-      messageHex: messageBuffer.toString("hex").substring(0, 100),
-      messageFull: message,
-      signedMessageLength: signedMessage.length,
-      signedMessagePreview: signedMessage.substring(0, 40),
-      signerAddress: signerAddress.substring(0, 12),
-      nonce: nonce.substring(0, 12),
-      expectedDomain,
-    });
-
-    const result = await verifySiws(payload, {
-      expectedDomain,
-      expectedNonce: nonce,
-      verifySignatureFn: ({ message: msg, signature, address }) => {
-        try {
-          const publicKey = StrKey.decodeEd25519PublicKey(address);
-          const messageBuffer = Buffer.from(msg, "utf-8");
-
-          // Decode signature — accept both hex and base64
-          const isHex = /^[0-9a-fA-F]+$/.test(signature) && signature.length % 2 === 0;
-          const signatureBuffer = Buffer.from(signature, isHex ? "hex" : "base64");
-
-          console.log("[SIWS] Verifying:", {
-            addressPrefix: address?.substring(0, 12),
-            messageBytes: messageBuffer.length,
-            signatureBytes: signatureBuffer.length,
-            hasSignedData: !!signedData,
-          });
-
-          // 1. SEP-0053 verification (Freighter and other SEP-053 wallets)
-          //    Signs: sha256("Stellar Signed Message:\n" + utf8(message))
-          //    If the connector returned signedData (the pre-computed hash),
-          //    verify against that directly. Otherwise compute it ourselves.
-          const sep53Prefix = Buffer.from("Stellar Signed Message:\n", "utf-8");
-          const sep53Hash = signedData
-            ? Buffer.from(signedData, "base64") // use the hash from the connector
-            : createHash("sha256").update(Buffer.concat([sep53Prefix, messageBuffer])).digest();
-
-          const sep53Valid = nacl.sign.detached.verify(sep53Hash, signatureBuffer, publicKey);
-          console.log("[SIWS] SEP-0053 verify:", sep53Valid);
-          if (sep53Valid) return true;
-
-          // 2. Raw message verification (Albedo and other direct-signing wallets)
-          const rawValid = nacl.sign.detached.verify(messageBuffer, signatureBuffer, publicKey);
-          console.log("[SIWS] raw verify:", rawValid);
-          if (rawValid) return true;
-
-          // 3. SHA-256 hash of message (without SEP-053 prefix)
-          const sha256Hash = createHash("sha256").update(messageBuffer).digest();
-          const hashValid = nacl.sign.detached.verify(sha256Hash, signatureBuffer, publicKey);
-          console.log("[SIWS] sha256 verify:", hashValid);
-          if (hashValid) return true;
-
-          return false;
-        } catch (err) {
-          console.error("[SIWS] Signature verification error:", err);
-          return false;
-        }
-      },
-    });
+    // §11 — Verify using the library. Pass signedData for SEP-0053 wallets
+    // (Freighter). The library handles signature verification internally.
+    const result = await verifySiws(
+      { message, signedMessage, signerAddress, signedData },
+      { expectedDomain, expectedNonce: nonce }
+    );
 
     if (!result.ok) {
+      console.log("[SIWS] Verification failed:", result.reason);
       return NextResponse.json(
-        {
-          error: "SIWS verification failed",
-          reason: result.reason,
-          debug: {
-            expectedDomain,
-            serverMessageLength: message.length,
-            serverMessageBytes: messageBuffer.length,
-            serverMessageHex: messageBuffer.toString("hex").substring(0, 200),
-            signedMessageLength: signedMessage.length,
-            signerAddress: signerAddress.substring(0, 12),
-          },
-        },
+        { error: "SIWS verification failed", reason: result.reason },
         { status: 401 }
       );
     }
 
-    // Verification passed — the wallet address owns this signature
-    // Now check username uniqueness and save the profile
+    console.log("[SIWS] Verification passed for:", signerAddress.substring(0, 12));
+
+    // Verification passed — save the profile
     const usernameLower = username.toLowerCase().trim();
 
     if (usernameLower.length < 3 || !/^[a-z0-9_]+$/i.test(usernameLower)) {
@@ -181,7 +87,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Upsert user (find by walletAddress, create if not exists)
+    // Upsert user
     const user = await db.user.upsert({
       where: { walletAddress: signerAddress },
       update: { lastSeenAt: new Date() },
@@ -208,7 +114,7 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // Record audit log (skip if no project exists — audit log is optional)
+    // Audit log (best-effort)
     try {
       await db.auditLog.create({
         data: {
@@ -226,8 +132,7 @@ export async function POST(req: NextRequest) {
         },
       });
     } catch {
-      // Audit log is best-effort — don't fail the profile save if it errors
-      // (e.g. foreign key constraint on projectId)
+      // Audit log is best-effort
     }
 
     return NextResponse.json({
@@ -237,6 +142,7 @@ export async function POST(req: NextRequest) {
       claims: result.claims,
     }, { status: 201 });
   } catch (err) {
+    console.error("[SIWS] Error:", err);
     return NextResponse.json(
       {
         error: "Verification failed",

@@ -1,5 +1,5 @@
 // Soroban.Build Prisma schema
-// Database: SQLite for local dev (swap to PostgreSQL for production)
+// Database: PostgreSQL (Neon in production, local Postgres via docker-compose for dev)
 // Docs: https://pris.ly/d/prisma-schema
 
 generator client {
@@ -7,8 +7,9 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = env("DATABASE_URL")
+  provider     = "postgresql"
+  url          = env("DATABASE_URL")
+  directUrl    = env("DIRECT_DATABASE_URL")
 }
 
 // ============================================================
@@ -121,7 +122,7 @@ model File {
   projectId   String
   project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
   path        String   // full path within project, e.g. "src/lib.rs"
-  content     String   
+  content     String   @db.Text
   language    String
   gitStatus   String?  // modified | added | untracked
   createdAt   DateTime @default(now())
@@ -140,7 +141,7 @@ model ProjectSnapshot {
   project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
   name        String
   description String?
-  treeJson    String    // serialized file tree at snapshot time
+  treeJson    String   @db.Text // serialized file tree at snapshot time
   createdBy   String?
   createdAt   DateTime @default(now())
 
@@ -159,11 +160,11 @@ model Comment {
   file          File     @relation(fields: [fileId], references: [id], onDelete: Cascade)
   filePath      String   // denormalized for fast lookup without join
   lineNumber    Int
-  lineSnapshot  String    // content of the anchored line at creation time
+  lineSnapshot  String   @db.Text // content of the anchored line at creation time
   anchorCrdtPos String?  // CRDT position for re-anchoring on edits
   authorId      String
   author        User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
-  body          String   
+  body          String   @db.Text
   priority      CommentPriority
   status        CommentStatus
   createdAt     DateTime @default(now())

@@ -8,6 +8,20 @@ import { db } from "@/lib/db";
 /**
  * §11 — SIWS Signature Verification endpoint.
  *
+ * Freighter (and other SEP-0053 compliant wallets) sign:
+ *   sha256("Stellar Signed Message:\n" + utf8(message))
+ * NOT the raw message bytes.
+ *
+ * The @saganta/stellar-appkit v0.1.5 connector returns `signedData` which
+ * is the base64-encoded SEP-0053 hash to verify against.
+ *
+ * For wallets that sign raw bytes (like Albedo), `signedData` is absent
+ * and we verify against the raw message bytes.
+ */
+
+/**
+ * §11 — SIWS Signature Verification endpoint.
+ *
  * Verifies the Sign-In With Stellar payload:
  *   1. Parses the SIWS message (domain, nonce, expiry)
  *   2. Checks the nonce matches what was issued
@@ -28,7 +42,7 @@ export const dynamic = "force-dynamic";
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { message, signedMessage, signerAddress, nonce, username, displayName, bio } = body;
+    const { message, signedMessage, signerAddress, nonce, username, displayName, bio, signedData } = body;
 
     if (!message || !signedMessage || !signerAddress || !nonce) {
       return NextResponse.json(
@@ -81,7 +95,6 @@ export async function POST(req: NextRequest) {
       expectedNonce: nonce,
       verifySignatureFn: ({ message: msg, signature, address }) => {
         try {
-          // Decode the StrKey public key to raw 32-byte ed25519 public key
           const publicKey = StrKey.decodeEd25519PublicKey(address);
           const messageBuffer = Buffer.from(msg, "utf-8");
 
@@ -93,23 +106,34 @@ export async function POST(req: NextRequest) {
             addressPrefix: address?.substring(0, 12),
             messageBytes: messageBuffer.length,
             signatureBytes: signatureBuffer.length,
-            signatureEncoding: isHex ? "hex" : "base64",
+            hasSignedData: !!signedData,
           });
 
-          // Use tweetnacl directly — bypasses @stellar/stellar-sdk wrapper
-          // which may have version-specific issues with verify()
-          const valid = nacl.sign.detached.verify(messageBuffer, signatureBuffer, publicKey);
-          console.log("[SIWS] tweetnacl verify (raw):", valid);
+          // 1. SEP-0053 verification (Freighter and other SEP-053 wallets)
+          //    Signs: sha256("Stellar Signed Message:\n" + utf8(message))
+          //    If the connector returned signedData (the pre-computed hash),
+          //    verify against that directly. Otherwise compute it ourselves.
+          const sep53Prefix = Buffer.from("Stellar Signed Message:\n", "utf-8");
+          const sep53Hash = signedData
+            ? Buffer.from(signedData, "base64") // use the hash from the connector
+            : createHash("sha256").update(Buffer.concat([sep53Prefix, messageBuffer])).digest();
 
-          if (!valid) {
-            // Try SHA-256 hash verification (some wallets sign the hash)
-            const hash = createHash("sha256").update(messageBuffer).digest();
-            const hashValid = nacl.sign.detached.verify(hash, signatureBuffer, publicKey);
-            console.log("[SIWS] tweetnacl verify (sha256):", hashValid);
-            if (hashValid) return true;
-          }
+          const sep53Valid = nacl.sign.detached.verify(sep53Hash, signatureBuffer, publicKey);
+          console.log("[SIWS] SEP-0053 verify:", sep53Valid);
+          if (sep53Valid) return true;
 
-          return valid;
+          // 2. Raw message verification (Albedo and other direct-signing wallets)
+          const rawValid = nacl.sign.detached.verify(messageBuffer, signatureBuffer, publicKey);
+          console.log("[SIWS] raw verify:", rawValid);
+          if (rawValid) return true;
+
+          // 3. SHA-256 hash of message (without SEP-053 prefix)
+          const sha256Hash = createHash("sha256").update(messageBuffer).digest();
+          const hashValid = nacl.sign.detached.verify(sha256Hash, signatureBuffer, publicKey);
+          console.log("[SIWS] sha256 verify:", hashValid);
+          if (hashValid) return true;
+
+          return false;
         } catch (err) {
           console.error("[SIWS] Signature verification error:", err);
           return false;

@@ -120,8 +120,7 @@ export function useStellarWallet() {
       nonce,
     });
 
-    // Debug: log the EXACT message that was signed, so we can compare
-    // it with what the server receives
+    // Debug: log the EXACT message that was signed
     console.log("[SIWS Client] Message signed:", {
       messageLength: result.message.length,
       messageBytes: new TextEncoder().encode(result.message).length,
@@ -129,6 +128,7 @@ export function useStellarWallet() {
       messageFull: result.message,
       signedMessageLength: result.signedMessage.length,
       signedMessagePreview: result.signedMessage.substring(0, 40),
+      hasSignedData: !!result.signedData,
       signerAddress: result.signerAddress,
       nonce,
     });
@@ -138,6 +138,9 @@ export function useStellarWallet() {
       signedMessage: result.signedMessage,
       signerAddress: result.signerAddress,
       nonce,
+      // signedData is the SEP-0053 hash (base64) for Freighter — the server
+      // needs this to verify the signature correctly.
+      signedData: result.signedData,
     };
   }, [getAppKit]);
 
@@ -149,6 +152,7 @@ export function useStellarWallet() {
     signedMessage: string;
     signerAddress: string;
     nonce: string;
+    signedData?: string;
   }, profile: {
     username: string;
     displayName?: string;

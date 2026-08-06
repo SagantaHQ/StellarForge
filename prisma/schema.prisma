@@ -1,5 +1,5 @@
 // Soroban.Build Prisma schema
-// Database: PostgreSQL (Neon)
+// Database: SQLite for local dev (swap to PostgreSQL for production)
 // Docs: https://pris.ly/d/prisma-schema
 
 generator client {
@@ -7,10 +7,8 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
   url      = env("DATABASE_URL")
-  // Needed for Neon pooled connections (pgbouncer)
-  directUrl = env("DIRECT_DATABASE_URL")
 }
 
 // ============================================================
@@ -25,6 +23,13 @@ model User {
   updatedAt     DateTime  @updatedAt
   lastSeenAt    DateTime?
 
+  // GitHub OAuth integration — stores the access token after the user
+  // connects their GitHub account. Used for importing repos and committing
+  // changes back to GitHub. Null when not connected.
+  githubAccessToken  String?
+  githubUsername     String?
+  githubConnectedAt  DateTime?
+
   profile       Profile?
   ownedProjects Project[] @relation("OwnedProjects")
   memberships   ProjectMember[]
@@ -36,6 +41,7 @@ model User {
 
   @@index([walletAddress])
   @@index([email])
+  @@index([githubUsername])
 }
 
 model Profile {
@@ -70,6 +76,12 @@ model Project {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
+  // GitHub link — set when the project was imported from or pushed to GitHub.
+  // Format: "owner/repo" (e.g. "stellar/soroban-examples"). Used by the
+  // commit feature to push changes back to the right repo.
+  githubRepo    String?
+  githubBranch  String?
+
   members       ProjectMember[]
   files         File[]
   comments      Comment[]
@@ -80,6 +92,7 @@ model Project {
 
   @@index([ownerId])
   @@index([slug])
+  @@index([githubRepo])
 }
 
 model ProjectMember {
@@ -108,7 +121,7 @@ model File {
   projectId   String
   project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
   path        String   // full path within project, e.g. "src/lib.rs"
-  content     String   @db.Text
+  content     String   
   language    String
   gitStatus   String?  // modified | added | untracked
   createdAt   DateTime @default(now())
@@ -127,7 +140,7 @@ model ProjectSnapshot {
   project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
   name        String
   description String?
-  treeJson    String   @db.Text // serialized file tree at snapshot time
+  treeJson    String    // serialized file tree at snapshot time
   createdBy   String?
   createdAt   DateTime @default(now())
 
@@ -146,11 +159,11 @@ model Comment {
   file          File     @relation(fields: [fileId], references: [id], onDelete: Cascade)
   filePath      String   // denormalized for fast lookup without join
   lineNumber    Int
-  lineSnapshot  String   @db.Text // content of the anchored line at creation time
+  lineSnapshot  String    // content of the anchored line at creation time
   anchorCrdtPos String?  // CRDT position for re-anchoring on edits
   authorId      String
   author        User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
-  body          String   @db.Text
+  body          String   
   priority      CommentPriority
   status        CommentStatus
   createdAt     DateTime @default(now())

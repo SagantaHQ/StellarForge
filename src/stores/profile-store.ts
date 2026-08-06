@@ -30,6 +30,9 @@ interface ProfileState {
   sessionChecked: boolean;
   /** Per-user accent color used for collab cursors and avatars */
   accentColor: string;
+  /** GitHub integration state — synced from /api/github/status */
+  githubConnected: boolean;
+  githubUsername: string | null;
 
   setProfile: (p: UserProfile) => void;
   clearProfile: () => void;
@@ -37,6 +40,10 @@ interface ProfileState {
   isLoggedIn: () => boolean;
   /** Check server session by wallet address */
   syncFromWallet: (address: string | null) => Promise<void>;
+  /** Check GitHub connection status (called after profile loads + after OAuth callback) */
+  syncGithubStatus: () => Promise<void>;
+  /** Disconnect GitHub (clears the token on the server) */
+  disconnectGithub: () => Promise<void>;
 }
 
 function colorFromAddress(addr: string): string {
@@ -59,6 +66,8 @@ export const useProfileStore = create<ProfileState>()(
       walletConnected: false, // starts false — wallet not connected on fresh page load
       sessionChecked: false,
       accentColor: "#4F8C8C",
+      githubConnected: false,
+      githubUsername: null,
 
       setProfile: (p) =>
         set({
@@ -74,13 +83,21 @@ export const useProfileStore = create<ProfileState>()(
           walletConnected: false,
           sessionChecked: true,
           accentColor: "#4F8C8C",
+          githubConnected: false,
+          githubUsername: null,
         }),
 
       setWalletConnected: (connected: boolean) =>
         set((s) => {
           if (!connected) {
-            // Wallet disconnected — clear everything
-            return { walletConnected: false, profile: null, sessionChecked: true };
+            // Wallet disconnected — clear everything including GitHub state
+            return {
+              walletConnected: false,
+              profile: null,
+              sessionChecked: true,
+              githubConnected: false,
+              githubUsername: null,
+            };
           }
           return { walletConnected: true };
         }),
@@ -124,6 +141,47 @@ export const useProfileStore = create<ProfileState>()(
         } catch {
           set({ sessionChecked: true });
         }
+
+        // After session sync, also check GitHub status
+        get().syncGithubStatus();
+      },
+
+      syncGithubStatus: async () => {
+        const address = get().profile?.address;
+        if (!address) {
+          set({ githubConnected: false, githubUsername: null });
+          return;
+        }
+        try {
+          const res = await fetch(
+            `/api/github/status?walletAddress=${encodeURIComponent(address)}`
+          );
+          if (!res.ok) {
+            set({ githubConnected: false, githubUsername: null });
+            return;
+          }
+          const data = await res.json();
+          set({
+            githubConnected: !!data.connected,
+            githubUsername: data.username ?? null,
+          });
+        } catch {
+          set({ githubConnected: false, githubUsername: null });
+        }
+      },
+
+      disconnectGithub: async () => {
+        const address = get().profile?.address;
+        if (!address) return;
+        try {
+          await fetch(
+            `/api/github/status?walletAddress=${encodeURIComponent(address)}`,
+            { method: "DELETE" }
+          );
+        } catch {
+          // Best-effort
+        }
+        set({ githubConnected: false, githubUsername: null });
       },
     }),
     {

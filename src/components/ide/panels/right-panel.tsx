@@ -7,6 +7,8 @@ import {
   Rocket,
   TestTube,
   GitBranch,
+  GitCommit,
+  Github,
   Check,
   Loader2,
   X,
@@ -17,9 +19,11 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { AgentPanel } from "./agent-panel";
 import { ContractInteractionPanel } from "./contract-interaction";
+import { CommitToGithubModal } from "../projects/commit-to-github-modal";
 import { useBuildStore } from "@/stores/build-store";
 import { useDeployStore } from "@/stores/deploy-store";
 import { useFileSystemStore } from "@/stores/file-system-store";
+import { useProfileStore } from "@/stores/profile-store";
 import { flattenFiles } from "@/lib/soroban/sample-project";
 
 type RightPanelView = "agent" | "compile" | "test" | "deploy" | "git";
@@ -413,39 +417,111 @@ function DeployPanel({ network }: { network: string }) {
 }
 
 function GitPanel() {
+  const [commitModalOpen, setCommitModalOpen] = useState(false);
+  const tree = useFileSystemStore((s) => s.tree);
+  const githubConnected = useProfileStore((s) => s.githubConnected);
+  const githubUsername = useProfileStore((s) => s.githubUsername);
+  const profile = useProfileStore((s) => s.profile);
+
+  const files = flattenFiles(tree);
+  const modifiedFiles = files.filter((f) => f.gitStatus === "modified" || f.gitStatus === "untracked" || f.gitStatus === "added");
+  const cleanFiles = files.filter((f) => !f.gitStatus || f.gitStatus === null);
+
   return (
     <div className="flex h-full flex-col p-3 gap-3 overflow-y-auto">
       <div className="flex items-center justify-between">
         <h3 className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">
           Source Control
         </h3>
-        <Button size="sm" variant="outline" className="h-7 gap-1.5 text-xs">
-          <GitBranch size={12} strokeWidth={1.75} />
-          Commit
+        <Button
+          size="sm"
+          onClick={() => setCommitModalOpen(true)}
+          disabled={!profile}
+          className="h-7 gap-1.5 text-xs bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)] disabled:opacity-50"
+        >
+          <GitCommit size={12} strokeWidth={1.75} />
+          Commit to GitHub
         </Button>
       </div>
+
+      {/* GitHub connection status */}
+      <div
+        className={cn(
+          "flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-[11px]",
+          githubConnected
+            ? "border-[var(--status-success)]/30 bg-[color-mix(in_srgb,var(--status-success)_8%,transparent)] text-[var(--text-secondary)]"
+            : "border-[var(--border-subtle)] bg-[var(--surface-sunken)] text-[var(--text-muted)]"
+        )}
+      >
+        <Github size={12} strokeWidth={1.75} className="shrink-0" />
+        {githubConnected ? (
+          <span>
+            Connected as <span className="font-medium text-[var(--text-primary)]">{githubUsername}</span>
+          </span>
+        ) : (
+          <button
+            onClick={() => setCommitModalOpen(true)}
+            className="text-[var(--accent)] hover:underline"
+          >
+            Connect GitHub to enable commits
+          </button>
+        )}
+      </div>
+
+      {/* Changes */}
       <div>
         <h4 className="text-[11px] uppercase tracking-wide text-[var(--text-muted)] mb-1.5">
-          Changes (2)
+          Changes ({modifiedFiles.length})
         </h4>
-        <div className="space-y-0.5">
-          <div className="flex items-center gap-2 rounded px-2 py-1 text-xs hover:bg-[var(--surface-hover)] cursor-pointer">
-            <span className="font-mono text-[var(--status-warning)] text-[10px]">M</span>
-            <span className="text-[var(--text-secondary)]">src/lib.rs</span>
+        {modifiedFiles.length === 0 ? (
+          <div className="text-[11px] text-[var(--text-muted)] italic py-2">
+            No changes — all files are clean.
           </div>
-          <div className="flex items-center gap-2 rounded px-2 py-1 text-xs hover:bg-[var(--surface-hover)] cursor-pointer">
-            <span className="font-mono text-[var(--status-info)] text-[10px]">U</span>
-            <span className="text-[var(--text-secondary)]">src/test.rs</span>
+        ) : (
+          <div className="space-y-0.5">
+            {modifiedFiles.map((f) => (
+              <div
+                key={f.path}
+                className="flex items-center gap-2 rounded px-2 py-1 text-xs hover:bg-[var(--surface-hover)] cursor-pointer"
+              >
+                <span
+                  className={cn(
+                    "font-mono text-[10px]",
+                    f.gitStatus === "modified" && "text-[var(--status-warning)]",
+                    f.gitStatus === "untracked" && "text-[var(--status-info)]",
+                    f.gitStatus === "added" && "text-[var(--status-success)]"
+                  )}
+                >
+                  {f.gitStatus === "modified" ? "M" : f.gitStatus === "untracked" ? "U" : "A"}
+                </span>
+                <span className="text-[var(--text-secondary)] truncate">{f.path}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Clean files */}
+      {cleanFiles.length > 0 && (
+        <div>
+          <h4 className="text-[11px] uppercase tracking-wide text-[var(--text-muted)] mb-1.5">
+            Tracked ({cleanFiles.length})
+          </h4>
+          <div className="space-y-0.5 max-h-32 overflow-y-auto">
+            {cleanFiles.map((f) => (
+              <div
+                key={f.path}
+                className="flex items-center gap-2 rounded px-2 py-1 text-xs text-[var(--text-muted)]"
+              >
+                <span className="font-mono text-[10px] w-3 shrink-0">·</span>
+                <span className="truncate">{f.path}</span>
+              </div>
+            ))}
           </div>
         </div>
-      </div>
-      <div>
-        <textarea
-          placeholder="Commit message"
-          rows={3}
-          className="w-full rounded border border-[var(--border-subtle)] bg-[var(--surface-sunken)] px-2 py-1.5 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)] resize-none"
-        />
-      </div>
+      )}
+
+      <CommitToGithubModal open={commitModalOpen} onClose={() => setCommitModalOpen(false)} />
     </div>
   );
 }

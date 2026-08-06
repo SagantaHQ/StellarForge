@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { useProfileStore } from "@/stores/profile-store";
 import {
   validateSorobanProject,
   formatValidationResult,
@@ -350,26 +351,119 @@ function GithubTab({
   error: string | null;
   setError: (e: string | null) => void;
 }) {
-  const [repoUrl, setRepoUrl] = useState("");
+  const [mode, setMode] = useState<"connected" | "url">("connected");
+  const [repos, setRepos] = useState<GitHubRepoInfo[]>([]);
+  const [loadingRepos, setLoadingRepos] = useState(false);
+  const [selectedRepo, setSelectedRepo] = useState<GitHubRepoInfo | null>(null);
+  const [repoSearch, setRepoSearch] = useState("");
   const [branch, setBranch] = useState("");
+  const [repoUrl, setRepoUrl] = useState("");
   const [loading, setLoading] = useState(false);
 
-  async function handleClone() {
+  const githubConnected = useProfileStore((s) => s.githubConnected);
+  const githubUsername = useProfileStore((s) => s.githubUsername);
+  const profile = useProfileStore((s) => s.profile);
+  const syncGithubStatus = useProfileStore((s) => s.syncGithubStatus);
+
+  // Listen for OAuth callback redirect (URL params ?github_connected=1)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    const connected = url.searchParams.get("github_connected");
+    const githubError = url.searchParams.get("github_error");
+    if (connected || githubError) {
+      // Clean the URL
+      url.searchParams.delete("github_connected");
+      url.searchParams.delete("github_username");
+      url.searchParams.delete("github_error");
+      window.history.replaceState({}, "", url.toString());
+      // Refresh GitHub status
+      if (connected) {
+        syncGithubStatus();
+      } else if (githubError) {
+        setError(`GitHub connection failed: ${githubError}`);
+      }
+    }
+  }, [syncGithubStatus, setError]);
+
+  // Auto-switch to URL mode if not connected
+  useEffect(() => {
+    if (!githubConnected && mode === "connected") {
+      setMode("url");
+    }
+    if (githubConnected && mode === "url" && !repoUrl) {
+      setMode("connected");
+    }
+  }, [githubConnected, mode, repoUrl]);
+
+  // Fetch repos when entering connected mode
+  useEffect(() => {
+    if (mode === "connected" && githubConnected && profile?.address && repos.length === 0) {
+      fetchRepos();
+    }
+  }, [mode, githubConnected, profile?.address]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function fetchRepos() {
+    if (!profile?.address) return;
+    setLoadingRepos(true);
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/github/repos?walletAddress=${encodeURIComponent(profile.address)}`
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        if (data.needsConnect) {
+          setMode("url");
+        }
+        setError(data.error || data.detail || "Failed to fetch repos");
+        setRepos([]);
+      } else {
+        setRepos(data.repos || []);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to fetch repos");
+      setRepos([]);
+    } finally {
+      setLoadingRepos(false);
+    }
+  }
+
+  function handleConnectGithub() {
+    if (!profile?.address) {
+      setError("You must be logged in to connect GitHub.");
+      return;
+    }
+    // Redirect to the OAuth initiation endpoint
+    window.location.href = `/api/auth/github?walletAddress=${encodeURIComponent(profile.address)}`;
+  }
+
+  async function handleCloneSelectedRepo() {
+    if (!selectedRepo) return;
+    await cloneRepo(
+      selectedRepo.html_url,
+      branch.trim() || selectedRepo.default_branch,
+      selectedRepo.name
+    );
+  }
+
+  async function handleCloneUrl() {
     const trimmedUrl = repoUrl.trim();
     if (!trimmedUrl) return;
+    await cloneRepo(trimmedUrl, branch.trim() || undefined, undefined);
+  }
 
+  async function cloneRepo(url: string, branch: string | undefined, name: string | undefined) {
     setLoading(true);
     setError(null);
-    setStatus("Cloning repository…");
+    setStatus("Cloning repository (shallow clone)…");
     setFiles([]);
 
     try {
-      // Get the user's server ID
       let ownerId: string | null = null;
-      const profileState = (window as unknown as { __profileStore?: { profile: { address: string } | null } }).__profileStore;
-      if (profileState?.profile?.address) {
+      if (profile?.address) {
         try {
-          const res = await fetch(`/api/auth/session?address=${encodeURIComponent(profileState.profile.address)}`);
+          const res = await fetch(`/api/auth/session?address=${encodeURIComponent(profile.address)}`);
           if (res.ok) {
             const data = await res.json();
             if (data?.loggedIn && data?.user?.id) ownerId = data.user.id;
@@ -386,21 +480,18 @@ function GithubTab({
         return;
       }
 
-      setStatus("Cloning repository (shallow clone)…");
-
       const res = await fetch("/api/projects/import-git", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          repoUrl: trimmedUrl,
-          branch: branch.trim() || undefined,
+          repoUrl: url,
+          branch,
           ownerId,
-          projectName: projectName.trim() || undefined,
+          projectName: projectName.trim() || name,
         }),
       });
 
       const data = await res.json();
-
       if (!res.ok) {
         setError(data.error || data.detail || `HTTP ${res.status}`);
         setLoading(false);
@@ -409,8 +500,6 @@ function GithubTab({
       }
 
       setStatus("Fetching imported files…");
-
-      // Fetch the created project's files from the server
       const fileRes = await fetch(`/api/projects/${data.project.id}`);
       if (!fileRes.ok) {
         setError("Repository cloned but file fetch failed. It will appear after sync.");
@@ -438,52 +527,240 @@ function GithubTab({
     }
   }
 
+  const filteredRepos = repos.filter((r) => {
+    if (!repoSearch.trim()) return true;
+    const q = repoSearch.toLowerCase();
+    return (
+      r.full_name.toLowerCase().includes(q) ||
+      (r.description ?? "").toLowerCase().includes(q) ||
+      (r.language ?? "").toLowerCase().includes(q)
+    );
+  });
+
   return (
     <div className="space-y-4">
-      <div>
-        <label className="text-[11px] font-medium uppercase tracking-wide text-[var(--text-muted)] mb-1.5 block">
-          Repository URL
-        </label>
-        <div className="flex items-center gap-2 rounded border border-[var(--border-subtle)] bg-[var(--surface-sunken)] px-3 py-1.5">
-          <Github size={13} strokeWidth={1.75} className="text-[var(--text-muted)] shrink-0" />
-          <input
-            value={repoUrl}
-            onChange={(e) => setRepoUrl(e.target.value)}
-            placeholder="https://github.com/stellar/soroban-examples"
-            className="flex-1 bg-transparent text-[13px] font-mono text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)]"
-            autoFocus
-          />
-        </div>
-        <p className="mt-1 text-[10px] text-[var(--text-muted)]">
-          HTTPS or SSH URL. A shallow clone (depth 1) is performed server-side.
-        </p>
-      </div>
-
-      <div>
-        <label className="text-[11px] font-medium uppercase tracking-wide text-[var(--text-muted)] mb-1.5 block">
-          Branch <span className="text-[var(--text-muted)] normal-case">(optional)</span>
-        </label>
-        <input
-          value={branch}
-          onChange={(e) => setBranch(e.target.value)}
-          placeholder="main"
-          className="w-full rounded border border-[var(--border-subtle)] bg-[var(--surface-sunken)] px-3 py-1.5 text-[13px] font-mono text-[var(--text-primary)] outline-none focus:border-[var(--accent)] placeholder:text-[var(--text-muted)]"
+      {/* Mode toggle: Connected (browse repos) vs URL (manual entry) */}
+      <div className="flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--surface-sunken)] p-1">
+        <ModeTab
+          active={mode === "connected"}
+          onClick={() => setMode("connected")}
+          disabled={!githubConnected}
+          icon={Github}
+          label={githubConnected ? `Connected as ${githubUsername}` : "Not connected"}
+        />
+        <ModeTab
+          active={mode === "url"}
+          onClick={() => setMode("url")}
+          icon={GitBranch}
+          label="Public URL"
         />
       </div>
 
-      <Button
-        size="sm"
-        onClick={handleClone}
-        disabled={!repoUrl.trim() || loading}
-        className="gap-1.5 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)] disabled:opacity-50"
-      >
-        {loading ? (
-          <Loader2 size={13} strokeWidth={1.75} className="animate-spin" />
-        ) : (
-          <GitBranch size={13} strokeWidth={1.75} />
-        )}
-        Clone repository
-      </Button>
+      {/* Connected mode — repo browser */}
+      {mode === "connected" && (
+        <>
+          {!githubConnected ? (
+            <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-sunken)] p-6 text-center">
+              <Github size={28} strokeWidth={1.5} className="mx-auto mb-3 text-[var(--text-muted)]" />
+              <h3 className="text-[13px] font-medium text-[var(--text-primary)] mb-1">
+                Connect your GitHub account
+              </h3>
+              <p className="text-[11px] text-[var(--text-muted)] mb-4 max-w-xs mx-auto leading-relaxed">
+                Browse and import your repositories directly. Also enables
+                committing changes back to GitHub from the IDE.
+              </p>
+              <Button
+                size="sm"
+                onClick={handleConnectGithub}
+                className="gap-1.5 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)]"
+              >
+                <Github size={13} strokeWidth={1.75} />
+                Connect GitHub
+              </Button>
+            </div>
+          ) : (
+            <>
+              {/* Repo search */}
+              <div className="flex items-center gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--surface-sunken)] px-3 py-1.5">
+                <Github size={13} strokeWidth={1.75} className="text-[var(--text-muted)] shrink-0" />
+                <input
+                  value={repoSearch}
+                  onChange={(e) => setRepoSearch(e.target.value)}
+                  placeholder="Search your repos…"
+                  className="flex-1 bg-transparent text-[13px] text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)]"
+                />
+                <button
+                  onClick={fetchRepos}
+                  className="text-[10px] text-[var(--text-muted)] hover:text-[var(--text-primary)] shrink-0"
+                  title="Refresh"
+                >
+                  ↻
+                </button>
+              </div>
+
+              {/* Repo list */}
+              <div className="max-h-64 overflow-y-auto rounded-md border border-[var(--border-subtle)] divide-y divide-[var(--border-subtle)]">
+                {loadingRepos && (
+                  <div className="flex items-center justify-center gap-2 py-8 text-[11px] text-[var(--text-muted)]">
+                    <Loader2 size={13} strokeWidth={1.75} className="animate-spin" />
+                    Loading repositories…
+                  </div>
+                )}
+                {!loadingRepos && filteredRepos.length === 0 && (
+                  <div className="py-8 text-center text-[11px] text-[var(--text-muted)]">
+                    {repos.length === 0 ? "No repositories found." : `No repos match "${repoSearch}"`}
+                  </div>
+                )}
+                {!loadingRepos &&
+                  filteredRepos.slice(0, 50).map((repo) => (
+                    <button
+                      key={repo.id}
+                      onClick={() => setSelectedRepo(repo)}
+                      className={cn(
+                        "flex w-full items-center gap-2.5 px-3 py-2 text-left transition-colors",
+                        selectedRepo?.id === repo.id
+                          ? "bg-[var(--accent-subtle)]"
+                          : "hover:bg-[var(--surface-hover)]"
+                      )}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[12px] font-medium text-[var(--text-primary)] truncate">
+                            {repo.full_name}
+                          </span>
+                          {repo.private && (
+                            <span className="rounded bg-[var(--status-warning)]/20 px-1 py-0 text-[9px] uppercase tracking-wide text-[var(--status-warning)] shrink-0">
+                              Private
+                            </span>
+                          )}
+                          {repo.fork && (
+                            <span className="rounded bg-[var(--surface-raised)] px-1 py-0 text-[9px] uppercase tracking-wide text-[var(--text-muted)] shrink-0">
+                              Fork
+                            </span>
+                          )}
+                        </div>
+                        {repo.description && (
+                          <p className="text-[10px] text-[var(--text-muted)] truncate mt-0.5">
+                            {repo.description}
+                          </p>
+                        )}
+                        <div className="flex items-center gap-2 mt-0.5 text-[10px] text-[var(--text-muted)]">
+                          {repo.language && <span>{repo.language}</span>}
+                          <span>★ {repo.stargazers_count}</span>
+                          <span>{repo.default_branch}</span>
+                        </div>
+                      </div>
+                      {selectedRepo?.id === repo.id && (
+                        <Check size={14} strokeWidth={2} className="text-[var(--accent)] shrink-0" />
+                      )}
+                    </button>
+                  ))}
+              </div>
+
+              {/* Selected repo details + branch input */}
+              {selectedRepo && (
+                <div className="rounded-md border border-[var(--accent)]/30 bg-[color-mix(in_srgb,var(--accent)_5%,transparent)] p-3 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Github size={13} strokeWidth={1.75} className="text-[var(--accent)] shrink-0" />
+                    <span className="text-[12px] font-mono text-[var(--text-primary)]">
+                      {selectedRepo.full_name}
+                    </span>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-medium uppercase tracking-wide text-[var(--text-muted)] mb-1 block">
+                      Branch <span className="normal-case">(optional)</span>
+                    </label>
+                    <input
+                      value={branch}
+                      onChange={(e) => setBranch(e.target.value)}
+                      placeholder={selectedRepo.default_branch}
+                      className="w-full rounded border border-[var(--border-subtle)] bg-[var(--surface-sunken)] px-2 py-1 text-[12px] font-mono text-[var(--text-primary)] outline-none focus:border-[var(--accent)] placeholder:text-[var(--text-muted)]"
+                    />
+                  </div>
+                  <Button
+                    size="sm"
+                    onClick={handleCloneSelectedRepo}
+                    disabled={loading}
+                    className="gap-1.5 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)] disabled:opacity-50"
+                  >
+                    {loading ? (
+                      <Loader2 size={13} strokeWidth={1.75} className="animate-spin" />
+                    ) : (
+                      <GitBranch size={13} strokeWidth={1.75} />
+                    )}
+                    Clone {selectedRepo.name}
+                  </Button>
+                </div>
+              )}
+            </>
+          )}
+        </>
+      )}
+
+      {/* URL mode — manual repo URL entry */}
+      {mode === "url" && (
+        <>
+          {!githubConnected && (
+            <div className="flex items-center gap-2 rounded-md border border-[var(--accent)]/30 bg-[color-mix(in_srgb,var(--accent)_5%,transparent)] px-3 py-2 text-[11px] text-[var(--text-secondary)]">
+              <Github size={12} strokeWidth={1.75} className="text-[var(--accent)] shrink-0" />
+              <span>
+                For private repos,{" "}
+                <button
+                  onClick={handleConnectGithub}
+                  className="text-[var(--accent)] hover:underline font-medium"
+                >
+                  connect your GitHub account
+                </button>
+                .
+              </span>
+            </div>
+          )}
+          <div>
+            <label className="text-[11px] font-medium uppercase tracking-wide text-[var(--text-muted)] mb-1.5 block">
+              Repository URL
+            </label>
+            <div className="flex items-center gap-2 rounded border border-[var(--border-subtle)] bg-[var(--surface-sunken)] px-3 py-1.5">
+              <Github size={13} strokeWidth={1.75} className="text-[var(--text-muted)] shrink-0" />
+              <input
+                value={repoUrl}
+                onChange={(e) => setRepoUrl(e.target.value)}
+                placeholder="https://github.com/stellar/soroban-examples"
+                className="flex-1 bg-transparent text-[13px] font-mono text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)]"
+                autoFocus
+              />
+            </div>
+            <p className="mt-1 text-[10px] text-[var(--text-muted)]">
+              HTTPS or SSH URL. A shallow clone (depth 1) is performed server-side.
+            </p>
+          </div>
+
+          <div>
+            <label className="text-[11px] font-medium uppercase tracking-wide text-[var(--text-muted)] mb-1.5 block">
+              Branch <span className="text-[var(--text-muted)] normal-case">(optional)</span>
+            </label>
+            <input
+              value={branch}
+              onChange={(e) => setBranch(e.target.value)}
+              placeholder="main"
+              className="w-full rounded border border-[var(--border-subtle)] bg-[var(--surface-sunken)] px-3 py-1.5 text-[13px] font-mono text-[var(--text-primary)] outline-none focus:border-[var(--accent)] placeholder:text-[var(--text-muted)]"
+            />
+          </div>
+
+          <Button
+            size="sm"
+            onClick={handleCloneUrl}
+            disabled={!repoUrl.trim() || loading}
+            className="gap-1.5 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)] disabled:opacity-50"
+          >
+            {loading ? (
+              <Loader2 size={13} strokeWidth={1.75} className="animate-spin" />
+            ) : (
+              <GitBranch size={13} strokeWidth={1.75} />
+            )}
+            Clone repository
+          </Button>
+        </>
+      )}
 
       {status && (
         <div className="flex items-center gap-2 rounded-md border border-[var(--accent)]/30 bg-[color-mix(in_srgb,var(--accent)_8%,transparent)] p-2.5 text-[11px] text-[var(--text-secondary)]">
@@ -499,6 +776,56 @@ function GithubTab({
         </div>
       )}
     </div>
+  );
+}
+
+// ============================================================
+// GitHub types + ModeTab helper
+// ============================================================
+
+interface GitHubRepoInfo {
+  id: number;
+  name: string;
+  full_name: string;
+  private: boolean;
+  description: string | null;
+  default_branch: string;
+  updated_at: string;
+  language: string | null;
+  html_url: string;
+  stargazers_count: number;
+  fork: boolean;
+  owner: { login: string; avatar_url: string };
+}
+
+function ModeTab({
+  active,
+  onClick,
+  icon: Icon,
+  label,
+  disabled,
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon: typeof Github;
+  label: string;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className={cn(
+        "flex flex-1 items-center justify-center gap-1.5 rounded px-2 py-1.5 text-[11px] font-medium transition-colors",
+        active
+          ? "bg-[var(--surface-raised)] text-[var(--text-primary)]"
+          : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]",
+        disabled && "opacity-50 cursor-not-allowed"
+      )}
+    >
+      <Icon size={12} strokeWidth={1.75} />
+      <span className="truncate">{label}</span>
+    </button>
   );
 }
 

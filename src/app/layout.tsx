@@ -3,7 +3,6 @@ import { Geist, Geist_Mono, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
 import { ThemeProvider, themeInitScript } from "@/components/ide/theme-provider";
-import { AppKitProvider } from "@/lib/wallet/appkit-provider";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -80,9 +79,7 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} ${jetbrainsMono.variable} antialiased`}
       >
-        <ThemeProvider>
-          <AppKitProvider>{children}</AppKitProvider>
-        </ThemeProvider>
+        <ThemeProvider>{children}</ThemeProvider>
         <Toaster />
       </body>
     </html>

@@ -6,14 +6,7 @@ const nextConfig: NextConfig = {
     ignoreBuildErrors: true,
   },
   reactStrictMode: false,
-  // Allow Node.js built-ins in API routes (child_process, fs, path)
-  // Prisma must be external — Turbopack can't bundle its native client
-  serverExternalPackages: ["@prisma/client", "@node-rs/argon2", "@node-rs/bcrypt", "@saganta/stellar-appkit-siws-verify", "@saganta/stellar-appkit", "@stellar/stellar-sdk", "@stellar/stellar-base", "tweetnacl"],
-  // SSE streaming needs this
-  experimental: {
-    // Allow longer-running API routes for cargo/stellar builds
-    // (up to 5 min for large contracts)
-  },
+  serverExternalPackages: ["@prisma/client", "@node-rs/argon2", "@node-rs/bcrypt", "@saganta/stellar-appkit-siws-verify", "@stellar/stellar-sdk", "@stellar/stellar-base", "tweetnacl"],
 };
 
 export default nextConfig;

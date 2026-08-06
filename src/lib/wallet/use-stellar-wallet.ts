@@ -218,17 +218,23 @@ export function useStellarWallet() {
 
   /** Open the <saganta-appkit-modal> wallet picker */
   const openWalletModal = useCallback(async () => {
-    await getAppKit(); // ensures the modal is mounted
+    await getAppKit(); // ensures the modal is mounted with client attached
     if (typeof document !== "undefined") {
       const modal = document.querySelector<HTMLElement & { open: () => void }>("saganta-appkit-modal");
       modal?.open?.();
     }
   }, [getAppKit]);
 
+  /** Get the appkit instance (ensures modal is mounted with client) */
+  const getAppKitInstance = useCallback(async () => {
+    return getAppKit();
+  }, [getAppKit]);
+
   return {
     ...state,
     connect,
     openWalletModal,
+    getAppKitInstance,
     signInWithStellar,
     verifyAndSaveProfile,
     disconnect,

@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { useAppKit, useConnect, useSession, useSignIn } from "@saganta/stellar-appkit/react";
+import { useStellarWallet } from "@/lib/wallet/use-stellar-wallet";
 
 /**
  * §11 — Profile modal using @saganta/stellar-appkit/react hooks.
@@ -61,11 +61,8 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile }: Pro
   const [signError, setSignError] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // React hooks from stellar-appkit
-  const client = useAppKit();
-  const { connect: connectWallet, isConnecting: isWalletConnecting } = useConnect();
-  const session = useSession();
-  const { sign: signIn } = useSignIn();
+  // Wallet hook — creates StellarAppKit instance, mounts modal, provides connect/signIn
+  const wallet = useStellarWallet();
 
   // When opening with an existing profile, pre-fill and skip to profile step
   useEffect(() => {
@@ -91,14 +88,14 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile }: Pro
         setStep("profile");
       }
     }
-    // Also check if session already exists (from useSession hook)
-    if (session?.address && !address) {
-      setAddress(session.address);
+    // Also check if wallet already connected
+    if (wallet.address && !address) {
+      setAddress(wallet.address);
       setStep("profile");
     }
     window.addEventListener("sc-connect", handleConnectEvent as EventListener);
     return () => window.removeEventListener("sc-connect", handleConnectEvent as EventListener);
-  }, [open, session, address]);
+  }, [open, wallet.address, address]);
 
   // Reset on close
   useEffect(() => {
@@ -155,15 +152,15 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile }: Pro
     setConnecting(true);
     setWalletError(null);
     try {
-      const result = await connectWallet(walletId);
-      setAddress(result.address);
+      const addr = await wallet.connect(walletId);
+      setAddress(addr);
       setStep("profile");
     } catch (err) {
       setWalletError(err instanceof Error ? err.message : String(err));
     } finally {
       setConnecting(false);
     }
-  }, [connectWallet]);
+  }, [wallet]);
 
   if (!open) return null;
 
@@ -178,11 +175,11 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile }: Pro
       if (!nonceRes.ok) throw new Error("Failed to fetch nonce");
       const { nonce } = await nonceRes.json();
 
-      // 2. Sign SIWS message using the React hook
-      const siwsResult = await signIn({
-        statement: `Setting username "${username}" on Soroban.Build`,
-        nonce,
-      });
+      // 2. Sign SIWS message using the wallet hook
+      const siwsResult = await wallet.signInWithStellar(
+        address,
+        `Setting username "${username}" on Soroban.Build`
+      );
 
       // 3. Send to server for verification + save
       const res = await fetch("/api/auth/verify-siws", {
@@ -275,10 +272,10 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile }: Pro
                     setConnecting(false);
                   }
                 }}
-                disabled={connecting || isWalletConnecting}
+                disabled={connecting || wallet.connecting}
                 className="w-full gap-2 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)]"
               >
-                {connecting || isWalletConnecting ? (
+                {connecting || wallet.connecting ? (
                   <Loader2 size={14} strokeWidth={1.75} className="animate-spin" />
                 ) : (
                   <Wallet size={14} strokeWidth={1.75} />
@@ -301,7 +298,7 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile }: Pro
                   <button
                     key={w.id}
                     onClick={() => handleConnectWallet(w.id)}
-                    disabled={connecting || isWalletConnecting}
+                    disabled={connecting || wallet.connecting}
                     className="flex w-full items-center gap-3 rounded-md border border-[var(--border-subtle)] bg-[var(--surface-sunken)] p-2.5 text-left transition-colors hover:border-[var(--accent)] disabled:opacity-50"
                   >
                     <div className="flex h-8 w-8 items-center justify-center rounded-md" style={{ backgroundColor: w.color }}>

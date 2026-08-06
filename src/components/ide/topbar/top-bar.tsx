@@ -22,7 +22,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import type { UserProfile } from "@/stores/profile-store";
 import { useCollabStore } from "@/stores/collab-store";
-import { useAppKit, useSession } from "@saganta/stellar-appkit/react";
+import { useStellarWallet } from "@/lib/wallet/use-stellar-wallet";
 import Avatar from "boring-avatars";
 
 interface TopBarProps {
@@ -347,44 +347,22 @@ export function TopBar({
  * StellarAppKit client instance from the React provider context.
  */
 function AppKitModalMount() {
-  const client = useAppKit();
+  const wallet = useStellarWallet();
   const mountedRef = useRef(false);
 
   useEffect(() => {
-    if (mountedRef.current || !client) return;
+    if (mountedRef.current) return;
     mountedRef.current = true;
 
     (async () => {
       try {
-        await import("@saganta/stellar-appkit/ui-web");
-
-        if (typeof document !== "undefined") {
-          let modal = document.querySelector<HTMLElement & { client: unknown }>("saganta-appkit-modal");
-          if (!modal) {
-            modal = document.createElement("saganta-appkit-modal") as HTMLElement & { client: unknown };
-            modal.setAttribute("theme", "dark");
-            modal.setAttribute("mode", "modal");
-            modal.setAttribute("title", "Soroban.Build");
-            modal.setAttribute("logo-src", "/icon.svg");
-            modal.style.setProperty("--sak-color-bg", "#0D0E11");
-            modal.style.setProperty("--sak-color-surface", "#131418");
-            modal.style.setProperty("--sak-color-surface-hover", "#202227");
-            modal.style.setProperty("--sak-color-border", "rgba(255,255,255,0.08)");
-            modal.style.setProperty("--sak-color-text", "#E6E7EA");
-            modal.style.setProperty("--sak-color-text-muted", "#6E7178");
-            modal.style.setProperty("--sak-color-accent", "#4F8C8C");
-            modal.style.setProperty("--sak-color-accent-text", "#FFFFFF");
-            modal.style.setProperty("--sak-color-danger", "#C97A7A");
-            modal.style.setProperty("--sak-overlay-color", "rgba(0,0,0,0.5)");
-            document.body.appendChild(modal);
-          }
-          modal.client = client;
-        }
+        // This creates the StellarAppKit instance AND mounts the modal
+        await wallet.getAppKitInstance();
       } catch {
         // Silently fail
       }
     })();
-  }, [client]);
+  }, [wallet]);
 
   return null;
 }

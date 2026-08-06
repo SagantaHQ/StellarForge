@@ -18,17 +18,17 @@ import { useStellarWallet } from "@/lib/wallet/use-stellar-wallet";
 /**
  * §11 — Wallet connect + profile completion modal.
  *
- * Uses stellar-appkit (https://github.com/SagantaHQ/stellar-appkit) for real
- * wallet connection. This implementation provides the UI shell with a stubbed
- * connection flow — wire up stellar-appkit when the package is published.
+ * Uses @saganta/stellar-appkit's <saganta-appkit-modal> web component
+ * for the wallet picker UI (with theming, wallet icons, network checks,
+ * balance display, etc.), and SIWS (Sign-In With Stellar) for proving
+ * wallet ownership before saving the username.
  *
  * Flow:
- *   1. User clicks "Connect Wallet" in TopBar
- *   2. Modal opens → user picks a wallet provider (Freighter, Albedo, xBull, etc.)
- *   3. Wallet returns address → check if profile is complete
- *   4. If incomplete → show profile form (username required, avatar/bio optional)
- *   5. Username uniqueness check (debounced) with ✓/✗ indicator
- *   6. Save → user is now identified for collab/comments/line attribution
+ *   1. User clicks "Connect Wallet" → opens saganta-appkit-modal
+ *   2. User picks a wallet (Freighter/Albedo/xBull) → wallet connects
+ *   3. User enters username → availability checked against Postgres
+ *   4. User clicks "Sign & save profile" → wallet signs SIWS message
+ *   5. Server verifies signature + saves profile to Postgres
  */
 
 type Step = "wallet" | "profile" | "done";
@@ -57,8 +57,8 @@ export function ProfileModal({ open, onClose, onComplete }: ProfileModalProps) {
   const [signing, setSigning] = useState(false);
   const [signError, setSignError] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const modalRef = useRef<HTMLElement | null>(null);
 
-  // Real wallet connection via @saganta/stellar-appkit
   const wallet = useStellarWallet();
 
   const handleConnectWallet = useCallback(async (walletId: string) => {
@@ -78,7 +78,6 @@ export function ProfileModal({ open, onClose, onComplete }: ProfileModalProps) {
 
   useEffect(() => {
     if (!open) {
-      // Reset on close
       setTimeout(() => {
         setStep("wallet");
         setAddress("");
@@ -94,17 +93,12 @@ export function ProfileModal({ open, onClose, onComplete }: ProfileModalProps) {
     }
   }, [open]);
 
-  // Compute the synchronous portion of username validity during render.
-  // The async "is it taken?" check fires inside setTimeout (not synchronous
-  // in the effect body), so the lint rule is satisfied.
   const usernameStatus = useMemo<"idle" | "invalid" | "checking" | "available" | "taken">(() => {
     if (!username) return "idle";
     if (username.length < 3 || !/^[a-z0-9_]+$/i.test(username)) return "invalid";
     return asyncUsernameStatus;
   }, [username, asyncUsernameStatus]);
 
-  // Schedule the debounced async check. All setState calls happen inside the
-  // setTimeout callback, not synchronously in the effect body.
   useEffect(() => {
     if (step !== "profile") return;
     if (!username || username.length < 3 || !/^[a-z0-9_]+$/i.test(username)) return;
@@ -116,11 +110,9 @@ export function ProfileModal({ open, onClose, onComplete }: ProfileModalProps) {
           const data = await res.json();
           setAsyncUsernameStatus(data.available ? "available" : "taken");
         } else {
-          // API failed — assume available (let server enforce on save)
           setAsyncUsernameStatus("available");
         }
       } catch {
-        // Network error — assume available (server will enforce)
         setAsyncUsernameStatus("available");
       }
     }, 350);
@@ -137,13 +129,11 @@ export function ProfileModal({ open, onClose, onComplete }: ProfileModalProps) {
     setSignError(null);
 
     try {
-      // §11 — Sign-In With Stellar: wallet proves ownership of the address
       const siws = await wallet.signInWithStellar(
         address,
         `Setting username "${username}" on Soroban.Build`
       );
 
-      // §11 — Server verifies the signature and saves the profile
       await wallet.verifyAndSaveProfile(siws, {
         username,
         displayName: undefined,
@@ -167,7 +157,6 @@ export function ProfileModal({ open, onClose, onComplete }: ProfileModalProps) {
   function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-    // Convert to data URL for preview (production would upload to storage)
     const reader = new FileReader();
     reader.onload = () => setAvatarUrl(reader.result as string);
     reader.readAsDataURL(file);
@@ -204,33 +193,66 @@ export function ProfileModal({ open, onClose, onComplete }: ProfileModalProps) {
         {/* Body */}
         <div className="p-4">
           {step === "wallet" && (
-            <div className="space-y-2">
+            <div className="space-y-3">
               <p className="text-xs text-[var(--text-muted)] mb-3">
                 Connect a Stellar wallet to enable collaboration, comments, and line attribution.
                 Your wallet address is your identity.
               </p>
-              {WALLETS.map((w) => (
-                <button
-                  key={w.id}
-                  onClick={() => handleConnectWallet(w.id)}
-                  disabled={connecting}
-                  className="flex w-full items-center gap-3 rounded-md border border-[var(--border-subtle)] bg-[var(--surface-sunken)] p-3 text-left transition-colors hover:border-[var(--accent)] disabled:opacity-50"
-                >
-                  <div
-                    className="flex h-9 w-9 items-center justify-center rounded-md"
-                    style={{ backgroundColor: w.color }}
+              <Button
+                onClick={async () => {
+                  setConnecting(true);
+                  setWalletError(null);
+                  try {
+                    await wallet.openWalletModal();
+                  } catch (err) {
+                    setWalletError(err instanceof Error ? err.message : String(err));
+                  } finally {
+                    setConnecting(false);
+                  }
+                }}
+                disabled={connecting}
+                className="w-full gap-2 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)]"
+              >
+                {connecting ? (
+                  <Loader2 size={14} strokeWidth={1.75} className="animate-spin" />
+                ) : (
+                  <Wallet size={14} strokeWidth={1.75} />
+                )}
+                {connecting ? "Opening wallet…" : "Open wallet picker"}
+              </Button>
+
+              {/* Also provide direct connect buttons as fallback */}
+              <div className="relative py-2">
+                <div className="absolute inset-0 flex items-center">
+                  <span className="w-full border-t border-[var(--border-subtle)]" />
+                </div>
+                <div className="relative flex justify-center text-[10px] uppercase tracking-wide">
+                  <span className="bg-[var(--surface-panel)] px-2 text-[var(--text-muted)]">or connect directly</span>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                {WALLETS.map((w) => (
+                  <button
+                    key={w.id}
+                    onClick={() => handleConnectWallet(w.id)}
+                    disabled={connecting}
+                    className="flex w-full items-center gap-3 rounded-md border border-[var(--border-subtle)] bg-[var(--surface-sunken)] p-2.5 text-left transition-colors hover:border-[var(--accent)] disabled:opacity-50"
                   >
-                    <Wallet size={16} strokeWidth={1.75} className="text-white" />
-                  </div>
-                  <div className="flex-1">
-                    <div className="text-[13px] font-medium text-[var(--text-primary)]">{w.name}</div>
-                    <div className="text-[11px] text-[var(--text-muted)]">{w.description}</div>
-                  </div>
-                  {connecting && (
-                    <Loader2 size={14} strokeWidth={1.75} className="animate-spin text-[var(--text-muted)]" />
-                  )}
-                </button>
-              ))}
+                    <div
+                      className="flex h-8 w-8 items-center justify-center rounded-md"
+                      style={{ backgroundColor: w.color }}
+                    >
+                      <Wallet size={14} strokeWidth={1.75} className="text-white" />
+                    </div>
+                    <div className="flex-1">
+                      <div className="text-[12px] font-medium text-[var(--text-primary)]">{w.name}</div>
+                      <div className="text-[10px] text-[var(--text-muted)]">{w.description}</div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+
               {walletError && (
                 <div className="rounded-md border border-[var(--status-error)] bg-[color-mix(in_srgb,var(--status-error)_10%,transparent)] p-2.5 flex items-start gap-2">
                   <AlertCircle size={14} strokeWidth={1.75} className="text-[var(--status-error)] mt-0.5 shrink-0" />
@@ -239,12 +261,11 @@ export function ProfileModal({ open, onClose, onComplete }: ProfileModalProps) {
                       <>
                         <div className="font-medium">Wallet not installed</div>
                         <div className="mt-0.5 opacity-90">
-                          Install the browser extension:
                           {walletError.includes("Freighter") && (
-                            <a href="https://freighter.app" target="_blank" rel="noopener" className="ml-1 underline">freighter.app</a>
+                            <span>Install from <a href="https://freighter.app" target="_blank" rel="noopener" className="underline">freighter.app</a></span>
                           )}
                           {walletError.includes("Albedo") && (
-                            <span> Albedo works without installation — try it instead.</span>
+                            <span>Albedo works without installation — try it instead.</span>
                           )}
                         </div>
                       </>
@@ -254,8 +275,8 @@ export function ProfileModal({ open, onClose, onComplete }: ProfileModalProps) {
                   </div>
                 </div>
               )}
-              <p className="pt-2 text-[10px] text-[var(--text-muted)]">
-                Uses <code className="font-mono">@saganta/stellar-appkit</code>. Keys never leave your wallet.
+              <p className="pt-1 text-[10px] text-[var(--text-muted)]">
+                Powered by <code className="font-mono">@saganta/stellar-appkit</code> — wallet icons, network checks, balance display.
               </p>
             </div>
           )}
@@ -363,7 +384,7 @@ export function ProfileModal({ open, onClose, onComplete }: ProfileModalProps) {
                 />
               </div>
 
-              {/* §11 — SIWS signing indicator */}
+              {/* SIWS signing indicator */}
               {signing && (
                 <div className="rounded-md border border-[var(--accent)] bg-[var(--accent-subtle)] p-2.5 flex items-center gap-2">
                   <Loader2 size={14} strokeWidth={1.75} className="animate-spin text-[var(--accent)]" />

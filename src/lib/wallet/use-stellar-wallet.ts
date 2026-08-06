@@ -42,7 +42,7 @@ export function useStellarWallet() {
     if (appkitRef.current) return appkitRef.current;
 
     const { StellarAppKit, createFreighterConnector, createAlbedoConnector, createXBullConnector } = await import("@saganta/stellar-appkit");
-    // Import the web component (registers <saganta-appkit-modal>)
+    // Import the web component — registers <saganta-appkit-modal> custom element
     await import("@saganta/stellar-appkit/ui-web");
 
     const appkit = new StellarAppKit({
@@ -56,6 +56,33 @@ export function useStellarWallet() {
     });
 
     appkitRef.current = appkit;
+
+    // Mount the <saganta-appkit-modal> web component with our theme tokens
+    if (typeof document !== "undefined") {
+      let modal = document.querySelector<HTMLElement>("saganta-appkit-modal");
+      if (!modal) {
+        modal = document.createElement("saganta-appkit-modal") as HTMLElement;
+        modal.setAttribute("theme", "dark");
+        modal.setAttribute("mode", "modal");
+        modal.setAttribute("title", "Soroban.Build");
+        modal.setAttribute("logo-src", "/icon.svg");
+        // Override the modal's default theme tokens with our app's design system
+        modal.style.setProperty("--sak-color-bg", "#0D0E11");
+        modal.style.setProperty("--sak-color-surface", "#131418");
+        modal.style.setProperty("--sak-color-surface-hover", "#202227");
+        modal.style.setProperty("--sak-color-border", "rgba(255,255,255,0.08)");
+        modal.style.setProperty("--sak-color-text", "#E6E7EA");
+        modal.style.setProperty("--sak-color-text-muted", "#6E7178");
+        modal.style.setProperty("--sak-color-accent", "#4F8C8C");
+        modal.style.setProperty("--sak-color-accent-text", "#FFFFFF");
+        modal.style.setProperty("--sak-color-danger", "#C97A7A");
+        modal.style.setProperty("--sak-overlay-color", "rgba(0,0,0,0.5)");
+        document.body.appendChild(modal);
+      }
+      // Attach the client instance to the modal
+      (modal as unknown as { client: unknown }).client = appkit;
+    }
+
     return appkit;
   }, []);
 
@@ -189,17 +216,21 @@ export function useStellarWallet() {
     });
   }, []);
 
-  /** Get the appkit instance (for attaching the modal web component) */
-  const getAppKitInstance = useCallback(async () => {
-    return getAppKit();
+  /** Open the <saganta-appkit-modal> wallet picker */
+  const openWalletModal = useCallback(async () => {
+    await getAppKit(); // ensures the modal is mounted
+    if (typeof document !== "undefined") {
+      const modal = document.querySelector<HTMLElement & { open: () => void }>("saganta-appkit-modal");
+      modal?.open?.();
+    }
   }, [getAppKit]);
 
   return {
     ...state,
     connect,
+    openWalletModal,
     signInWithStellar,
     verifyAndSaveProfile,
     disconnect,
-    getAppKitInstance,
   };
 }

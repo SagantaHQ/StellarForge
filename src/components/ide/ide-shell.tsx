@@ -272,64 +272,63 @@ export function IdeShell() {
         }}
       />
 
-      {/* Desktop layout */}
+      {/* Desktop layout — ActivityBar + left panel + center + right panel
+          are always visible. The center area switches between the editor
+          (when a project is active) and the welcome page (when not). */}
       <div className="hidden md:flex flex-1 overflow-hidden">
-        {activeProject ? (
-          <>
-            <ActivityBar
-              active={activityView}
-              onChange={handleActivityChange}
+        <ActivityBar
+          active={activityView}
+          onChange={handleActivityChange}
+          onOpenSettings={() => setSettingsOpen(true)}
+        />
+
+        <PanelGroup direction="horizontal" className="flex-1">
+          {/* Left panel — explorer / search / git / etc */}
+          <Panel defaultSize={18} minSize={12} maxSize={30} className="bg-[var(--surface-panel)]">
+            <SidePanel view={activityView} onOpenSettings={() => setSettingsOpen(true)} />
+          </Panel>
+          <PanelResizeHandle className="w-px bg-[var(--border-subtle)] hover:bg-[var(--accent)] transition-colors" />
+
+          {/* Center — editor (when project open) or welcome page (when not) */}
+          <Panel defaultSize={58} minSize={30}>
+            {activeProject ? (
+              <PanelGroup direction="vertical">
+                <Panel defaultSize={70} minSize={20} className="bg-[var(--surface-app)]">
+                  <EditorArea fontSize={editorFontSize} />
+                </Panel>
+                <PanelResizeHandle className="h-px bg-[var(--border-subtle)] hover:bg-[var(--accent)] transition-colors" />
+                <Panel defaultSize={30} minSize={10} maxSize={70}>
+                  <BuildOutputPanel
+                    collapsed={terminalCollapsed}
+                    onToggleCollapse={() => setTerminalCollapsed((v) => !v)}
+                  />
+                </Panel>
+              </PanelGroup>
+            ) : (
+              <WelcomePage
+                onNewProject={() => setNewProjectOpen(true)}
+                onBrowseTemplates={() => setNewProjectOpen(true)}
+                onImportZip={() => setImportZipOpen(true)}
+                onImportGit={() => setImportGitOpen(true)}
+                onOpenProject={(id) => {
+                  projectsSwitch(id).catch(() => {});
+                }}
+                onDeleteProject={(project) => setDeleteProjectTarget(project)}
+              />
+            )}
+          </Panel>
+          <PanelResizeHandle className="w-px bg-[var(--border-subtle)] hover:bg-[var(--accent)] transition-colors" />
+
+          {/* Right panel — agent / compile / test / deploy / git */}
+          <Panel defaultSize={24} minSize={15} maxSize={40}>
+            <RightPanel
+              view={rightPanelView}
+              onChangeView={setRightPanelView}
               onOpenSettings={() => setSettingsOpen(true)}
+              network={network}
             />
-
-            <PanelGroup direction="horizontal" className="flex-1">
-              {/* Left panel — explorer / search / git / etc */}
-              <Panel defaultSize={18} minSize={12} maxSize={30} className="bg-[var(--surface-panel)]">
-                <SidePanel view={activityView} onOpenSettings={() => setSettingsOpen(true)} />
-              </Panel>
-              <PanelResizeHandle className="w-px bg-[var(--border-subtle)] hover:bg-[var(--accent)] transition-colors" />
-
-              {/* Center — editor + terminal */}
-              <Panel defaultSize={58} minSize={30}>
-                <PanelGroup direction="vertical">
-                  <Panel defaultSize={70} minSize={20} className="bg-[var(--surface-app)]">
-                    <EditorArea fontSize={editorFontSize} />
-                  </Panel>
-                  <PanelResizeHandle className="h-px bg-[var(--border-subtle)] hover:bg-[var(--accent)] transition-colors" />
-                  <Panel defaultSize={30} minSize={10} maxSize={70}>
-                    <BuildOutputPanel
-                      collapsed={terminalCollapsed}
-                      onToggleCollapse={() => setTerminalCollapsed((v) => !v)}
-                    />
-                  </Panel>
-                </PanelGroup>
-              </Panel>
-              <PanelResizeHandle className="w-px bg-[var(--border-subtle)] hover:bg-[var(--accent)] transition-colors" />
-
-              {/* Right panel — agent / compile / test / deploy / git */}
-              <Panel defaultSize={24} minSize={15} maxSize={40}>
-                <RightPanel
-                  view={rightPanelView}
-                  onChangeView={setRightPanelView}
-                  onOpenSettings={() => setSettingsOpen(true)}
-                  network={network}
-                />
-              </Panel>
-            </PanelGroup>
-          </>
-        ) : (
-          /* Welcome page — shown when no active project */
-          <WelcomePage
-            onNewProject={() => setNewProjectOpen(true)}
-            onBrowseTemplates={() => setNewProjectOpen(true)}
-            onImportZip={() => setImportZipOpen(true)}
-            onImportGit={() => setImportGitOpen(true)}
-            onOpenProject={(id) => {
-              projectsSwitch(id).catch(() => {});
-            }}
-            onDeleteProject={(project) => setDeleteProjectTarget(project)}
-          />
-        )}
+          </Panel>
+        </PanelGroup>
       </div>
 
       {/* Mobile layout */}

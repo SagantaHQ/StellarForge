@@ -294,6 +294,12 @@ export const useProjectsStore = create<ProjectsState>()(
           }));
           await metaSet("activeProjectId", id);
 
+          // Load the new project's files into the file-system store so the
+          // editor renders them immediately. Without this, the editor would
+          // show stale files from the previous project (or the old hello-world
+          // seed) because the file-system store's IDB cache isn't cleared.
+          await loadFilesIntoFileSystem(input.files);
+
           return meta;
         } finally {
           set({ busy: false });

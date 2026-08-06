@@ -7,7 +7,9 @@
       "cwd": "/home/z/my-project",
       "env": {
         "NODE_ENV": "development",
-        "NODE_OPTIONS": "--max-old-space-size=2048"
+        "NODE_OPTIONS": "--max-old-space-size=2048",
+        "DATABASE_URL": "postgresql://neondb_owner:npg_7AZB1JGmEbsD@ep-fragrant-water-ayoazbf2-pooler.c-5.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require",
+        "DIRECT_DATABASE_URL": "postgresql://neondb_owner:npg_7AZB1JGmEbsD@ep-fragrant-water-ayoazbf2-pooler.c-5.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
       },
       "autorestart": true,
       "maxRestarts": 20,

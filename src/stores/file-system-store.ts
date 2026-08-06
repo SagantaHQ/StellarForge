@@ -1,7 +1,7 @@
 "use client";
 
 import { create } from "zustand";
-import { getInitialFileTree, findFile, type TreeNode, type FileNode } from "@/lib/soroban/sample-project";
+import { findFile, type TreeNode, type FileNode } from "@/lib/soroban/sample-project";
 import { fileGetAll, fileSet, fileDelete, fileClearAll, metaGet, metaSet } from "@/lib/storage/idb";
 
 /**
@@ -160,15 +160,15 @@ function buildTreeFromFiles(files: { path: string; content: string; language: st
 }
 
 export const useFileSystemStore = create<FileSystemState>((set, get) => ({
-  tree: getInitialFileTree(),
-  activeFilePath: "src/lib.rs",
+  tree: [],
+  activeFilePath: null,
   hydrated: false,
 
   hydrate: async () => {
     try {
       const stored = await fileGetAll();
       if (stored.length > 0) {
-        // Rebuild tree from stored files
+        // Rebuild tree from stored files (cache of the last active project)
         const tree = buildTreeFromFiles(stored);
         const activePath = await metaGet<string>("activeFilePath");
         set({
@@ -177,15 +177,14 @@ export const useFileSystemStore = create<FileSystemState>((set, get) => ({
           hydrated: true,
         });
       } else {
-        // Seed from sample project
-        const initial = getInitialFileTree();
-        await persistAllFiles(initial);
-        await metaSet("activeFilePath", "src/lib.rs");
-        set({ tree: initial, activeFilePath: "src/lib.rs", hydrated: true });
+        // No cached files — start with an empty tree. The projects store
+        // will load the active project's files (if any) after hydrating.
+        // If there's no active project, the welcome page is shown.
+        set({ tree: [], activeFilePath: null, hydrated: true });
       }
     } catch {
-      // Fallback to sample project if IndexedDB fails
-      set({ hydrated: true });
+      // Fallback to empty tree if IndexedDB fails
+      set({ tree: [], activeFilePath: null, hydrated: true });
     }
   },
 

@@ -20,6 +20,9 @@ import { ProfileModal } from "./profile/profile-modal";
 import { ShareDialog } from "./collab/share-dialog";
 import { SnapshotPanel } from "./panels/snapshot-panel";
 import { DeleteProjectModal } from "./projects/delete-project-modal";
+import { ImportFromZipModal } from "./projects/import-from-zip-modal";
+import { ImportFromGitModal } from "./projects/import-from-git-modal";
+import { WelcomePage } from "./welcome/welcome-page";
 import { useThemeStore } from "@/stores/theme-store";
 import { useFileSystemStore } from "@/stores/file-system-store";
 import { useEditorTabsStore } from "@/stores/editor-tabs-store";
@@ -34,6 +37,25 @@ import { cn } from "@/lib/utils";
 
 type RightPanelView = "agent" | "compile" | "test" | "deploy" | "git";
 
+/**
+ * Resolve the server-side user ID from a wallet address.
+ * Returns null if not logged in or the session check fails — the project
+ * will be created local-only in that case.
+ */
+async function resolveOwnerId(walletAddress: string | null | undefined): Promise<string | null> {
+  if (!walletAddress) return null;
+  try {
+    const res = await fetch(`/api/auth/session?address=${encodeURIComponent(walletAddress)}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data?.loggedIn && data?.user?.id) return data.user.id;
+    }
+  } catch {
+    // Network issue — proceed with local-only project
+  }
+  return null;
+}
+
 export function IdeShell() {
   const [activityView, setActivityView] = useState<ActivityView>("explorer");
   const [rightPanelView, setRightPanelView] = useState<RightPanelView>("agent");
@@ -44,6 +66,8 @@ export function IdeShell() {
   const [profileOpen, setProfileOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [deleteProjectTarget, setDeleteProjectTarget] = useState<ProjectMeta | null>(null);
+  const [importZipOpen, setImportZipOpen] = useState(false);
+  const [importGitOpen, setImportGitOpen] = useState(false);
   const [mobileActivePanel, setMobileActivePanel] = useState<"files" | "editor" | "build" | "agent">("editor");
   const [network, setNetwork] = useState("testnet");
 
@@ -250,55 +274,86 @@ export function IdeShell() {
 
       {/* Desktop layout */}
       <div className="hidden md:flex flex-1 overflow-hidden">
-        <ActivityBar
-          active={activityView}
-          onChange={handleActivityChange}
-          onOpenSettings={() => setSettingsOpen(true)}
-        />
+        {activeProject ? (
+          <>
+            <ActivityBar
+              active={activityView}
+              onChange={handleActivityChange}
+              onOpenSettings={() => setSettingsOpen(true)}
+            />
 
-        <PanelGroup direction="horizontal" className="flex-1">
-          {/* Left panel — explorer / search / git / etc */}
-          <Panel defaultSize={18} minSize={12} maxSize={30} className="bg-[var(--surface-panel)]">
-            <SidePanel view={activityView} onOpenSettings={() => setSettingsOpen(true)} />
-          </Panel>
-          <PanelResizeHandle className="w-px bg-[var(--border-subtle)] hover:bg-[var(--accent)] transition-colors" />
-
-          {/* Center — editor + terminal */}
-          <Panel defaultSize={58} minSize={30}>
-            <PanelGroup direction="vertical">
-              <Panel defaultSize={70} minSize={20} className="bg-[var(--surface-app)]">
-                <EditorArea fontSize={editorFontSize} />
+            <PanelGroup direction="horizontal" className="flex-1">
+              {/* Left panel — explorer / search / git / etc */}
+              <Panel defaultSize={18} minSize={12} maxSize={30} className="bg-[var(--surface-panel)]">
+                <SidePanel view={activityView} onOpenSettings={() => setSettingsOpen(true)} />
               </Panel>
-              <PanelResizeHandle className="h-px bg-[var(--border-subtle)] hover:bg-[var(--accent)] transition-colors" />
-              <Panel defaultSize={30} minSize={10} maxSize={70}>
-                <BuildOutputPanel
-                  collapsed={terminalCollapsed}
-                  onToggleCollapse={() => setTerminalCollapsed((v) => !v)}
+              <PanelResizeHandle className="w-px bg-[var(--border-subtle)] hover:bg-[var(--accent)] transition-colors" />
+
+              {/* Center — editor + terminal */}
+              <Panel defaultSize={58} minSize={30}>
+                <PanelGroup direction="vertical">
+                  <Panel defaultSize={70} minSize={20} className="bg-[var(--surface-app)]">
+                    <EditorArea fontSize={editorFontSize} />
+                  </Panel>
+                  <PanelResizeHandle className="h-px bg-[var(--border-subtle)] hover:bg-[var(--accent)] transition-colors" />
+                  <Panel defaultSize={30} minSize={10} maxSize={70}>
+                    <BuildOutputPanel
+                      collapsed={terminalCollapsed}
+                      onToggleCollapse={() => setTerminalCollapsed((v) => !v)}
+                    />
+                  </Panel>
+                </PanelGroup>
+              </Panel>
+              <PanelResizeHandle className="w-px bg-[var(--border-subtle)] hover:bg-[var(--accent)] transition-colors" />
+
+              {/* Right panel — agent / compile / test / deploy / git */}
+              <Panel defaultSize={24} minSize={15} maxSize={40}>
+                <RightPanel
+                  view={rightPanelView}
+                  onChangeView={setRightPanelView}
+                  onOpenSettings={() => setSettingsOpen(true)}
+                  network={network}
                 />
               </Panel>
             </PanelGroup>
-          </Panel>
-          <PanelResizeHandle className="w-px bg-[var(--border-subtle)] hover:bg-[var(--accent)] transition-colors" />
-
-          {/* Right panel — agent / compile / test / deploy / git */}
-          <Panel defaultSize={24} minSize={15} maxSize={40}>
-            <RightPanel
-              view={rightPanelView}
-              onChangeView={setRightPanelView}
-              onOpenSettings={() => setSettingsOpen(true)}
-              network={network}
-            />
-          </Panel>
-        </PanelGroup>
+          </>
+        ) : (
+          /* Welcome page — shown when no active project */
+          <WelcomePage
+            onNewProject={() => setNewProjectOpen(true)}
+            onBrowseTemplates={() => setNewProjectOpen(true)}
+            onImportZip={() => setImportZipOpen(true)}
+            onImportGit={() => setImportGitOpen(true)}
+            onOpenProject={(id) => {
+              projectsSwitch(id).catch(() => {});
+            }}
+            onDeleteProject={(project) => setDeleteProjectTarget(project)}
+          />
+        )}
       </div>
 
       {/* Mobile layout */}
       <div className="md:hidden flex-1 flex flex-col overflow-hidden">
-        <MobilePanel active={mobileActivePanel} />
-        <MobileBottomNav
-          active={mobileActivePanel}
-          onChange={setMobileActivePanel}
-        />
+        {activeProject ? (
+          <>
+            <MobilePanel active={mobileActivePanel} />
+            <MobileBottomNav
+              active={mobileActivePanel}
+              onChange={setMobileActivePanel}
+            />
+          </>
+        ) : (
+          <WelcomePage
+            onNewProject={() => setNewProjectOpen(true)}
+            onBrowseTemplates={() => setNewProjectOpen(true)}
+            onImportZip={() => setImportZipOpen(true)}
+            onImportGit={() => setImportGitOpen(true)}
+            onOpenProject={(id) => {
+              projectsSwitch(id).catch(() => {});
+            }}
+            onDeleteProject={(project) => setDeleteProjectTarget(project)}
+          />
+        )}
       </div>
 
       <StatusBar
@@ -342,28 +397,16 @@ export function IdeShell() {
       <NewProjectModal
         open={newProjectOpen}
         onClose={() => setNewProjectOpen(false)}
-        onSelectTemplate={async (template: Template) => {
+        onSelectTemplate={async (template: Template, projectName: string) => {
           // Scaffold the template files into a new project (local + server)
           const files = template.files.map((f) => ({
             path: f.path,
             content: f.content,
             language: f.language,
           }));
-          // Determine ownerId: if logged in, look up server user id; else null (local-only)
-          let ownerId: string | null = null;
-          if (profile?.address) {
-            try {
-              const res = await fetch(`/api/auth/session?address=${encodeURIComponent(profile.address)}`);
-              if (res.ok) {
-                const data = await res.json();
-                if (data?.loggedIn && data?.user?.id) ownerId = data.user.id;
-              }
-            } catch {
-              // Network issue — proceed with local-only project
-            }
-          }
+          const ownerId = await resolveOwnerId(profile?.address);
           await projectsCreate({
-            name: template.name.replace(/\s+/g, "-").toLowerCase(),
+            name: projectName,
             description: template.description,
             files,
             ownerId,
@@ -374,7 +417,7 @@ export function IdeShell() {
             useEditorTabsStore.getState().openTab(firstFile.path, firstFile.path.split("/").pop() ?? firstFile.path);
           }
         }}
-        onSelectBlank={async () => {
+        onSelectBlank={async (projectName: string) => {
           const files = [
             {
               path: "src/lib.rs",
@@ -383,24 +426,39 @@ export function IdeShell() {
             },
             {
               path: "Cargo.toml",
-              content: "[package]\nname = \"my-contract\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\ncrate-type = [\"cdylib\"]\n\n[dependencies]\nsoroban-sdk = \"22.0.0\"\n",
+              content: `[package]\nname = "${projectName.replace(/[^a-z0-9-]/gi, "-").toLowerCase()}"\nversion = "0.1.0"\nedition = "2021"\n\n[lib]\ncrate-type = ["cdylib"]\n\n[dependencies]\nsoroban-sdk = "22.0.0"\n`,
               language: "toml",
             },
           ];
-          let ownerId: string | null = null;
-          if (profile?.address) {
-            try {
-              const res = await fetch(`/api/auth/session?address=${encodeURIComponent(profile.address)}`);
-              if (res.ok) {
-                const data = await res.json();
-                if (data?.loggedIn && data?.user?.id) ownerId = data.user.id;
-              }
-            } catch {
-              // Network issue — proceed with local-only project
-            }
-          }
+          const ownerId = await resolveOwnerId(profile?.address);
           await projectsCreate({
-            name: `untitled-${Date.now().toString(36).slice(-4)}`,
+            name: projectName,
+            files,
+            ownerId,
+          });
+        }}
+      />
+
+      <ImportFromZipModal
+        open={importZipOpen}
+        onClose={() => setImportZipOpen(false)}
+        onImport={async (projectName, files) => {
+          const ownerId = await resolveOwnerId(profile?.address);
+          await projectsCreate({
+            name: projectName,
+            files,
+            ownerId,
+          });
+        }}
+      />
+
+      <ImportFromGitModal
+        open={importGitOpen}
+        onClose={() => setImportGitOpen(false)}
+        onImport={async (projectName, files) => {
+          const ownerId = await resolveOwnerId(profile?.address);
+          await projectsCreate({
+            name: projectName,
             files,
             ownerId,
           });
@@ -412,19 +470,7 @@ export function IdeShell() {
         project={deleteProjectTarget}
         onClose={() => setDeleteProjectTarget(null)}
         onConfirm={async (projectId) => {
-          // Determine requesterId if logged in (for server-side delete)
-          let requesterId: string | null = null;
-          if (profile?.address) {
-            try {
-              const res = await fetch(`/api/auth/session?address=${encodeURIComponent(profile.address)}`);
-              if (res.ok) {
-                const data = await res.json();
-                if (data?.loggedIn && data?.user?.id) requesterId = data.user.id;
-              }
-            } catch {
-              // ignore — local-only delete will still proceed
-            }
-          }
+          const requesterId = await resolveOwnerId(profile?.address);
           await projectsDelete(projectId, requesterId);
         }}
       />

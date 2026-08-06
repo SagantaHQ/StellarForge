@@ -118,6 +118,40 @@ export const useProjectsStore = create<ProjectsState>()(
             activeProjectId: activeId ?? null,
             hydrated: true,
           });
+
+          // §8 — If there's an active project, load its files into the file
+          // system store so the editor can render immediately. This is the
+          // "restore last opened project" behavior on page load.
+          if (activeId) {
+            const activeStored = stored.find((p) => p.id === activeId);
+            if (activeStored && activeStored.files.length > 0) {
+              await loadFilesIntoFileSystem(activeStored.files);
+            } else if (activeStored && activeStored.serverProjectId) {
+              // Local stub with no cached files — try fetching from server
+              try {
+                const res = await fetch(`/api/projects/${activeStored.serverProjectId}`);
+                if (res.ok) {
+                  const data = await res.json();
+                  const serverFiles = (data.project.files ?? []).map(
+                    (f: { path: string; content: string; language: string }) => ({
+                      path: f.path,
+                      content: f.content,
+                      language: f.language,
+                    })
+                  );
+                  // Cache for next time
+                  await projectSet({
+                    ...activeStored,
+                    files: serverFiles,
+                    updatedAt: Date.now(),
+                  });
+                  await loadFilesIntoFileSystem(serverFiles);
+                }
+              } catch {
+                // Network error — leave file system empty, welcome page shows
+              }
+            }
+          }
         } catch {
           set({ hydrated: true });
         }

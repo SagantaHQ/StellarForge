@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import {
   X,
   Search,
@@ -9,6 +9,7 @@ import {
   FileCode2,
   Sparkles,
   ArrowRight,
+  AlertCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -17,10 +18,21 @@ import { TEMPLATES, TEMPLATE_CATEGORIES, type Template } from "@/lib/templates/r
 interface NewProjectModalProps {
   open: boolean;
   onClose: () => void;
-  onSelectTemplate: (template: Template) => void;
-  onSelectBlank: () => void;
+  onSelectTemplate: (template: Template, projectName: string) => void;
+  onSelectBlank: (projectName: string) => void;
 }
 
+/**
+ * New Project modal — template gallery + project name input.
+ *
+ * The user MUST enter a project name before they can create a project
+ * (either from a template or blank). The name is validated client-side:
+ *   - non-empty
+ *   - 1–60 characters
+ *   - no leading/trailing whitespace
+ *
+ * The slug is derived from the name server-side.
+ */
 export function NewProjectModal({
   open,
   onClose,
@@ -30,6 +42,17 @@ export function NewProjectModal({
   const [query, setQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<Template["category"] | "all">("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [projectName, setProjectName] = useState("");
+
+  // Reset state when modal opens
+  useEffect(() => {
+    if (open) {
+      setQuery("");
+      setCategoryFilter("all");
+      setSelectedId(null);
+      setProjectName("");
+    }
+  }, [open]);
 
   const filtered = useMemo(() => {
     return TEMPLATES.filter((t) => {
@@ -50,13 +73,32 @@ export function NewProjectModal({
 
   const selectedTemplate = selectedId ? TEMPLATES.find((t) => t.id === selectedId) : null;
 
+  // Validate project name
+  const trimmedName = projectName.trim();
+  const nameValid = trimmedName.length >= 1 && trimmedName.length <= 60;
+  const canCreate = nameValid;
+
   function handleCreate() {
+    if (!canCreate) return;
     if (selectedTemplate) {
-      onSelectTemplate(selectedTemplate);
+      onSelectTemplate(selectedTemplate, trimmedName);
     } else {
-      onSelectBlank();
+      onSelectBlank(trimmedName);
     }
     onClose();
+  }
+
+  function handleStartBlank() {
+    if (!canCreate) return;
+    onSelectBlank(trimmedName);
+    onClose();
+  }
+
+  // Pre-fill name from selected template (user can override)
+  function prefillFromTemplate(template: Template) {
+    if (!projectName.trim()) {
+      setProjectName(template.name.replace(/\s+/g, "-").toLowerCase());
+    }
   }
 
   return (
@@ -73,19 +115,54 @@ export function NewProjectModal({
       >
         {/* Header */}
         <div className="flex items-center justify-between border-b border-[var(--border-subtle)] px-4 py-3">
-          <div>
+          <div className="flex-1 min-w-0">
             <h2 className="text-sm font-semibold text-[var(--text-primary)]">New Project</h2>
             <p className="text-[11px] text-[var(--text-muted)]">
-              Start blank or pick a template — each ships with a React UI wired via @openzeppelin/adapter-stellar
+              Name your project, then start blank or pick a template
             </p>
           </div>
           <button
             onClick={onClose}
-            className="flex h-7 w-7 items-center justify-center rounded text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+            className="flex h-7 w-7 items-center justify-center rounded text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] shrink-0"
             aria-label="Close"
           >
             <X size={16} strokeWidth={1.75} />
           </button>
+        </div>
+
+        {/* Project name input — always visible at the top of the body */}
+        <div className="border-b border-[var(--border-subtle)] px-4 py-3 bg-[var(--surface-sunken)]">
+          <label className="flex items-center gap-3">
+            <span className="text-[11px] font-medium uppercase tracking-wide text-[var(--text-muted)] w-20 shrink-0">
+              Project name
+            </span>
+            <input
+              autoFocus
+              value={projectName}
+              onChange={(e) => setProjectName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && canCreate) {
+                  e.preventDefault();
+                  handleCreate();
+                }
+              }}
+              placeholder="my-awesome-contract"
+              className="flex-1 rounded border border-[var(--border-subtle)] bg-[var(--surface-panel)] px-3 py-1.5 text-[13px] font-mono text-[var(--text-primary)] outline-none focus:border-[var(--accent)] placeholder:text-[var(--text-muted)]"
+              maxLength={60}
+            />
+            {projectName && !nameValid && (
+              <span className="flex items-center gap-1 text-[10px] text-[var(--status-warning)] shrink-0">
+                <AlertCircle size={11} strokeWidth={1.75} />
+                1–60 chars
+              </span>
+            )}
+            {nameValid && (
+              <span className="flex items-center gap-1 text-[10px] text-[var(--status-success)] shrink-0">
+                <Check size={11} strokeWidth={2} />
+                ready
+              </span>
+            )}
+          </label>
         </div>
 
         {/* Body */}
@@ -97,7 +174,6 @@ export function NewProjectModal({
               <div className="flex items-center gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--surface-sunken)] px-3 py-1.5">
                 <Search size={13} strokeWidth={1.75} className="text-[var(--text-muted)]" />
                 <input
-                  autoFocus
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder="Search templates…"
@@ -130,12 +206,45 @@ export function NewProjectModal({
             {/* Template grid */}
             <div className="flex-1 overflow-y-auto p-3">
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                {/* Blank project card — first option */}
+                <button
+                  onClick={() => setSelectedId(null)}
+                  className={cn(
+                    "group relative overflow-hidden rounded-md border text-left transition-all",
+                    selectedId === null
+                      ? "border-[var(--accent)] ring-1 ring-[var(--accent)]"
+                      : "border-[var(--border-subtle)] hover:border-[var(--border-strong)]"
+                  )}
+                >
+                  <div className="flex h-20 items-center justify-center bg-[var(--surface-sunken)]">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--surface-raised)]">
+                      <Sparkles size={18} strokeWidth={1.75} className="text-[var(--accent)]" />
+                    </div>
+                  </div>
+                  <div className="p-2.5">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-[13px] font-medium text-[var(--text-primary)] truncate">
+                        Blank project
+                      </span>
+                      {selectedId === null && (
+                        <Check size={13} strokeWidth={2} className="text-[var(--accent)] shrink-0" />
+                      )}
+                    </div>
+                    <p className="text-[11px] text-[var(--text-muted)] line-clamp-2 leading-relaxed">
+                      Start from scratch with a minimal Soroban contract scaffold.
+                    </p>
+                  </div>
+                </button>
+
                 {filtered.map((t) => (
                   <TemplateCard
                     key={t.id}
                     template={t}
                     selected={selectedId === t.id}
-                    onSelect={() => setSelectedId(t.id)}
+                    onSelect={() => {
+                      setSelectedId(t.id);
+                      prefillFromTemplate(t);
+                    }}
                   />
                 ))}
                 {filtered.length === 0 && (
@@ -160,26 +269,23 @@ export function NewProjectModal({
           <div className="text-[11px] text-[var(--text-muted)]">
             {selectedTemplate
               ? `${selectedTemplate.files.length} files will be scaffolded`
-              : "Blank project — empty workspace"}
+              : "Blank project — minimal scaffold (lib.rs + Cargo.toml)"}
           </div>
           <div className="flex items-center gap-2">
             <Button
               size="sm"
               variant="ghost"
-              onClick={() => {
-                setSelectedId(null);
-                onSelectBlank();
-                onClose();
-              }}
-              className="text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+              onClick={handleStartBlank}
+              disabled={!canCreate}
+              className="text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] disabled:opacity-40"
             >
               Start blank
             </Button>
             <Button
               size="sm"
               onClick={handleCreate}
-              disabled={!selectedTemplate}
-              className="gap-1.5 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)] disabled:opacity-50"
+              disabled={!canCreate}
+              className="gap-1.5 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)] disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Sparkles size={13} strokeWidth={1.75} />
               Create project

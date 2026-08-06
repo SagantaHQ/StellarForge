@@ -20,6 +20,14 @@ import { db } from "@/lib/db";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/**
+ * Free-tier storage quota: 1 GB per user.
+ * Pro tier (TBD) will increase this. The quota is enforced server-side
+ * by summing the length of all file `content` fields across all projects
+ * the user owns.
+ */
+const FREE_TIER_QUOTA_BYTES = 1 * 1024 * 1024 * 1024; // 1 GB
+
 function slugify(name: string): string {
   return name
     .toLowerCase()
@@ -111,6 +119,47 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         { error: "User not found — must be logged in to create a project" },
         { status: 401 }
+      );
+    }
+
+    // §15 — Storage quota check (1 GB free tier).
+    // Sum the byte length of all file contents across the user's existing
+    // projects, then add the incoming project's size. If over quota, reject.
+    const existingFiles = await db.file.findMany({
+      where: {
+        project: { ownerId },
+        deletedAt: null,
+      },
+      select: { content: true },
+    });
+    const existingBytes = existingFiles.reduce(
+      (sum, f) => sum + Buffer.byteLength(f.content, "utf8"),
+      0
+    );
+    const incomingBytes = Array.isArray(files)
+      ? files.reduce(
+          (sum: number, f: { content?: string }) =>
+            sum + Buffer.byteLength(f.content ?? "", "utf8"),
+          0
+        )
+      : 0;
+    const totalBytes = existingBytes + incomingBytes;
+
+    if (totalBytes > FREE_TIER_QUOTA_BYTES) {
+      const usedMb = (existingBytes / (1024 * 1024)).toFixed(1);
+      const quotaMb = (FREE_TIER_QUOTA_BYTES / (1024 * 1024)).toFixed(0);
+      const incomingMb = (incomingBytes / (1024 * 1024)).toFixed(1);
+      return NextResponse.json(
+        {
+          error: "Storage quota exceeded",
+          detail: `You're using ${usedMb} MB of ${quotaMb} MB. This project adds ${incomingMb} MB. Upgrade to Pro for more storage (coming soon).`,
+          usage: {
+            used: existingBytes,
+            quota: FREE_TIER_QUOTA_BYTES,
+            incoming: incomingBytes,
+          },
+        },
+        { status: 413 }
       );
     }
 

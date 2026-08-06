@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { getServerToken } from "@/lib/github/token";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { readFile, readdir, stat, rm } from "fs/promises";
@@ -144,28 +145,56 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Clone the repo (shallow)
+    // Clone the repo (shallow). If the repo is private or the user wants
+    // authenticated access, embed the server PAT in the HTTPS URL.
+    // This allows cloning private repos without requiring the user to have
+    // connected their own GitHub account.
+    const serverToken = getServerToken();
+    let cloneUrl = repoUrl;
+
+    // Transform https://github.com/owner/repo → https://x-access-token:TOKEN@github.com/owner/repo
+    if (serverToken && repoUrl.startsWith("https://github.com/")) {
+      cloneUrl = repoUrl.replace(
+        "https://github.com/",
+        `https://x-access-token:${serverToken}@github.com/`
+      );
+    } else if (serverToken && repoUrl.startsWith("https://")) {
+      // Generic HTTPS git host — embed token
+      try {
+        const parsed = new URL(repoUrl);
+        cloneUrl = `${parsed.protocol}//x-access-token:${serverToken}@${parsed.host}${parsed.pathname}`;
+      } catch {
+        // Malformed URL — use as-is
+      }
+    }
+
     const cloneArgs = ["clone", "--depth", "1"];
     if (branch) {
       cloneArgs.push("--branch", branch);
     }
-    cloneArgs.push(repoUrl, tempDir);
+    cloneArgs.push(cloneUrl, tempDir);
 
     try {
       await execFileAsync("git", cloneArgs, {
         timeout: CLONE_TIMEOUT_MS,
         maxBuffer: 10 * 1024 * 1024,
+        // Don't leak the token in error messages
+        env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "/bin/echo" },
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      if (message.includes("timed out")) {
+      // Strip the token from any error output
+      const safeMessage = serverToken
+        ? message.replace(new RegExp(serverToken, "g"), "[REDACTED]")
+        : message;
+      if (safeMessage.includes("timed out")) {
         return NextResponse.json(
           { error: "Clone timed out — the repository may be too large or unreachable." },
           { status: 504 }
         );
       }
       return NextResponse.json(
-        { error: "Failed to clone repository", detail: message },
+        { error: "Failed to clone repository", detail: safeMessage },
         { status: 502 }
       );
     }

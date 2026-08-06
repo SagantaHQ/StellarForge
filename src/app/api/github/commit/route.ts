@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { resolveGithubToken } from "@/lib/github/token";
 
 /**
  * POST /api/github/commit
@@ -115,7 +116,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Find the user and their GitHub token
+    // Find the user and resolve their GitHub token (OAuth or server PAT fallback)
     const user = await db.user.findUnique({
       where: { walletAddress },
       select: { id: true, githubAccessToken: true, githubUsername: true, email: true },
@@ -125,7 +126,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
 
-    if (!user.githubAccessToken) {
+    // Resolve token: user's OAuth token first, then server PAT fallback
+    const tokenResult = await resolveGithubToken(walletAddress);
+
+    if (!tokenResult) {
       return NextResponse.json(
         {
           error: "GitHub not connected",
@@ -136,7 +140,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const token = user.githubAccessToken;
+    const token = tokenResult.token;
+    const tokenSource = tokenResult.source;
     const repoPath = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
     const branch = requestedBranch || "main";
 
@@ -245,9 +250,12 @@ export async function POST(req: NextRequest) {
     const newTreeSha = newTree.sha;
 
     // Step 4: Create the commit
+    // When using the user's OAuth token, attribute the commit to them.
+    // When using the server PAT, the commit is attributed to the server
+    // token's owner (GitHub uses the token owner as the committer).
     const commitAuthor = {
-      name: user.githubUsername || user.email || "Soroban.Build User",
-      email: user.email || `${user.githubUsername}@users.noreply.github.com`,
+      name: tokenResult.username || user.githubUsername || user.email || "Soroban.Build User",
+      email: user.email || (tokenResult.username ? `${tokenResult.username}@users.noreply.github.com` : "noreply@soroban.build"),
       date: new Date().toISOString(),
     };
 

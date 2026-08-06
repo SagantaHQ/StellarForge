@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { resolveGithubToken } from "@/lib/github/token";
 
 /**
  * GET /api/github/repos?walletAddress=GXXX
@@ -47,7 +48,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Missing walletAddress" }, { status: 400 });
     }
 
-    // Find the user and their GitHub token
+    // Find the user and resolve their GitHub token (OAuth or server PAT fallback)
     const user = await db.user.findUnique({
       where: { walletAddress },
       select: {
@@ -61,7 +62,10 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
 
-    if (!user.githubAccessToken) {
+    // Resolve token: user's OAuth token first, then server PAT fallback
+    const tokenResult = await resolveGithubToken(walletAddress);
+
+    if (!tokenResult) {
       return NextResponse.json(
         {
           error: "GitHub not connected",
@@ -72,6 +76,9 @@ export async function GET(req: NextRequest) {
       );
     }
 
+    const token = tokenResult.token;
+    const tokenSource = tokenResult.source;
+
     // Fetch repos from GitHub API
     const type = url.searchParams.get("type") || "all"; // all, owner, public, private
     const perPage = Math.min(parseInt(url.searchParams.get("per_page") || "100"), 100);
@@ -81,7 +88,7 @@ export async function GET(req: NextRequest) {
       `${GITHUB_API_REPOS}?type=${type}&per_page=${perPage}&sort=${sort}&direction=desc`,
       {
         headers: {
-          Authorization: `Bearer ${user.githubAccessToken}`,
+          Authorization: `Bearer ${token}`,
           Accept: "application/vnd.github+json",
           "User-Agent": "Soroban.Build",
         },
@@ -92,20 +99,25 @@ export async function GET(req: NextRequest) {
 
     if (!res.ok) {
       if (res.status === 401) {
-        // Token expired or revoked — clear it from the DB
-        await db.user.update({
-          where: { id: user.id },
-          data: {
-            githubAccessToken: null,
-            githubUsername: null,
-            githubConnectedAt: null,
-          },
-        });
+        // Only clear the user's token if we were using their OAuth token
+        // (not the server PAT — that's a global config, not per-user)
+        if (tokenSource === "user-oauth") {
+          await db.user.update({
+            where: { id: user.id },
+            data: {
+              githubAccessToken: null,
+              githubUsername: null,
+              githubConnectedAt: null,
+            },
+          });
+        }
         return NextResponse.json(
           {
             error: "GitHub token expired or revoked",
-            detail: "Please reconnect your GitHub account.",
-            needsConnect: true,
+            detail: tokenSource === "user-oauth"
+              ? "Please reconnect your GitHub account."
+              : "Server GitHub token is invalid. Contact the administrator.",
+            needsConnect: tokenSource === "user-oauth",
           },
           { status: 401 }
         );

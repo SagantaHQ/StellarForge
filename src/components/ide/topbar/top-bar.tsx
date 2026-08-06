@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   GitBranch,
   Share2,
@@ -357,7 +357,57 @@ export function TopBar({
             <span className="hidden md:inline">Connect</span>
           </Button>
         )}
+        {/* Mount the saganta-appkit-modal once for the Connect button */}
+        <AppKitModalMount />
       </div>
     </header>
   );
+}
+
+/**
+ * Mounts the <saganta-appkit-modal> web component on first render.
+ * The modal is always in the DOM but hidden until .open() is called.
+ * This ensures it's ready instantly when the user clicks Connect.
+ */
+function AppKitModalMount() {
+  const mountedRef = useRef(false);
+
+  useEffect(() => {
+    if (mountedRef.current) return;
+    mountedRef.current = true;
+
+    (async () => {
+      try {
+        // Import the web component — registers <saganta-appkit-modal>
+        await import("@saganta/stellar-appkit/ui-web");
+
+        if (typeof document !== "undefined") {
+          let modal = document.querySelector<HTMLElement>("saganta-appkit-modal");
+          if (!modal) {
+            modal = document.createElement("saganta-appkit-modal") as HTMLElement;
+            modal.setAttribute("theme", "dark");
+            modal.setAttribute("mode", "modal");
+            modal.setAttribute("title", "Soroban.Build");
+            modal.setAttribute("logo-src", "/icon.svg");
+            // Apply our theme tokens
+            modal.style.setProperty("--sak-color-bg", "#0D0E11");
+            modal.style.setProperty("--sak-color-surface", "#131418");
+            modal.style.setProperty("--sak-color-surface-hover", "#202227");
+            modal.style.setProperty("--sak-color-border", "rgba(255,255,255,0.08)");
+            modal.style.setProperty("--sak-color-text", "#E6E7EA");
+            modal.style.setProperty("--sak-color-text-muted", "#6E7178");
+            modal.style.setProperty("--sak-color-accent", "#4F8C8C");
+            modal.style.setProperty("--sak-color-accent-text", "#FFFFFF");
+            modal.style.setProperty("--sak-color-danger", "#C97A7A");
+            modal.style.setProperty("--sak-overlay-color", "rgba(0,0,0,0.5)");
+            document.body.appendChild(modal);
+          }
+        }
+      } catch {
+        // Silently fail — the wallet hook will try again when connect is clicked
+      }
+    })();
+  }, []);
+
+  return null;
 }

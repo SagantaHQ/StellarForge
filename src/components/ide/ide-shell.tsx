@@ -60,6 +60,21 @@ export function IdeShell() {
     hydrate();
   }, [hydrate]);
 
+  // §11 — Listen for wallet connect events from the saganta-appkit-modal.
+  // When the user connects via the modal, capture the address and open
+  // the profile completion step.
+  useEffect(() => {
+    function handleConnect(event: Event) {
+      const detail = (event as CustomEvent).detail;
+      if (detail?.address) {
+        // Set the address and open the profile modal to complete profile
+        setProfileOpen(true);
+      }
+    }
+    window.addEventListener("sc-connect", handleConnect as EventListener);
+    return () => window.removeEventListener("sc-connect", handleConnect as EventListener);
+  }, []);
+
   // Keyboard shortcuts
   useEffect(() => {
     function handler(e: KeyboardEvent) {
@@ -130,15 +145,22 @@ export function IdeShell() {
         profile={profile}
         building={buildStatus === "building"}
         onShare={() => setShareOpen(true)}
-        onConnectWallet={() => setProfileOpen(true)}
-        onOpenWalletModal={async () => {
-          const { useStellarWallet } = await import("@/lib/wallet/use-stellar-wallet");
-          // Open the saganta-appkit-modal
+        onConnectWallet={async () => {
+          // Open the saganta-appkit-modal directly when user clicks Connect
           const modal = document.querySelector<HTMLElement & { open: () => void }>("saganta-appkit-modal");
           if (modal?.open) {
             modal.open();
           } else {
-            // If modal not mounted yet, trigger wallet connect flow
+            // Fallback: if modal isn't mounted yet, open profile modal
+            setProfileOpen(true);
+          }
+        }}
+        onOpenWalletModal={async () => {
+          // Same as onConnectWallet — opens the saganta-appkit-modal
+          const modal = document.querySelector<HTMLElement & { open: () => void }>("saganta-appkit-modal");
+          if (modal?.open) {
+            modal.open();
+          } else {
             setProfileOpen(true);
           }
         }}

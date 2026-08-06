@@ -77,6 +77,22 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile }: Pro
     }
   }, [open, existingProfile]);
 
+  // §11 — Listen for wallet connect events from the saganta-appkit-modal.
+  // When the user connects via the modal, capture the address and skip
+  // directly to the profile step (skip the wallet picker).
+  useEffect(() => {
+    if (!open) return;
+    function handleConnect(event: Event) {
+      const detail = (event as CustomEvent).detail;
+      if (detail?.address) {
+        setAddress(detail.address);
+        setStep("profile");
+      }
+    }
+    window.addEventListener("sc-connect", handleConnect as EventListener);
+    return () => window.removeEventListener("sc-connect", handleConnect as EventListener);
+  }, [open]);
+
   const handleConnectWallet = useCallback(async (walletId: string) => {
     setConnecting(true);
     setWalletError(null);

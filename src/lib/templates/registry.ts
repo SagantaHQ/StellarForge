@@ -62,7 +62,7 @@ soroban-sdk = { version = "${sdkV}", features = ["testutils"] }
 
 [profile.release]
 opt-level = "z"
-overflow-checks = true
+
 debug = 0
 strip = "symbols"
 debug-assertions = false

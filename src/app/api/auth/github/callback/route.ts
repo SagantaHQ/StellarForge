@@ -47,7 +47,10 @@ export async function GET(req: NextRequest) {
   const state = url.searchParams.get("state");
   const error = url.searchParams.get("error");
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || `https://${req.headers.get("host")}`;
+  // Compute app URL — same logic as the initiation route (handles reverse proxies)
+  const appUrl =
+    process.env.NEXT_PUBLIC_APP_URL ||
+    `${req.headers.get("x-forwarded-proto") || "https"}://${req.headers.get("x-forwarded-host") || req.headers.get("host")}`;
 
   // Handle user denying authorization
   if (error) {

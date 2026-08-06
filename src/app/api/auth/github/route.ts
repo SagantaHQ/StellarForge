@@ -46,7 +46,14 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || `https://${req.headers.get("host")}`;
+  // Compute the app URL for the OAuth redirect_uri.
+  // Priority:
+  //   1. NEXT_PUBLIC_APP_URL env var (if set)
+  //   2. x-forwarded-proto + x-forwarded-host headers (reverse proxy)
+  //   3. host header (direct access)
+  const appUrl =
+    process.env.NEXT_PUBLIC_APP_URL ||
+    `${req.headers.get("x-forwarded-proto") || "https"}://${req.headers.get("x-forwarded-host") || req.headers.get("host")}`;
   const redirectUri = `${appUrl}/api/auth/github/callback`;
 
   // State is a base64url-encoded JSON object. This prevents CSRF and carries

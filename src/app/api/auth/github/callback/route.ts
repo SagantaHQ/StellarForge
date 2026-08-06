@@ -41,16 +41,47 @@ function decodeState(state: string): StatePayload | null {
   }
 }
 
+/**
+ * Detect the app's public URL — same logic as the initiation route.
+ * See /api/auth/github/route.ts for the full explanation.
+ */
+function detectAppUrl(req: NextRequest): string {
+  if (process.env.NEXT_PUBLIC_APP_URL) {
+    return process.env.NEXT_PUBLIC_APP_URL.replace(/\/$/, "");
+  }
+
+  const forwardedProto = req.headers.get("x-forwarded-proto");
+  const forwardedHost = req.headers.get("x-forwarded-host");
+  const host = forwardedHost || req.headers.get("host");
+
+  if (!host) {
+    return "http://localhost:3000";
+  }
+
+  const isLocalhost =
+    host.includes("localhost") ||
+    host.includes("127.0.0.1") ||
+    host.includes("[::1]");
+
+  let proto: string;
+  if (isLocalhost) {
+    proto = "http";
+  } else if (forwardedProto) {
+    proto = forwardedProto.split(",")[0].trim();
+  } else {
+    proto = "https";
+  }
+
+  return `${proto}://${host}`;
+}
+
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
   const error = url.searchParams.get("error");
 
-  // Compute app URL — same logic as the initiation route (handles reverse proxies)
-  const appUrl =
-    process.env.NEXT_PUBLIC_APP_URL ||
-    `${req.headers.get("x-forwarded-proto") || "https"}://${req.headers.get("x-forwarded-host") || req.headers.get("host")}`;
+  const appUrl = detectAppUrl(req);
 
   // Handle user denying authorization
   if (error) {

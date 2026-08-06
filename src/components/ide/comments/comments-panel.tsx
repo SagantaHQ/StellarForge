@@ -63,7 +63,7 @@ export function CommentsPanel({
   const openComments = fileComments.filter((c) => c.status === "open");
   const resolvedComments = fileComments.filter((c) => c.status === "resolved");
 
-  const collapsed = panelCollapsed[filePath] ?? false;
+  const collapsed = panelCollapsed[filePath] ?? true; // collapsed by default
   const savedPos = panelPositions[filePath];
   // Default position: top-right of editor area
   const position = savedPos ?? { x: -1, y: -1 };

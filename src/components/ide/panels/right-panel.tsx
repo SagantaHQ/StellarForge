@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import {
   Bot,
   Wrench,
@@ -10,6 +10,7 @@ import {
   Check,
   Loader2,
   X,
+  FileCode2,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -18,6 +19,8 @@ import { AgentPanel } from "./agent-panel";
 import { ContractInteractionPanel } from "./contract-interaction";
 import { useBuildStore } from "@/stores/build-store";
 import { useDeployStore } from "@/stores/deploy-store";
+import { useFileSystemStore } from "@/stores/file-system-store";
+import { flattenFiles } from "@/lib/soroban/sample-project";
 
 type RightPanelView = "agent" | "compile" | "test" | "deploy" | "git";
 
@@ -80,6 +83,22 @@ function CompilePanel() {
   const error = useBuildStore((s) => s.error);
   const startBuild = useBuildStore((s) => s.startBuild);
   const outputRef = useRef<HTMLDivElement>(null);
+  const tree = useFileSystemStore((s) => s.tree);
+
+  // Parse contract functions from the Rust source after successful build
+  const contractFunctions = useMemo(() => {
+    if (status !== "success") return [];
+    const rustFile = flattenFiles(tree).find((f) => f.path === "src/lib.rs" || f.path.endsWith("lib.rs"));
+    if (!rustFile) return [];
+    const fns: { name: string; args: string; returns: string }[] = [];
+    const fnRegex = /pub\s+fn\s+(\w+)\s*\(([^)]*)\)\s*(?:->\s*([^{]+?))?\s*\{/g;
+    let match;
+    while ((match = fnRegex.exec(rustFile.content)) !== null) {
+      const args = match[2].split(",").map((a) => a.trim()).filter((a) => a && a !== "env: Env" && a !== "_env: Env");
+      fns.push({ name: match[1], args: args.join(", "), returns: (match[3] ?? "()").trim() });
+    }
+    return fns;
+  }, [status, tree]);
 
   useEffect(() => {
     if (outputRef.current) {
@@ -183,6 +202,34 @@ function CompilePanel() {
         {error && status === "failed" && (
           <div className="mt-2 rounded-md border border-[var(--status-error)] bg-[color-mix(in_srgb,var(--status-error)_10%,transparent)] p-2 text-[11px] text-[var(--status-error)]">
             {error}
+          </div>
+        )}
+
+        {/* Function list after successful build */}
+        {status === "success" && contractFunctions.length > 0 && (
+          <div>
+            <h4 className="text-[10px] uppercase tracking-wide text-[var(--text-muted)] mb-1.5">
+              Contract Functions ({contractFunctions.length})
+            </h4>
+            <div className="space-y-1">
+              {contractFunctions.map((fn) => (
+                <div
+                  key={fn.name}
+                  className="rounded border border-[var(--border-subtle)] bg-[var(--surface-sunken)] px-2 py-1.5"
+                >
+                  <div className="flex items-center gap-1.5">
+                    <FileCode2 size={10} strokeWidth={1.75} className="text-[var(--accent)] shrink-0" />
+                    <span className="font-mono text-[11px] font-medium text-[var(--text-primary)]">{fn.name}</span>
+                    <span className="text-[9px] text-[var(--text-muted)]">→ {fn.returns}</span>
+                  </div>
+                  {fn.args && (
+                    <div className="mt-0.5 pl-4 font-mono text-[10px] text-[var(--text-muted)]">
+                      ({fn.args})
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </div>

@@ -126,12 +126,12 @@ export const themeInitScript = `
     var stored = JSON.parse(localStorage.getItem('soroban-build:theme') || '{}');
     var state = stored.state || {};
     var themeId = state.themeId;
-    var respects = state.respectsSystemPreference !== false;
-    var lightThemes = ['daybreak','frost','parchment'];
-    if (!themeId || respects) {
-      themeId = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'midnight' : 'daybreak';
+    // Default to midnight — user can switch in Settings
+    if (!themeId) {
+      themeId = 'midnight';
     }
     document.documentElement.setAttribute('data-theme', themeId);
+    var lightThemes = ['daybreak','frost','parchment'];
     if (lightThemes.indexOf(themeId) >= 0) {
       document.documentElement.classList.remove('dark');
       document.documentElement.style.colorScheme = 'light';

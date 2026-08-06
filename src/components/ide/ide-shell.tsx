@@ -11,6 +11,7 @@ import { ActivityBar, type ActivityView } from "./topbar/activity-bar";
 import { FileExplorer } from "./explorer/file-explorer";
 import { EditorArea } from "./editor/editor-area";
 import { TerminalPanel } from "./terminal/terminal-panel";
+import { BuildOutputPanel } from "./panels/build-output-panel";
 import { RightPanel } from "./panels/right-panel";
 import { StatusBar } from "./panels/status-bar";
 import { CommandPalette } from "./panels/command-palette";
@@ -41,7 +42,7 @@ export function IdeShell() {
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
-  const [mobileActivePanel, setMobileActivePanel] = useState<"files" | "editor" | "terminal" | "agent">("editor");
+  const [mobileActivePanel, setMobileActivePanel] = useState<"files" | "editor" | "build" | "agent">("editor");
   const [network, setNetwork] = useState("testnet");
 
   const editorFontSize = useThemeStore((s) => s.editorFontSize);
@@ -165,6 +166,7 @@ export function IdeShell() {
         collabUsers={[]}
         profile={profile}
         building={buildStatus === "building"}
+        hasBuilt={buildStatus === "success"}
         onShare={() => setShareOpen(true)}
         onConnectWallet={async () => {
           // Try to open the saganta-appkit-modal if already mounted
@@ -226,14 +228,9 @@ export function IdeShell() {
               </Panel>
               <PanelResizeHandle className="h-px bg-[var(--border-subtle)] hover:bg-[var(--accent)] transition-colors" />
               <Panel defaultSize={30} minSize={10} maxSize={70}>
-                <TerminalPanel
+                <BuildOutputPanel
                   collapsed={terminalCollapsed}
                   onToggleCollapse={() => setTerminalCollapsed((v) => !v)}
-                  onFixWithAI={(errorOutput, command) => {
-                    requestFix(errorOutput, command);
-                    setActivityView("agent");
-                    setRightPanelView("agent");
-                  }}
                 />
               </Panel>
             </PanelGroup>
@@ -585,7 +582,7 @@ function CollabSidePanel() {
   );
 }
 
-function MobilePanel({ active }: { active: "files" | "editor" | "terminal" | "agent" }) {
+function MobilePanel({ active }: { active: "files" | "editor" | "build" | "agent" }) {
   if (active === "files") return <FileExplorer />;
   if (active === "editor") {
     return (
@@ -594,16 +591,10 @@ function MobilePanel({ active }: { active: "files" | "editor" | "terminal" | "ag
       </div>
     );
   }
-  if (active === "terminal") {
+  if (active === "build") {
     return (
       <div className="flex-1 overflow-hidden">
-        <TerminalPanel
-          collapsed={false}
-          onToggleCollapse={() => {}}
-          onFixWithAI={(errorOutput, command) => {
-            useFixWithAIStore.getState().requestFix(errorOutput, command);
-          }}
-        />
+        <BuildOutputPanel collapsed={false} onToggleCollapse={() => {}} />
       </div>
     );
   }
@@ -618,13 +609,13 @@ function MobileBottomNav({
   active,
   onChange,
 }: {
-  active: "files" | "editor" | "terminal" | "agent";
-  onChange: (v: "files" | "editor" | "terminal" | "agent") => void;
+  active: "files" | "editor" | "build" | "agent";
+  onChange: (v: "files" | "editor" | "build" | "agent") => void;
 }) {
   const items: { id: typeof active; label: string }[] = [
     { id: "files", label: "Files" },
     { id: "editor", label: "Editor" },
-    { id: "terminal", label: "Terminal" },
+    { id: "build", label: "Build" },
     { id: "agent", label: "Agent" },
   ];
   return (

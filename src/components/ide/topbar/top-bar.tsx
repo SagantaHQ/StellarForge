@@ -32,6 +32,7 @@ interface TopBarProps {
   collabUsers: { name: string; color: string }[];
   profile?: UserProfile | null;
   building?: boolean;
+  hasBuilt?: boolean;
   onShare: () => void;
   onConnectWallet: () => void;
   onOpenWalletModal: () => void;
@@ -55,6 +56,7 @@ export function TopBar({
   collabUsers,
   profile,
   building = false,
+  hasBuilt = false,
   onShare,
   onConnectWallet,
   onOpenWalletModal,
@@ -207,14 +209,14 @@ export function TopBar({
           <span className="hidden sm:inline">{collabConnected ? "Live" : "Share"}</span>
         </Button>
 
-        {/* Build + Deploy */}
+        {/* Build + Deploy — disabled if not logged in or not built */}
         <Button
           size="sm"
           variant="outline"
           onClick={onBuild}
-          disabled={building}
+          disabled={building || !profile || !walletConnected}
           className="h-8 gap-1.5 border-[var(--border-strong)] bg-[var(--surface-sunken)] px-3 text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)] hover:border-[var(--accent)] disabled:opacity-60"
-          title="Build contract (stellar contract build)"
+          title={!profile || !walletConnected ? "Login to build" : "Build contract (stellar contract build)"}
         >
           {building ? (
             <Loader2 size={12} strokeWidth={1.75} className="animate-spin" />
@@ -227,7 +229,9 @@ export function TopBar({
         <Button
           size="sm"
           onClick={onDeploy}
-          className="h-8 gap-1.5 bg-[var(--accent)] px-3 text-xs font-medium text-[var(--accent-contrast)] hover:bg-[var(--accent-hover)]"
+          disabled={!profile || !walletConnected || !hasBuilt}
+          className="h-8 gap-1.5 bg-[var(--accent)] px-3 text-xs font-medium text-[var(--accent-contrast)] hover:bg-[var(--accent-hover)] disabled:opacity-60"
+          title={!profile || !walletConnected ? "Login to deploy" : !hasBuilt ? "Build first" : "Deploy contract"}
         >
           <Play size={12} strokeWidth={2} fill="currentColor" />
           <span>Deploy</span>

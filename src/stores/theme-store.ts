@@ -38,9 +38,8 @@ function detectInitialMode(): "dark" | "light" {
 }
 
 function detectInitialThemeId(): string {
-  if (typeof window === "undefined") return DEFAULT_DARK_THEME_ID;
-  const mode = detectInitialMode();
-  return mode === "dark" ? DEFAULT_DARK_THEME_ID : DEFAULT_LIGHT_THEME_ID;
+  // Always default to Midnight — the user can switch in Settings
+  return DEFAULT_DARK_THEME_ID;
 }
 
 export const useThemeStore = create<ThemeState>()(
@@ -50,7 +49,7 @@ export const useThemeStore = create<ThemeState>()(
       preferredMode: detectInitialMode(),
       customThemes: [],
       editorFontSize: 13,
-      respectsSystemPreference: true,
+      respectsSystemPreference: false, // midnight is the default, don't auto-switch
 
       setTheme: (id) =>
         set({ themeId: id, respectsSystemPreference: false }),

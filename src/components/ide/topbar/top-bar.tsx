@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, lazy, Suspense } from "react";
 import {
   GitBranch,
   Share2,
@@ -22,7 +22,6 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import type { UserProfile } from "@/stores/profile-store";
 import { useCollabStore } from "@/stores/collab-store";
-import { useStellarWallet } from "@/lib/wallet/use-stellar-wallet";
 import Avatar from "boring-avatars";
 
 interface TopBarProps {
@@ -327,7 +326,13 @@ export function TopBar({
           <Button
             size="sm"
             variant="ghost"
-            onClick={onConnectWallet}
+            onClick={() => {
+              // Dispatch event to lazy-load the wallet mount, which will
+              // open the saganta-appkit-modal after compilation
+              window.dispatchEvent(new CustomEvent("soroban-connect-click"));
+              // Also call the parent handler (opens modal if already mounted)
+              onConnectWallet();
+            }}
             className="h-8 gap-1.5 px-2.5 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
           >
             <Wallet size={14} strokeWidth={1.75} />
@@ -343,26 +348,31 @@ export function TopBar({
 }
 
 /**
- * Mounts the <saganta-appkit-modal> web component and attaches the
- * StellarAppKit client instance from the React provider context.
+ * Lazy-mounts the <saganta-appkit-modal> ONLY when the user clicks Connect.
+ * This prevents Turbopack from compiling the heavy @saganta/stellar-appkit
+ * package during initial page load, which causes OOM in the 4GB sandbox.
  */
 function AppKitModalMount() {
-  const wallet = useStellarWallet();
-  const mountedRef = useRef(false);
+  const [shouldMount, setShouldMount] = useState(false);
 
+  // Listen for the first "connect" click to lazy-load the wallet
   useEffect(() => {
-    if (mountedRef.current) return;
-    mountedRef.current = true;
+    function handleConnectClick() {
+      setShouldMount(true);
+    }
+    // Custom event from the Connect button
+    window.addEventListener("soroban-connect-click", handleConnectClick);
+    return () => window.removeEventListener("soroban-connect-click", handleConnectClick);
+  }, []);
 
-    (async () => {
-      try {
-        // This creates the StellarAppKit instance AND mounts the modal
-        await wallet.getAppKitInstance();
-      } catch {
-        // Silently fail
-      }
-    })();
-  }, [wallet]);
+  if (!shouldMount) return null;
 
-  return null;
+  // Dynamically import the wallet mount component — only compiled when clicked
+  return (
+    <Suspense fallback={null}>
+      <LazyWalletMount />
+    </Suspense>
+  );
 }
+
+const LazyWalletMount = lazy(() => import("./wallet-mount").then((m) => ({ default: m.WalletMount })));

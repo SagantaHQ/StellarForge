@@ -36,7 +36,7 @@ export function useStellarWallet() {
     connector: null,
     error: null,
   });
-  const appkitRef = useRef<import("@saganta/stellar-appkit").StellarAppKit | null>(null);
+  const appkitRef = useRef<unknown>(null);
 
   const getAppKit = useCallback(async () => {
     if (appkitRef.current) return appkitRef.current;

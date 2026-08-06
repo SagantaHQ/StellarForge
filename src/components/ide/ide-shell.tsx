@@ -161,22 +161,22 @@ export function IdeShell() {
         building={buildStatus === "building"}
         onShare={() => setShareOpen(true)}
         onConnectWallet={async () => {
-          // Open the saganta-appkit-modal directly when user clicks Connect
+          // Try to open the saganta-appkit-modal if already mounted
           const modal = document.querySelector<HTMLElement & { open: () => void }>("saganta-appkit-modal");
           if (modal?.open) {
             modal.open();
           } else {
-            // Fallback: if modal isn't mounted yet, open profile modal
-            setProfileOpen(true);
+            // Modal not mounted yet — dispatch event to lazy-load it
+            // The WalletMount component will compile stellar-appkit and open the modal
+            window.dispatchEvent(new CustomEvent("soroban-connect-click"));
           }
         }}
         onOpenWalletModal={async () => {
-          // Same as onConnectWallet — opens the saganta-appkit-modal
           const modal = document.querySelector<HTMLElement & { open: () => void }>("saganta-appkit-modal");
           if (modal?.open) {
             modal.open();
           } else {
-            setProfileOpen(true);
+            window.dispatchEvent(new CustomEvent("soroban-connect-click"));
           }
         }}
         onOpenProfile={() => setProfileOpen(true)}

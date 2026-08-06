@@ -21,6 +21,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import type { UserProfile } from "@/stores/profile-store";
+import { useProfileStore } from "@/stores/profile-store";
 import { useCollabStore } from "@/stores/collab-store";
 import Avatar from "boring-avatars";
 
@@ -70,6 +71,7 @@ export function TopBar({
   const [avatarMenuOpen, setAvatarMenuOpen] = useState(false);
   const collabConnected = useCollabStore((s) => s.connected);
   const onlineUsers = useCollabStore((s) => s.users);
+  const walletConnected = useProfileStore((s) => s.walletConnected);
 
   return (
     <header
@@ -231,8 +233,8 @@ export function TopBar({
           <span>Deploy</span>
         </Button>
 
-        {/* Wallet / profile button */}
-        {profile ? (
+        {/* Wallet / profile button — shows avatar ONLY if wallet connected AND server session valid */}
+        {profile && walletConnected ? (
           <div className="relative">
             <button
               onClick={() => setAvatarMenuOpen((v) => !v)}

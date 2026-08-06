@@ -6,11 +6,12 @@ import { persist, createJSONStorage } from "zustand/middleware";
 /**
  * §11 — User profile store with server session validation.
  *
- * On mount, checks the server session API to see if the user is logged in.
- * All cloud features (comments, collab, line attribution) should check
- * `isLoggedIn()` before operating.
+ * Two conditions must BOTH be true for the user to be "logged in":
+ *   1. walletConnected — the wallet extension is connected (sc-connect fired)
+ *   2. profile — the server session says this address has a profile
  *
- * The session is validated server-side — the client can't fake it.
+ * If either is false, the TopBar shows "Connect" instead of the avatar.
+ * All cloud features (comments, collab, line attribution) check isLoggedIn().
  */
 
 export interface UserProfile {
@@ -23,6 +24,8 @@ export interface UserProfile {
 
 interface ProfileState {
   profile: UserProfile | null;
+  /** Whether the wallet is currently connected (sc-connect fired, not disconnected) */
+  walletConnected: boolean;
   /** Whether the server session check has completed */
   sessionChecked: boolean;
   /** Per-user accent color used for collab cursors and avatars */
@@ -30,10 +33,9 @@ interface ProfileState {
 
   setProfile: (p: UserProfile) => void;
   clearProfile: () => void;
+  setWalletConnected: (connected: boolean) => void;
   isLoggedIn: () => boolean;
-  /** Check server session — called on mount */
-  checkSession: (address: string) => Promise<void>;
-  /** Check server session by wallet address from useSession() */
+  /** Check server session by wallet address */
   syncFromWallet: (address: string | null) => Promise<void>;
 }
 
@@ -54,23 +56,51 @@ export const useProfileStore = create<ProfileState>()(
   persist(
     (set, get) => ({
       profile: null,
+      walletConnected: false, // starts false — wallet not connected on fresh page load
       sessionChecked: false,
       accentColor: "#4F8C8C",
 
-      setProfile: (p) => {
-        set({ profile: p, accentColor: colorFromAddress(p.address), sessionChecked: true });
-        // Also persist to localStorage for instant load on refresh
-      },
+      setProfile: (p) =>
+        set({
+          profile: p,
+          walletConnected: true, // profile set means wallet was connected
+          accentColor: colorFromAddress(p.address),
+          sessionChecked: true,
+        }),
 
-      clearProfile: () => set({ profile: null, sessionChecked: true, accentColor: "#4F8C8C" }),
+      clearProfile: () =>
+        set({
+          profile: null,
+          walletConnected: false,
+          sessionChecked: true,
+          accentColor: "#4F8C8C",
+        }),
 
-      isLoggedIn: () => !!get().profile && get().sessionChecked,
+      setWalletConnected: (connected: boolean) =>
+        set((s) => {
+          if (!connected) {
+            // Wallet disconnected — clear everything
+            return { walletConnected: false, profile: null, sessionChecked: true };
+          }
+          return { walletConnected: true };
+        }),
 
-      checkSession: async (address: string) => {
+      // BOTH conditions must be true: wallet connected AND server profile exists
+      isLoggedIn: () => get().walletConnected && !!get().profile && get().sessionChecked,
+
+      syncFromWallet: async (address: string | null) => {
+        if (!address) {
+          set({ profile: null, walletConnected: false, sessionChecked: true });
+          return;
+        }
+
+        // Wallet is connected — set flag
+        set({ walletConnected: true });
+
         try {
           const res = await fetch(`/api/auth/session?address=${encodeURIComponent(address)}`);
           if (!res.ok) {
-            set({ sessionChecked: true, profile: null });
+            set({ profile: null, sessionChecked: true });
             return;
           }
           const data = await res.json();
@@ -84,23 +114,16 @@ export const useProfileStore = create<ProfileState>()(
                 createdAt: Date.now(),
               },
               accentColor: colorFromAddress(address),
+              walletConnected: true,
               sessionChecked: true,
             });
           } else {
-            // Wallet connected but no profile — not logged in
+            // Wallet connected but no profile in DB — not logged in
             set({ profile: null, sessionChecked: true });
           }
         } catch {
           set({ sessionChecked: true });
         }
-      },
-
-      syncFromWallet: async (address: string | null) => {
-        if (!address) {
-          set({ profile: null, sessionChecked: true });
-          return;
-        }
-        await get().checkSession(address);
       },
     }),
     {
@@ -109,6 +132,8 @@ export const useProfileStore = create<ProfileState>()(
       partialize: (s) => ({
         profile: s.profile,
         accentColor: s.accentColor,
+        // Don't persist walletConnected — always start as false on page load.
+        // The wallet's auto-restore will fire sc-connect which sets it true.
       }),
     }
   )

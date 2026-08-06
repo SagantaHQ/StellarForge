@@ -51,6 +51,7 @@ export function IdeShell() {
   const profile = useProfileStore((s) => s.profile);
   const setProfile = useProfileStore((s) => s.setProfile);
   const clearProfile = useProfileStore((s) => s.clearProfile);
+  const setWalletConnected = useProfileStore((s) => s.setWalletConnected);
   const syncFromWallet = useProfileStore((s) => s.syncFromWallet);
   const buildStatus = useBuildStore((s) => s.status);
   const startBuild = useBuildStore((s) => s.startBuild);
@@ -69,17 +70,20 @@ export function IdeShell() {
     function handleConnect(event: Event) {
       const detail = (event as CustomEvent).detail;
       if (detail?.address) {
-        // Check server session — if profile exists, user is logged in
+        // Wallet connected — set flag and check server session
+        setWalletConnected(true);
         syncFromWallet(detail.address).then(() => {
           const state = useProfileStore.getState();
           if (!state.profile) {
-            // No profile — open the profile modal to complete setup
+            // Wallet connected but no profile in DB — open profile modal
             setProfileOpen(true);
           }
         });
       }
     }
     function handleDisconnect() {
+      // Wallet disconnected — clear everything
+      setWalletConnected(false);
       clearProfile();
     }
     window.addEventListener("sc-connect", handleConnect as EventListener);
@@ -88,7 +92,7 @@ export function IdeShell() {
       window.removeEventListener("sc-connect", handleConnect as EventListener);
       window.removeEventListener("sc-disconnect", handleDisconnect as EventListener);
     };
-  }, [syncFromWallet, clearProfile]);
+  }, [syncFromWallet, clearProfile, setWalletConnected]);
 
   // Keyboard shortcuts
   useEffect(() => {

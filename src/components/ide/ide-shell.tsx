@@ -51,6 +51,7 @@ export function IdeShell() {
   const profile = useProfileStore((s) => s.profile);
   const setProfile = useProfileStore((s) => s.setProfile);
   const clearProfile = useProfileStore((s) => s.clearProfile);
+  const syncFromWallet = useProfileStore((s) => s.syncFromWallet);
   const buildStatus = useBuildStore((s) => s.status);
   const startBuild = useBuildStore((s) => s.startBuild);
   const requestFix = useFixWithAIStore((s) => s.requestFix);
@@ -60,20 +61,34 @@ export function IdeShell() {
     hydrate();
   }, [hydrate]);
 
-  // §11 — Listen for wallet connect events from the saganta-appkit-modal.
-  // When the user connects via the modal, capture the address and open
-  // the profile completion step.
+  // §11 — Listen for wallet connect/disconnect events.
+  // When a wallet connects, check the server session to see if the user
+  // has a profile. If they do, they're logged in. If not, open the profile
+  // modal to complete their profile.
   useEffect(() => {
     function handleConnect(event: Event) {
       const detail = (event as CustomEvent).detail;
       if (detail?.address) {
-        // Set the address and open the profile modal to complete profile
-        setProfileOpen(true);
+        // Check server session — if profile exists, user is logged in
+        syncFromWallet(detail.address).then(() => {
+          const state = useProfileStore.getState();
+          if (!state.profile) {
+            // No profile — open the profile modal to complete setup
+            setProfileOpen(true);
+          }
+        });
       }
     }
+    function handleDisconnect() {
+      clearProfile();
+    }
     window.addEventListener("sc-connect", handleConnect as EventListener);
-    return () => window.removeEventListener("sc-connect", handleConnect as EventListener);
-  }, []);
+    window.addEventListener("sc-disconnect", handleDisconnect as EventListener);
+    return () => {
+      window.removeEventListener("sc-connect", handleConnect as EventListener);
+      window.removeEventListener("sc-disconnect", handleDisconnect as EventListener);
+    };
+  }, [syncFromWallet, clearProfile]);
 
   // Keyboard shortcuts
   useEffect(() => {

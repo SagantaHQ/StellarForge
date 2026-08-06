@@ -22,7 +22,8 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import type { UserProfile } from "@/stores/profile-store";
 import { useCollabStore } from "@/stores/collab-store";
-import { useAppKit } from "@saganta/stellar-appkit/react";
+import { useAppKit, useSession } from "@saganta/stellar-appkit/react";
+import Avatar from "boring-avatars";
 
 interface TopBarProps {
   projectName: string;
@@ -30,7 +31,6 @@ interface TopBarProps {
   network: string;
   collabUsers: { name: string; color: string }[];
   profile?: UserProfile | null;
-  /** Whether a build is currently in progress (shows spinner) */
   building?: boolean;
   onShare: () => void;
   onConnectWallet: () => void;
@@ -104,7 +104,7 @@ export function TopBar({
           <span className="text-[var(--text-muted)]">·</span>
           <button
             className="flex items-center gap-1 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
-            onClick={() => {/* branch switcher — TODO */}}
+            onClick={() => {}}
           >
             <GitBranch size={12} strokeWidth={1.75} />
             <span>{branch}</span>
@@ -124,9 +124,9 @@ export function TopBar({
         </kbd>
       </button>
 
-      {/* Right: collab, network, share, deploy, wallet/profile */}
+      {/* Right: collab, network, share, deploy, wallet/avatar */}
       <div className="flex items-center gap-2">
-        {/* Collab avatars — show online users when connected, otherwise the passed-in collabUsers */}
+        {/* Collab avatars */}
         <div className="hidden lg:flex items-center -space-x-1.5">
           {(collabConnected ? onlineUsers : collabUsers).slice(0, 4).map((user, i) => (
             <div
@@ -170,18 +170,12 @@ export function TopBar({
           </button>
           {networkOpen && (
             <>
-              <div
-                className="fixed inset-0 z-40"
-                onClick={() => setNetworkOpen(false)}
-              />
+              <div className="fixed inset-0 z-40" onClick={() => setNetworkOpen(false)} />
               <div className="absolute right-0 top-full mt-1 z-50 min-w-[160px] rounded-md border border-[var(--border-subtle)] bg-[var(--surface-panel)] py-1 shadow-lg">
                 {NETWORKS.map((n) => (
                   <button
                     key={n}
-                    onClick={() => {
-                      onSwitchNetwork(n);
-                      setNetworkOpen(false);
-                    }}
+                    onClick={() => { onSwitchNetwork(n); setNetworkOpen(false); }}
                     className="flex w-full items-center justify-between px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] transition-colors"
                   >
                     <span className="capitalize">{n}</span>
@@ -212,10 +206,7 @@ export function TopBar({
           <span className="hidden sm:inline">{collabConnected ? "Live" : "Share"}</span>
         </Button>
 
-        {/* Build + Deploy — paired actions. Build = outline (secondary),
-            Deploy = solid accent (primary). Visual hierarchy makes clear
-            that Build is the safe, frequent action; Deploy is the
-            consequential one (writes to chain). */}
+        {/* Build + Deploy */}
         <Button
           size="sm"
           variant="outline"
@@ -225,7 +216,7 @@ export function TopBar({
           title="Build contract (soroban contract build)"
         >
           {building ? (
-            <Loader2 size={12} strokeWidth={2} className="animate-spin" />
+            <Loader2 size={12} strokeWidth={1.75} className="animate-spin" />
           ) : (
             <Wrench size={12} strokeWidth={1.75} />
           )}
@@ -241,7 +232,7 @@ export function TopBar({
           <span>Deploy</span>
         </Button>
 
-        {/* Wallet / profile button — shows dropdown when logged in */}
+        {/* Wallet / profile button */}
         {profile ? (
           <div className="relative">
             <button
@@ -257,9 +248,12 @@ export function TopBar({
                   className="h-6 w-6 rounded-full object-cover"
                 />
               ) : (
-                <div className="flex h-6 w-6 items-center justify-center rounded-full bg-[var(--accent)] text-[10px] font-medium text-[var(--accent-contrast)]">
-                  {profile.username.charAt(0).toUpperCase()}
-                </div>
+                <Avatar
+                  size={24}
+                  name={profile.address}
+                  variant="marble"
+                  colors={["#4F8C8C", "#131418", "#6E7178", "#C5794B", "#7B96B3"]}
+                />
               )}
               <span className="hidden md:inline max-w-[80px] truncate">{profile.username}</span>
               <ChevronDown size={10} strokeWidth={2} className="text-[var(--text-muted)]" />
@@ -267,29 +261,23 @@ export function TopBar({
 
             {avatarMenuOpen && (
               <>
-                <div
-                  className="fixed inset-0 z-40"
-                  onClick={() => setAvatarMenuOpen(false)}
-                />
+                <div className="fixed inset-0 z-40" onClick={() => setAvatarMenuOpen(false)} />
                 <div className="absolute right-0 top-full mt-1 z-50 min-w-[200px] rounded-md border border-[var(--border-subtle)] bg-[var(--surface-panel)] py-1 shadow-xl">
                   {/* Profile header */}
                   <div className="border-b border-[var(--border-subtle)] px-3 py-2">
                     <div className="flex items-center gap-2">
                       {profile.avatarUrl ? (
-                        <img
-                          src={profile.avatarUrl}
-                          alt={profile.username}
-                          className="h-8 w-8 rounded-full object-cover"
-                        />
+                        <img src={profile.avatarUrl} alt={profile.username} className="h-8 w-8 rounded-full object-cover" />
                       ) : (
-                        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--accent)] text-[12px] font-medium text-[var(--accent-contrast)]">
-                          {profile.username.charAt(0).toUpperCase()}
-                        </div>
+                        <Avatar
+                          size={32}
+                          name={profile.address}
+                          variant="marble"
+                          colors={["#4F8C8C", "#131418", "#6E7178", "#C5794B", "#7B96B3"]}
+                        />
                       )}
                       <div className="min-w-0">
-                        <div className="text-[12px] font-medium text-[var(--text-primary)] truncate">
-                          {profile.username}
-                        </div>
+                        <div className="text-[12px] font-medium text-[var(--text-primary)] truncate">{profile.username}</div>
                         <div className="text-[10px] font-mono text-[var(--text-muted)] truncate">
                           {profile.address.substring(0, 8)}…{profile.address.slice(-4)}
                         </div>
@@ -299,10 +287,7 @@ export function TopBar({
 
                   {/* Menu items */}
                   <button
-                    onClick={() => {
-                      setAvatarMenuOpen(false);
-                      onOpenWalletModal();
-                    }}
+                    onClick={() => { setAvatarMenuOpen(false); onOpenWalletModal(); }}
                     className="flex w-full items-center gap-2.5 px-3 py-2 text-[12px] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] transition-colors"
                   >
                     <Wallet size={14} strokeWidth={1.75} className="text-[var(--text-muted)]" />
@@ -310,10 +295,7 @@ export function TopBar({
                   </button>
 
                   <button
-                    onClick={() => {
-                      setAvatarMenuOpen(false);
-                      onOpenProfile();
-                    }}
+                    onClick={() => { setAvatarMenuOpen(false); onOpenProfile(); }}
                     className="flex w-full items-center gap-2.5 px-3 py-2 text-[12px] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] transition-colors"
                   >
                     <UserCircle size={14} strokeWidth={1.75} className="text-[var(--text-muted)]" />
@@ -321,10 +303,7 @@ export function TopBar({
                   </button>
 
                   <button
-                    onClick={() => {
-                      setAvatarMenuOpen(false);
-                      onOpenSettings();
-                    }}
+                    onClick={() => { setAvatarMenuOpen(false); onOpenSettings(); }}
                     className="flex w-full items-center gap-2.5 px-3 py-2 text-[12px] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] transition-colors"
                   >
                     <SettingsIcon size={14} strokeWidth={1.75} className="text-[var(--text-muted)]" />
@@ -334,10 +313,7 @@ export function TopBar({
                   <div className="border-t border-[var(--border-subtle)] my-1" />
 
                   <button
-                    onClick={() => {
-                      setAvatarMenuOpen(false);
-                      onLogout();
-                    }}
+                    onClick={() => { setAvatarMenuOpen(false); onLogout(); }}
                     className="flex w-full items-center gap-2.5 px-3 py-2 text-[12px] text-[var(--status-error)] hover:bg-[color-mix(in_srgb,var(--status-error)_8%,transparent)] transition-colors"
                   >
                     <LogOut size={14} strokeWidth={1.75} />
@@ -358,7 +334,8 @@ export function TopBar({
             <span className="hidden md:inline">Connect</span>
           </Button>
         )}
-        {/* Mount the saganta-appkit-modal once for the Connect button */}
+
+        {/* Mount the saganta-appkit-modal with the client from the provider */}
         <AppKitModalMount />
       </div>
     </header>
@@ -368,7 +345,6 @@ export function TopBar({
 /**
  * Mounts the <saganta-appkit-modal> web component and attaches the
  * StellarAppKit client instance from the React provider context.
- * The modal is always in the DOM but hidden until .open() is called.
  */
 function AppKitModalMount() {
   const client = useAppKit();
@@ -380,7 +356,6 @@ function AppKitModalMount() {
 
     (async () => {
       try {
-        // Import the web component — registers <saganta-appkit-modal>
         await import("@saganta/stellar-appkit/ui-web");
 
         if (typeof document !== "undefined") {
@@ -391,7 +366,6 @@ function AppKitModalMount() {
             modal.setAttribute("mode", "modal");
             modal.setAttribute("title", "Soroban.Build");
             modal.setAttribute("logo-src", "/icon.svg");
-            // Apply our theme tokens
             modal.style.setProperty("--sak-color-bg", "#0D0E11");
             modal.style.setProperty("--sak-color-surface", "#131418");
             modal.style.setProperty("--sak-color-surface-hover", "#202227");
@@ -404,7 +378,6 @@ function AppKitModalMount() {
             modal.style.setProperty("--sak-overlay-color", "rgba(0,0,0,0.5)");
             document.body.appendChild(modal);
           }
-          // Attach the client instance — required before .open() can be called
           modal.client = client;
         }
       } catch {

@@ -4,15 +4,13 @@ import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 
 /**
- * §11 — User profile store.
+ * §11 — User profile store with server session validation.
  *
- * After wallet connect, the user is identified by:
- *   - address (Stellar wallet address, e.g. G...)
- *   - username (unique, used in collab/comments/line attribution)
- *   - avatarUrl, bio (optional)
+ * On mount, checks the server session API to see if the user is logged in.
+ * All cloud features (comments, collab, line attribution) should check
+ * `isLoggedIn()` before operating.
  *
- * The username is the identity used in live sharing sessions, line attribution,
- * comments, and presence.
+ * The session is validated server-side — the client can't fake it.
  */
 
 export interface UserProfile {
@@ -25,15 +23,20 @@ export interface UserProfile {
 
 interface ProfileState {
   profile: UserProfile | null;
+  /** Whether the server session check has completed */
+  sessionChecked: boolean;
   /** Per-user accent color used for collab cursors and avatars */
   accentColor: string;
 
   setProfile: (p: UserProfile) => void;
   clearProfile: () => void;
   isLoggedIn: () => boolean;
+  /** Check server session — called on mount */
+  checkSession: (address: string) => Promise<void>;
+  /** Check server session by wallet address from useSession() */
+  syncFromWallet: (address: string | null) => Promise<void>;
 }
 
-// Deterministic accent color from address
 function colorFromAddress(addr: string): string {
   const palette = [
     "#4F8C8C", "#C5794B", "#7B96B3", "#6FA885",
@@ -51,18 +54,62 @@ export const useProfileStore = create<ProfileState>()(
   persist(
     (set, get) => ({
       profile: null,
+      sessionChecked: false,
       accentColor: "#4F8C8C",
 
-      setProfile: (p) =>
-        set({ profile: p, accentColor: colorFromAddress(p.address) }),
+      setProfile: (p) => {
+        set({ profile: p, accentColor: colorFromAddress(p.address), sessionChecked: true });
+        // Also persist to localStorage for instant load on refresh
+      },
 
-      clearProfile: () => set({ profile: null, accentColor: "#4F8C8C" }),
+      clearProfile: () => set({ profile: null, sessionChecked: true, accentColor: "#4F8C8C" }),
 
-      isLoggedIn: () => !!get().profile,
+      isLoggedIn: () => !!get().profile && get().sessionChecked,
+
+      checkSession: async (address: string) => {
+        try {
+          const res = await fetch(`/api/auth/session?address=${encodeURIComponent(address)}`);
+          if (!res.ok) {
+            set({ sessionChecked: true, profile: null });
+            return;
+          }
+          const data = await res.json();
+          if (data.loggedIn && data.profile) {
+            set({
+              profile: {
+                address,
+                username: data.profile.username,
+                avatarUrl: data.profile.avatarUrl ?? undefined,
+                bio: data.profile.bio ?? undefined,
+                createdAt: Date.now(),
+              },
+              accentColor: colorFromAddress(address),
+              sessionChecked: true,
+            });
+          } else {
+            // Wallet connected but no profile — not logged in
+            set({ profile: null, sessionChecked: true });
+          }
+        } catch {
+          set({ sessionChecked: true });
+        }
+      },
+
+      syncFromWallet: async (address: string | null) => {
+        if (!address) {
+          set({ profile: null, sessionChecked: true });
+          return;
+        }
+        await get().checkSession(address);
+      },
     }),
     {
       name: "soroban-build:profile",
       storage: createJSONStorage(() => localStorage),
+      partialize: (s) => ({
+        profile: s.profile,
+        accentColor: s.accentColor,
+      }),
     }
   )
 );

@@ -41,7 +41,6 @@ export async function POST(req: NextRequest) {
   let body: {
     projectId: string;
     files: { path: string; content: string }[];
-    command?: "soroban" | "cargo";
   };
   try {
     body = await req.json();
@@ -55,8 +54,6 @@ export async function POST(req: NextRequest) {
       { status: 400 }
     );
   }
-
-  const command = body.command ?? "soroban";
 
   const { spawn } = await import("child_process");
   const path = await import("path");
@@ -88,10 +85,19 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const args =
-    command === "soroban"
-      ? ["contract", "build", "--wasm32v1-none"]
-      : ["build", "--target", "wasm32v1-none", "--release"];
+  // Always use `stellar contract build` — it's the canonical Soroban build command
+  const buildCommand = "stellar";
+  const args = ["contract", "build"];
+
+  // Verify stellar CLI is installed
+  const { existsSync } = await import("fs");
+  if (!existsSync(`${cargoBin}/stellar`)) {
+    return NextResponse.json({
+      buildId: `error-${Date.now()}`,
+      status: "failed",
+      message: "stellar CLI not installed. Run: cargo install stellar-cli",
+    });
+  }
 
   const buildId = `build-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const job: BuildJob = {
@@ -105,7 +111,7 @@ export async function POST(req: NextRequest) {
 
   // Spawn the build
   try {
-    const child = spawn(command, args, {
+    const child = spawn(buildCommand, args, {
       cwd: workspaceDir,
       env,
       stdio: ["ignore", "pipe", "pipe"],

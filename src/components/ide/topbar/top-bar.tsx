@@ -214,7 +214,7 @@ export function TopBar({
           onClick={onBuild}
           disabled={building}
           className="h-8 gap-1.5 border-[var(--border-strong)] bg-[var(--surface-sunken)] px-3 text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)] hover:border-[var(--accent)] disabled:opacity-60"
-          title="Build contract (soroban contract build)"
+          title="Build contract (stellar contract build)"
         >
           {building ? (
             <Loader2 size={12} strokeWidth={1.75} className="animate-spin" />

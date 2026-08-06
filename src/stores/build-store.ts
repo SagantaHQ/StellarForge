@@ -37,7 +37,7 @@ interface BuildState {
   _buildId?: string;
   _pollTimer?: ReturnType<typeof setTimeout>;
 
-  startBuild: (opts?: { command?: "soroban" | "cargo"; tree?: TreeNode[] }) => Promise<void>;
+  startBuild: (opts?: { tree?: TreeNode[] }) => Promise<void>;
   reset: () => void;
   clearOutput: () => void;
 }
@@ -48,8 +48,6 @@ export const useBuildStore = create<BuildState>((set, get) => ({
 
   startBuild: async (opts = {}) => {
     if (get().status === "building") return;
-
-    const command = opts.command ?? "soroban";
 
     set({
       status: "building",
@@ -72,7 +70,6 @@ export const useBuildStore = create<BuildState>((set, get) => ({
         body: JSON.stringify({
           projectId: "local-project",
           files,
-          command,
         }),
       });
 

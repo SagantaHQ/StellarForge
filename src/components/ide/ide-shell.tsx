@@ -535,7 +535,7 @@ function DeploySidePanel() {
           }}
           className="w-full rounded bg-[var(--accent)] py-2 text-xs font-medium text-[var(--accent-contrast)] hover:bg-[var(--accent-hover)] transition-colors"
         >
-          soroban contract build
+          stellar contract build
         </button>
         <button
           onClick={() => {

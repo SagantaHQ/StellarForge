@@ -105,17 +105,7 @@ function CompilePanel() {
             ) : (
               <Wrench size={13} strokeWidth={1.75} />
             )}
-            soroban contract build
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => startBuild({ command: "cargo" })}
-            disabled={status === "building"}
-            className="w-full h-8 gap-2 border-[var(--border-subtle)] disabled:opacity-60"
-          >
-            <Wrench size={13} strokeWidth={1.75} />
-            cargo build
+            stellar contract build
           </Button>
         </div>
       </div>

@@ -8,12 +8,12 @@ import {
   AlertCircle,
   Loader2,
   User,
-  Upload,
   ShieldCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { useStellarWallet } from "@/lib/wallet/use-stellar-wallet";
+import { AvatarUploader } from "./avatar-uploader";
 
 /**
  * §11 — Profile modal using @saganta/stellar-appkit/react hooks.
@@ -216,14 +216,6 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile }: Pro
     }
   }
 
-  function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => setAvatarUrl(reader.result as string);
-    reader.readAsDataURL(file);
-  }
-
   return (
     <div
       className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
@@ -331,21 +323,29 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile }: Pro
                 <div className="font-mono text-[11px] text-[var(--text-secondary)] truncate">{address}</div>
               </div>
 
-              <div className="flex items-center gap-3">
-                <div className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-full bg-[var(--surface-raised)]">
-                  {avatarUrl ? (
-                    <img src={avatarUrl} alt="Avatar" className="h-full w-full object-cover" />
-                  ) : (
-                    <User size={20} strokeWidth={1.5} className="text-[var(--text-muted)]" />
-                  )}
-                </div>
-                <label className="cursor-pointer">
-                  <span className="inline-flex items-center gap-1.5 rounded border border-[var(--border-subtle)] bg-[var(--surface-sunken)] px-2.5 py-1.5 text-[11px] text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)] transition-colors">
-                    <Upload size={11} strokeWidth={1.75} />
-                    Upload avatar
-                  </span>
-                  <input type="file" accept="image/*" className="hidden" onChange={handleFileUpload} />
+              {/* Avatar uploader with crop */}
+              <div>
+                <label className="text-[11px] font-medium text-[var(--text-secondary)] mb-1.5 block">
+                  Avatar
                 </label>
+                <div className="flex items-center gap-3 mb-2">
+                  <div className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-full bg-[var(--surface-raised)] shrink-0">
+                    {avatarUrl ? (
+                      <img src={avatarUrl} alt="Avatar" className="h-full w-full object-cover" />
+                    ) : (
+                      <User size={20} strokeWidth={1.5} className="text-[var(--text-muted)]" />
+                    )}
+                  </div>
+                  <span className="text-[10px] text-[var(--text-muted)]">
+                    Square crop · WebP · 512×512 · Max 2MB
+                  </span>
+                </div>
+                <AvatarUploader
+                  address={address}
+                  currentAvatar={avatarUrl}
+                  onUploaded={(url) => setAvatarUrl(url)}
+                  onCancel={() => {}}
+                />
               </div>
 
               <div>

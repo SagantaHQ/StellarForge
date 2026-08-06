@@ -16,6 +16,11 @@ import {
   Settings as SettingsIcon,
   UserCircle,
   LogOut,
+  FolderPlus,
+  X,
+  Trash2,
+  FolderOpen,
+  ChevronRight,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -23,6 +28,7 @@ import { Button } from "@/components/ui/button";
 import type { UserProfile } from "@/stores/profile-store";
 import { useProfileStore } from "@/stores/profile-store";
 import { useCollabStore } from "@/stores/collab-store";
+import { useProjectsStore, type ProjectMeta } from "@/stores/projects-store";
 import Avatar from "boring-avatars";
 
 interface TopBarProps {
@@ -45,6 +51,10 @@ interface TopBarProps {
   onDeploy: () => void;
   onSwitchNetwork: (n: string) => void;
   onToggleMobilePanel?: () => void;
+  // Project switcher handlers
+  onSwitchProject?: (projectId: string) => void;
+  onCloseProject?: () => void;
+  onDeleteProject?: (projectId: string) => void;
 }
 
 const NETWORKS = ["mainnet", "testnet", "futurenet", "local"] as const;
@@ -68,12 +78,26 @@ export function TopBar({
   onBuild,
   onDeploy,
   onSwitchNetwork,
+  onSwitchProject,
+  onCloseProject,
+  onDeleteProject,
 }: TopBarProps) {
   const [networkOpen, setNetworkOpen] = useState(false);
   const [avatarMenuOpen, setAvatarMenuOpen] = useState(false);
+  const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const collabConnected = useCollabStore((s) => s.connected);
   const onlineUsers = useCollabStore((s) => s.users);
   const walletConnected = useProfileStore((s) => s.walletConnected);
+  const projects = useProjectsStore((s) => s.projects);
+  const activeProjectId = useProjectsStore((s) => s.activeProjectId);
+  const projectsBusy = useProjectsStore((s) => s.busy);
+
+  // Resolve the displayed project name: prefer the active project from the
+  // store, fall back to the prop (which is the hard-coded default).
+  const activeProject: ProjectMeta | null = activeProjectId
+    ? projects.find((p) => p.id === activeProjectId) ?? null
+    : null;
+  const displayName = activeProject?.name ?? projectName;
 
   return (
     <header
@@ -96,14 +120,53 @@ export function TopBar({
         </div>
 
         <div className="hidden sm:flex items-center gap-2 min-w-0">
-          <button
-            onClick={onNewProject}
-            className="flex items-center gap-1 text-sm font-medium text-[var(--text-primary)] truncate hover:text-[var(--accent)] transition-colors"
-            title="New project (⌘⇧P)"
-          >
-            {projectName}
-            <Plus size={11} strokeWidth={2} className="text-[var(--text-muted)]" />
-          </button>
+          {/* Project switcher dropdown */}
+          <div className="relative">
+            <button
+              onClick={() => setProjectMenuOpen((v) => !v)}
+              className="flex items-center gap-1.5 text-sm font-medium text-[var(--text-primary)] truncate hover:text-[var(--accent)] transition-colors max-w-[180px]"
+              title={activeProject ? `Switch project (${activeProject.name})` : "Projects"}
+              aria-haspopup="menu"
+              aria-expanded={projectMenuOpen}
+              disabled={projectsBusy}
+            >
+              <span className="truncate">{displayName}</span>
+              <ChevronDown
+                size={12}
+                strokeWidth={2}
+                className={cn(
+                  "text-[var(--text-muted)] transition-transform shrink-0",
+                  projectMenuOpen && "rotate-180"
+                )}
+              />
+            </button>
+
+            {projectMenuOpen && (
+              <ProjectSwitcherMenu
+                projects={projects}
+                activeProjectId={activeProjectId}
+                busy={projectsBusy}
+                onSwitch={(id) => {
+                  setProjectMenuOpen(false);
+                  onSwitchProject?.(id);
+                }}
+                onNewProject={() => {
+                  setProjectMenuOpen(false);
+                  onNewProject();
+                }}
+                onClose={() => {
+                  setProjectMenuOpen(false);
+                  onCloseProject?.();
+                }}
+                onDelete={(id) => {
+                  setProjectMenuOpen(false);
+                  onDeleteProject?.(id);
+                }}
+                onCloseMenu={() => setProjectMenuOpen(false)}
+              />
+            )}
+          </div>
+
           <span className="text-[var(--text-muted)]">·</span>
           <button
             className="flex items-center gap-1 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
@@ -382,3 +445,155 @@ function AppKitModalMount() {
 }
 
 const LazyWalletMount = lazy(() => import("./wallet-mount").then((m) => ({ default: m.WalletMount })));
+
+/**
+ * Project switcher dropdown menu.
+ *
+ * Shows the list of projects (clickable to switch), plus actions:
+ *   - Create new project (opens the NewProjectModal)
+ *   - Close current project (saves files, sets active=null)
+ *   - Delete project (opens the DeleteProjectModal with name-confirmation)
+ */
+function ProjectSwitcherMenu({
+  projects,
+  activeProjectId,
+  busy,
+  onSwitch,
+  onNewProject,
+  onClose,
+  onDelete,
+  onCloseMenu,
+}: {
+  projects: ProjectMeta[];
+  activeProjectId: string | null;
+  busy: boolean;
+  onSwitch: (id: string) => void;
+  onNewProject: () => void;
+  onClose: () => void;
+  onDelete: (id: string) => void;
+  onCloseMenu: () => void;
+}) {
+  const [hoveredDeleteId, setHoveredDeleteId] = useState<string | null>(null);
+
+  return (
+    <>
+      {/* Click-away catcher */}
+      <div className="fixed inset-0 z-40" onClick={onCloseMenu} />
+
+      <div className="absolute left-0 top-full mt-1 z-50 w-72 max-h-[60vh] flex flex-col overflow-hidden rounded-md border border-[var(--border-subtle)] bg-[var(--surface-panel)] shadow-xl">
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-[var(--border-subtle)] px-3 py-2">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+            Projects
+          </span>
+          <span className="text-[10px] text-[var(--text-muted)]">
+            {projects.length} {projects.length === 1 ? "project" : "projects"}
+          </span>
+        </div>
+
+        {/* Project list (scrollable) */}
+        <div className="flex-1 overflow-y-auto py-1">
+          {projects.length === 0 && !busy && (
+            <div className="px-3 py-4 text-center text-[11px] text-[var(--text-muted)]">
+              No projects yet.
+              <br />
+              Create one to get started.
+            </div>
+          )}
+
+          {busy && (
+            <div className="flex items-center justify-center gap-2 px-3 py-4 text-[11px] text-[var(--text-muted)]">
+              <Loader2 size={12} strokeWidth={1.75} className="animate-spin" />
+              <span>Working…</span>
+            </div>
+          )}
+
+          {!busy &&
+            projects.map((p) => {
+              const isActive = p.id === activeProjectId;
+              return (
+                <div
+                  key={p.id}
+                  className="group relative flex items-center"
+                  onMouseEnter={() => setHoveredDeleteId(p.id)}
+                  onMouseLeave={() => setHoveredDeleteId(null)}
+                >
+                  <button
+                    onClick={() => onSwitch(p.id)}
+                    disabled={isActive}
+                    className={cn(
+                      "flex flex-1 items-center gap-2 px-3 py-1.5 text-left text-[12px] transition-colors min-w-0",
+                      isActive
+                        ? "bg-[var(--accent-subtle)] text-[var(--text-primary)] cursor-default"
+                        : "text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+                    )}
+                  >
+                    {isActive ? (
+                      <Check size={12} strokeWidth={2} className="text-[var(--accent)] shrink-0" />
+                    ) : (
+                      <FolderOpen size={12} strokeWidth={1.75} className="text-[var(--text-muted)] shrink-0" />
+                    )}
+                    <span className="truncate flex-1">{p.name}</span>
+                    {p.serverProjectId && (
+                      <span
+                        className="h-1.5 w-1.5 rounded-full bg-[var(--status-success)] shrink-0"
+                        title="Synced to server"
+                      />
+                    )}
+                  </button>
+
+                  {/* Inline delete button — appears on hover */}
+                  {hoveredDeleteId === p.id && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDelete(p.id);
+                      }}
+                      className="absolute right-2 flex h-5 w-5 items-center justify-center rounded text-[var(--text-muted)] hover:bg-[color-mix(in_srgb,var(--status-error)_15%,transparent)] hover:text-[var(--status-error)] transition-colors"
+                      title={`Delete ${p.name}`}
+                      aria-label={`Delete ${p.name}`}
+                    >
+                      <Trash2 size={11} strokeWidth={1.75} />
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+        </div>
+
+        {/* Footer actions */}
+        <div className="border-t border-[var(--border-subtle)] py-1">
+          <button
+            onClick={onNewProject}
+            className="flex w-full items-center gap-2.5 px-3 py-2 text-[12px] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] transition-colors"
+          >
+            <FolderPlus size={14} strokeWidth={1.75} className="text-[var(--text-muted)]" />
+            <span>Create new project</span>
+            <kbd className="ml-auto rounded border border-[var(--border-subtle)] bg-[var(--surface-raised)] px-1.5 py-0.5 text-[9px] font-mono text-[var(--text-muted)]">
+              ⌘⇧P
+            </kbd>
+          </button>
+
+          <button
+            onClick={onClose}
+            disabled={!activeProjectId}
+            className="flex w-full items-center gap-2.5 px-3 py-2 text-[12px] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <X size={14} strokeWidth={1.75} className="text-[var(--text-muted)]" />
+            <span>Close current project</span>
+          </button>
+
+          {activeProjectId && (
+            <button
+              onClick={() => onDelete(activeProjectId)}
+              className="flex w-full items-center gap-2.5 px-3 py-2 text-[12px] text-[var(--status-error)] hover:bg-[color-mix(in_srgb,var(--status-error)_8%,transparent)] transition-colors"
+            >
+              <Trash2 size={14} strokeWidth={1.75} />
+              <span>Delete current project</span>
+            </button>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}

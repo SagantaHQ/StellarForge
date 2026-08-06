@@ -9,9 +9,9 @@ import { openDB, type IDBPDatabase } from "idb";
  */
 
 const DB_NAME = "soroban-build";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
-export type StoreName = "files" | "comments" | "tabs" | "meta";
+export type StoreName = "files" | "comments" | "tabs" | "meta" | "projects";
 
 let dbPromise: Promise<IDBPDatabase> | null = null;
 
@@ -21,7 +21,8 @@ function getDB() {
   }
   if (!dbPromise) {
     dbPromise = openDB(DB_NAME, DB_VERSION, {
-      upgrade(db) {
+      upgrade(db, oldVersion) {
+        // v1 stores
         if (!db.objectStoreNames.contains("files")) {
           db.createObjectStore("files", { keyPath: "path" });
         }
@@ -33,6 +34,10 @@ function getDB() {
         }
         if (!db.objectStoreNames.contains("meta")) {
           db.createObjectStore("meta");
+        }
+        // v2 — projects store (keyPath: "id") for local-first project management
+        if (oldVersion < 2 && !db.objectStoreNames.contains("projects")) {
+          db.createObjectStore("projects", { keyPath: "id" });
         }
       },
     });
@@ -102,4 +107,43 @@ export async function fileDelete(path: string): Promise<void> {
 
 export async function fileClearAll(): Promise<void> {
   return idbClear("files");
+}
+
+// ============================================================
+// Projects store (local-first, optional Postgres sync)
+// ============================================================
+
+export interface StoredProject {
+  id: string;
+  name: string;
+  slug: string;
+  description?: string;
+  /** ownerId — set when synced with Postgres; null for local-only */
+  ownerId: string | null;
+  /** serverProjectId — set when the project has a Postgres counterpart */
+  serverProjectId: string | null;
+  /** Files snapshot for fast project switching (path -> content/language) */
+  files: { path: string; content: string; language: string }[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export async function projectGetAll(): Promise<StoredProject[]> {
+  return idbGetAll<StoredProject>("projects");
+}
+
+export async function projectGet(id: string): Promise<StoredProject | undefined> {
+  return idbGet<StoredProject>("projects", id);
+}
+
+export async function projectSet(project: StoredProject): Promise<void> {
+  await idbSet<StoredProject>("projects", project);
+}
+
+export async function projectDelete(id: string): Promise<void> {
+  return idbDelete("projects", id);
+}
+
+export async function projectClearAll(): Promise<void> {
+  return idbClear("projects");
 }

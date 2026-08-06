@@ -10,7 +10,6 @@ import { TopBar } from "./topbar/top-bar";
 import { ActivityBar, type ActivityView } from "./topbar/activity-bar";
 import { FileExplorer } from "./explorer/file-explorer";
 import { EditorArea } from "./editor/editor-area";
-import { TerminalPanel } from "./terminal/terminal-panel";
 import { BuildOutputPanel } from "./panels/build-output-panel";
 import { RightPanel } from "./panels/right-panel";
 import { StatusBar } from "./panels/status-bar";
@@ -20,6 +19,7 @@ import { NewProjectModal } from "./templates/new-project-modal";
 import { ProfileModal } from "./profile/profile-modal";
 import { ShareDialog } from "./collab/share-dialog";
 import { SnapshotPanel } from "./panels/snapshot-panel";
+import { DeleteProjectModal } from "./projects/delete-project-modal";
 import { useThemeStore } from "@/stores/theme-store";
 import { useFileSystemStore } from "@/stores/file-system-store";
 import { useEditorTabsStore } from "@/stores/editor-tabs-store";
@@ -27,6 +27,7 @@ import { useProfileStore } from "@/stores/profile-store";
 import { useBuildStore } from "@/stores/build-store";
 import { useFixWithAIStore } from "@/stores/fix-with-ai-store";
 import { useSnapshotStore } from "@/stores/snapshot-store";
+import { useProjectsStore, type ProjectMeta } from "@/stores/projects-store";
 import type { Template } from "@/lib/templates/registry";
 import { flattenFiles } from "@/lib/soroban/sample-project";
 import { cn } from "@/lib/utils";
@@ -42,6 +43,7 @@ export function IdeShell() {
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
+  const [deleteProjectTarget, setDeleteProjectTarget] = useState<ProjectMeta | null>(null);
   const [mobileActivePanel, setMobileActivePanel] = useState<"files" | "editor" | "build" | "agent">("editor");
   const [network, setNetwork] = useState("testnet");
 
@@ -58,12 +60,43 @@ export function IdeShell() {
   const startBuild = useBuildStore((s) => s.startBuild);
   const requestFix = useFixWithAIStore((s) => s.requestFix);
 
+  // Projects store — hydrates from IDB and syncs with Postgres when logged in
+  const projectsHydrate = useProjectsStore((s) => s.hydrate);
+  const projectsSyncFromServer = useProjectsStore((s) => s.syncFromServer);
+  const projectsCreate = useProjectsStore((s) => s.createProject);
+  const projectsSwitch = useProjectsStore((s) => s.switchProject);
+  const projectsClose = useProjectsStore((s) => s.closeActiveProject);
+  const projectsDelete = useProjectsStore((s) => s.deleteProject);
+  const projectsList = useProjectsStore((s) => s.projects);
+  const activeProjectId = useProjectsStore((s) => s.activeProjectId);
+  const activeProject = activeProjectId
+    ? projectsList.find((p) => p.id === activeProjectId) ?? null
+    : null;
+
   // §8 — Hydrate file system from IndexedDB on mount (local-first)
   useEffect(() => {
     hydrate();
+    // Hydrate the projects list from IDB
+    projectsHydrate();
     // Expose profile store on window for cross-store access (avoids circular imports)
     (window as unknown as { __profileStore: unknown }).__profileStore = useProfileStore.getState();
-  }, [hydrate]);
+  }, [hydrate, projectsHydrate]);
+
+  // When the user logs in, pull their server-side projects and merge into the
+  // local list. Also push any local-only projects to the server.
+  useEffect(() => {
+    if (profile?.address) {
+      // Look up the user's server id via the session endpoint
+      fetch(`/api/auth/session?address=${encodeURIComponent(profile.address)}`)
+        .then((r) => r.ok ? r.json() : null)
+        .then((data) => {
+          if (data?.loggedIn && data?.user?.id) {
+            projectsSyncFromServer(data.user.id);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [profile?.address, projectsSyncFromServer]);
 
   // §11 — Listen for wallet connect/disconnect events.
   // When a wallet connects, check the server session to see if the user
@@ -160,7 +193,7 @@ export function IdeShell() {
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-[var(--surface-app)] text-[var(--text-primary)]">
       <TopBar
-        projectName="hello-world"
+        projectName={activeProject?.name ?? "No project"}
         branch="main"
         network={network}
         collabUsers={[]}
@@ -203,6 +236,16 @@ export function IdeShell() {
           setRightPanelView("deploy");
         }}
         onSwitchNetwork={setNetwork}
+        onSwitchProject={(id) => {
+          projectsSwitch(id).catch(() => {});
+        }}
+        onCloseProject={() => {
+          projectsClose().catch(() => {});
+        }}
+        onDeleteProject={(id) => {
+          const target = projectsList.find((p) => p.id === id) ?? null;
+          if (target) setDeleteProjectTarget(target);
+        }}
       />
 
       {/* Desktop layout */}
@@ -300,15 +343,31 @@ export function IdeShell() {
         open={newProjectOpen}
         onClose={() => setNewProjectOpen(false)}
         onSelectTemplate={async (template: Template) => {
-          // Scaffold the template files into IndexedDB + file system
-          const fs = useFileSystemStore.getState();
-          await fs.replaceTree(
-            template.files.map((f) => ({
-              path: f.path,
-              content: f.content,
-              language: f.language,
-            }))
-          );
+          // Scaffold the template files into a new project (local + server)
+          const files = template.files.map((f) => ({
+            path: f.path,
+            content: f.content,
+            language: f.language,
+          }));
+          // Determine ownerId: if logged in, look up server user id; else null (local-only)
+          let ownerId: string | null = null;
+          if (profile?.address) {
+            try {
+              const res = await fetch(`/api/auth/session?address=${encodeURIComponent(profile.address)}`);
+              if (res.ok) {
+                const data = await res.json();
+                if (data?.loggedIn && data?.user?.id) ownerId = data.user.id;
+              }
+            } catch {
+              // Network issue — proceed with local-only project
+            }
+          }
+          await projectsCreate({
+            name: template.name.replace(/\s+/g, "-").toLowerCase(),
+            description: template.description,
+            files,
+            ownerId,
+          });
           // Open the first file
           const firstFile = template.files[0];
           if (firstFile) {
@@ -316,8 +375,7 @@ export function IdeShell() {
           }
         }}
         onSelectBlank={async () => {
-          const fs = useFileSystemStore.getState();
-          await fs.replaceTree([
+          const files = [
             {
               path: "src/lib.rs",
               content: "#![no_std]\nuse soroban_sdk::{contract, contractimpl, Env};\n\n#[contract]\npub struct Contract;\n\n#[contractimpl]\nimpl Contract {\n    pub fn hello(env: Env) -> soroban_sdk::String {\n        soroban_sdk::String::from_str(&env, \"Hello, Soroban!\")\n    }\n}\n",
@@ -328,7 +386,46 @@ export function IdeShell() {
               content: "[package]\nname = \"my-contract\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\ncrate-type = [\"cdylib\"]\n\n[dependencies]\nsoroban-sdk = \"22.0.0\"\n",
               language: "toml",
             },
-          ]);
+          ];
+          let ownerId: string | null = null;
+          if (profile?.address) {
+            try {
+              const res = await fetch(`/api/auth/session?address=${encodeURIComponent(profile.address)}`);
+              if (res.ok) {
+                const data = await res.json();
+                if (data?.loggedIn && data?.user?.id) ownerId = data.user.id;
+              }
+            } catch {
+              // Network issue — proceed with local-only project
+            }
+          }
+          await projectsCreate({
+            name: `untitled-${Date.now().toString(36).slice(-4)}`,
+            files,
+            ownerId,
+          });
+        }}
+      />
+
+      <DeleteProjectModal
+        open={deleteProjectTarget !== null}
+        project={deleteProjectTarget}
+        onClose={() => setDeleteProjectTarget(null)}
+        onConfirm={async (projectId) => {
+          // Determine requesterId if logged in (for server-side delete)
+          let requesterId: string | null = null;
+          if (profile?.address) {
+            try {
+              const res = await fetch(`/api/auth/session?address=${encodeURIComponent(profile.address)}`);
+              if (res.ok) {
+                const data = await res.json();
+                if (data?.loggedIn && data?.user?.id) requesterId = data.user.id;
+              }
+            } catch {
+              // ignore — local-only delete will still proceed
+            }
+          }
+          await projectsDelete(projectId, requesterId);
         }}
       />
 

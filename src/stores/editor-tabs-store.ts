@@ -18,6 +18,7 @@ interface EditorTabsState {
 
   openTab: (path: string, name: string, opts?: { preview?: boolean }) => void;
   closeTab: (path: string) => void;
+  closeAllTabs: () => void;
   setActiveTab: (path: string) => void;
   markDirty: (path: string, dirty: boolean) => void;
   reorderTabs: (from: number, to: number) => void;
@@ -68,6 +69,8 @@ export const useEditorTabsStore = create<EditorTabsState>()(
           }
           return { tabs: newTabs, activeTabPath: newActive };
         }),
+
+      closeAllTabs: () => set({ tabs: [], activeTabPath: null }),
 
       setActiveTab: (path) => set({ activeTabPath: path }),
 

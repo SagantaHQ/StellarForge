@@ -18,6 +18,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useFileSystemStore } from "@/stores/file-system-store";
 import { useEditorTabsStore } from "@/stores/editor-tabs-store";
+import { useProjectsStore } from "@/stores/projects-store";
 import type { TreeNode, FileNode } from "@/lib/soroban/sample-project";
 
 interface FileExplorerProps {
@@ -78,6 +79,15 @@ export function FileExplorer({ onOpenSettings }: FileExplorerProps) {
   const deleteNode = useFileSystemStore((s) => s.deleteNode);
   const renameNode = useFileSystemStore((s) => s.renameNode);
   const openTab = useEditorTabsStore((s) => s.openTab);
+
+  // Project name comes from the projects store (active project) — falls back
+  // to "No project" when no project is active.
+  const projects = useProjectsStore((s) => s.projects);
+  const activeProjectId = useProjectsStore((s) => s.activeProjectId);
+  const activeProject = activeProjectId
+    ? projects.find((p) => p.id === activeProjectId) ?? null
+    : null;
+  const projectName = activeProject?.name ?? "No project";
 
   const [contextMenu, setContextMenu] = useState<{
     x: number;
@@ -281,7 +291,7 @@ export function FileExplorer({ onOpenSettings }: FileExplorerProps) {
       {/* Project name */}
       <div className="px-3 pb-1">
         <span className="text-[11px] font-medium uppercase tracking-wide text-[var(--text-secondary)]">
-          hello-world
+          {projectName}
         </span>
       </div>
 

@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { useProfileStore } from "@/stores/profile-store";
 import { useFileSystemStore } from "@/stores/file-system-store";
 import { useProjectsStore } from "@/stores/projects-store";
+import { useGithubOAuth } from "@/hooks/use-github-oauth";
 import { flattenFiles } from "@/lib/soroban/sample-project";
 
 interface CommitToGithubModalProps {
@@ -69,6 +70,12 @@ export function CommitToGithubModal({ open, onClose }: CommitToGithubModalProps)
   const profile = useProfileStore((s) => s.profile);
   const syncGithubStatus = useProfileStore((s) => s.syncGithubStatus);
   const disconnectGithub = useProfileStore((s) => s.disconnectGithub);
+  const { connectGithub: connectGithubPopup, connecting: oauthConnecting, error: oauthError } = useGithubOAuth();
+
+  // Surface OAuth errors from the hook into the modal's error state
+  useEffect(() => {
+    if (oauthError) setError(oauthError);
+  }, [oauthError]);
 
   const tree = useFileSystemStore((s) => s.tree);
   const activeProject = useProjectsStore((s) => {
@@ -129,7 +136,8 @@ export function CommitToGithubModal({ open, onClose }: CommitToGithubModalProps)
       setError("You must be logged in to connect GitHub.");
       return;
     }
-    window.location.href = `/api/auth/github?walletAddress=${encodeURIComponent(profile.address)}`;
+    // Open the OAuth flow in a popup window — the IDE stays open
+    connectGithubPopup();
   }
 
   async function handleDisconnectGithub() {
@@ -255,11 +263,15 @@ export function CommitToGithubModal({ open, onClose }: CommitToGithubModalProps)
               <Button
                 size="sm"
                 onClick={handleConnectGithub}
-                disabled={!profile}
+                disabled={!profile || oauthConnecting}
                 className="gap-1.5 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)] disabled:opacity-50"
               >
-                <Github size={13} strokeWidth={1.75} />
-                Connect GitHub
+                {oauthConnecting ? (
+                  <Loader2 size={13} strokeWidth={1.75} className="animate-spin" />
+                ) : (
+                  <Github size={13} strokeWidth={1.75} />
+                )}
+                {oauthConnecting ? "Connecting…" : "Connect GitHub"}
               </Button>
               {!profile && (
                 <p className="mt-2 text-[10px] text-[var(--status-warning)]">

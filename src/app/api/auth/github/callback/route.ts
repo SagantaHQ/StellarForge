@@ -2,20 +2,18 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 
 /**
- * GET /api/auth/github/callback?code=XXX&state=BASE64(WALLET_ADDRESS)
+ * GET /api/auth/github/callback?code=XXX&state=BASE64(JSON)
  *
  * GitHub redirects here after the user authorizes the OAuth app. We:
- *   1. Exchange the code for an access token (POST to github.com/login/oauth/access_token)
- *   2. Fetch the user's GitHub profile (to get their GitHub username)
- *   3. Store the access token + username on the User record (matched by walletAddress)
- *   4. Redirect back to the IDE with a success indicator
- *
- * The access token is stored in the database (encrypted at rest in production).
- * It's used for:
- *   - Listing the user's repos (GET /api/github/repos)
- *   - Committing changes back to GitHub (POST /api/github/commit)
- *   - Importing repos by URL (POST /api/projects/import-git — uses the token
- *     for private repos instead of public shallow clone)
+ *   1. Decode the state to get walletAddress + popup flag
+ *   2. Exchange the code for an access token
+ *   3. Fetch the user's GitHub profile (username)
+ *   4. Store the access token on the User record
+ *   5. Either:
+ *      a. Popup mode (p=1): render HTML that postMessages to the opener
+ *         window and closes itself. The parent window listens for the
+ *         message and refreshes GitHub status.
+ *      b. Redirect mode (p=0): redirect the main page to /?github_connected=1
  */
 
 export const runtime = "nodejs";
@@ -23,6 +21,25 @@ export const dynamic = "force-dynamic";
 
 const GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token";
 const GITHUB_API_USER = "https://api.github.com/user";
+
+interface StatePayload {
+  w: string; // wallet address
+  p: number; // popup flag (1 = popup mode)
+}
+
+function decodeState(state: string): StatePayload | null {
+  try {
+    const json = Buffer.from(state, "base64url").toString("utf8");
+    const parsed = JSON.parse(json);
+    if (parsed && typeof parsed.w === "string") {
+      return { w: parsed.w, p: parsed.p ?? 0 };
+    }
+    // Fallback: old format was just the raw wallet address
+    return { w: json, p: 0 };
+  } catch {
+    return null;
+  }
+}
 
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
@@ -34,33 +51,31 @@ export async function GET(req: NextRequest) {
 
   // Handle user denying authorization
   if (error) {
-    return NextResponse.redirect(
-      `${appUrl}/?github_error=${encodeURIComponent(error)}`
-    );
+    return handleResponse(false, { error }, 0, appUrl);
   }
 
   if (!code || !state) {
-    return NextResponse.redirect(
-      `${appUrl}/?github_error=${encodeURIComponent("Missing code or state")}`
-    );
+    return handleResponse(false, { error: "Missing code or state" }, 0, appUrl);
   }
 
-  // Decode the wallet address from the state param
-  let walletAddress: string;
-  try {
-    walletAddress = Buffer.from(state, "base64url").toString("utf8");
-  } catch {
-    return NextResponse.redirect(
-      `${appUrl}/?github_error=${encodeURIComponent("Invalid state param")}`
-    );
+  // Decode the state
+  const statePayload = decodeState(state);
+  if (!statePayload) {
+    return handleResponse(false, { error: "Invalid state param" }, 0, appUrl);
   }
+
+  const walletAddress = statePayload.w;
+  const isPopup = statePayload.p === 1;
 
   const clientId = process.env.GITHUB_CLIENT_ID;
   const clientSecret = process.env.GITHUB_CLIENT_SECRET;
 
   if (!clientId || !clientSecret) {
-    return NextResponse.redirect(
-      `${appUrl}/?github_error=${encodeURIComponent("GitHub OAuth not configured")}`
+    return handleResponse(
+      false,
+      { error: "GitHub OAuth not configured" },
+      isPopup ? 1 : 0,
+      appUrl
     );
   }
 
@@ -94,14 +109,16 @@ export async function GET(req: NextRequest) {
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return NextResponse.redirect(
-      `${appUrl}/?github_error=${encodeURIComponent(`Token exchange failed: ${msg}`)}`
+    return handleResponse(
+      false,
+      { error: `Token exchange failed: ${msg}` },
+      isPopup ? 1 : 0,
+      appUrl
     );
   }
 
   // Step 2: Fetch the user's GitHub profile
   let githubUsername: string;
-  let githubAvatarUrl: string | null = null;
   try {
     const userRes = await fetch(GITHUB_API_USER, {
       headers: {
@@ -117,11 +134,13 @@ export async function GET(req: NextRequest) {
 
     const userData = await userRes.json();
     githubUsername = userData.login;
-    githubAvatarUrl = userData.avatar_url ?? null;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return NextResponse.redirect(
-      `${appUrl}/?github_error=${encodeURIComponent(`GitHub profile fetch failed: ${msg}`)}`
+    return handleResponse(
+      false,
+      { error: `GitHub profile fetch failed: ${msg}` },
+      isPopup ? 1 : 0,
+      appUrl
     );
   }
 
@@ -132,8 +151,11 @@ export async function GET(req: NextRequest) {
     });
 
     if (!user) {
-      return NextResponse.redirect(
-        `${appUrl}/?github_error=${encodeURIComponent("User not found — connect your wallet first")}`
+      return handleResponse(
+        false,
+        { error: "User not found — connect your wallet first" },
+        isPopup ? 1 : 0,
+        appUrl
       );
     }
 
@@ -143,20 +165,111 @@ export async function GET(req: NextRequest) {
         githubAccessToken: accessToken,
         githubUsername,
         githubConnectedAt: new Date(),
-        // Use the GitHub avatar if the user doesn't have one set
-        email: user.email ?? null,
       },
     });
 
-    // Redirect back to the IDE with a success flag — the client will
-    // detect this and refresh the GitHub connection state.
-    return NextResponse.redirect(
-      `${appUrl}/?github_connected=1&github_username=${encodeURIComponent(githubUsername)}`
-    );
+    return handleResponse(true, { username: githubUsername }, isPopup ? 1 : 0, appUrl);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return NextResponse.redirect(
-      `${appUrl}/?github_error=${encodeURIComponent(`Failed to save GitHub token: ${msg}`)}`
+    return handleResponse(
+      false,
+      { error: `Failed to save GitHub token: ${msg}` },
+      isPopup ? 1 : 0,
+      appUrl
     );
   }
+}
+
+/**
+ * Return either a redirect (non-popup) or an HTML page that postMessages
+ * to the opener window and closes itself (popup mode).
+ */
+function handleResponse(
+  success: boolean,
+  data: { username?: string; error?: string },
+  popup: number,
+  appUrl: string
+): NextResponse {
+  // Non-popup mode: redirect the main page
+  if (popup === 0) {
+    if (success && data.username) {
+      return NextResponse.redirect(
+        `${appUrl}/?github_connected=1&github_username=${encodeURIComponent(data.username)}`
+      );
+    }
+    return NextResponse.redirect(
+      `${appUrl}/?github_error=${encodeURIComponent(data.error || "Unknown error")}`
+    );
+  }
+
+  // Popup mode: render an HTML page that communicates with the opener.
+  // The parent window (IDE) listens for a 'github_oauth' message event
+  // and refreshes GitHub status. The popup closes itself after sending.
+  const message = success
+    ? { type: "github_oauth", success: true, username: data.username }
+    : { type: "github_oauth", success: false, error: data.error };
+
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>GitHub OAuth</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+      background: #0d1117;
+      color: #c9d1d9;
+    }
+    .card {
+      text-align: center;
+      padding: 32px;
+    }
+    .icon {
+      font-size: 40px;
+      margin-bottom: 12px;
+    }
+    h1 { font-size: 16px; font-weight: 600; margin: 0 0 8px; }
+    p { font-size: 13px; color: #8b949e; margin: 0; }
+    .spinner {
+      display: inline-block;
+      width: 18px;
+      height: 18px;
+      border: 2px solid #30363d;
+      border-top-color: #58a6ff;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-bottom: 12px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="spinner"></div>
+    <h1>${success ? "Connected!" : "Connection failed"}</h1>
+    <p>${success ? "You can close this window." : data.error || "Please try again."}</p>
+  </div>
+  <script>
+    (function() {
+      var msg = ${JSON.stringify(message)};
+      try {
+        if (window.opener && !window.opener.closed) {
+          window.opener.postMessage(msg, "*");
+        }
+      } catch (e) {}
+      // Close after a short delay so the message is delivered
+      setTimeout(function() { window.close(); }, 800);
+    })();
+  </script>
+</body>
+</html>`;
+
+  return new NextResponse(html, {
+    headers: { "Content-Type": "text/html; charset=utf-8" },
+  });
 }

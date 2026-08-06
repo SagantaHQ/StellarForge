@@ -18,6 +18,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { useProfileStore } from "@/stores/profile-store";
+import { useGithubOAuth } from "@/hooks/use-github-oauth";
 import {
   validateSorobanProject,
   formatValidationResult,
@@ -363,28 +364,13 @@ function GithubTab({
   const githubConnected = useProfileStore((s) => s.githubConnected);
   const githubUsername = useProfileStore((s) => s.githubUsername);
   const profile = useProfileStore((s) => s.profile);
-  const syncGithubStatus = useProfileStore((s) => s.syncGithubStatus);
+  const { connectGithub: connectGithubPopup, connecting: oauthConnecting, error: oauthError, setError: setOauthError } = useGithubOAuth();
 
-  // Listen for OAuth callback redirect (URL params ?github_connected=1)
+  // Surface OAuth errors from the hook into the tab's error state
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    const url = new URL(window.location.href);
-    const connected = url.searchParams.get("github_connected");
-    const githubError = url.searchParams.get("github_error");
-    if (connected || githubError) {
-      // Clean the URL
-      url.searchParams.delete("github_connected");
-      url.searchParams.delete("github_username");
-      url.searchParams.delete("github_error");
-      window.history.replaceState({}, "", url.toString());
-      // Refresh GitHub status
-      if (connected) {
-        syncGithubStatus();
-      } else if (githubError) {
-        setError(`GitHub connection failed: ${githubError}`);
-      }
-    }
-  }, [syncGithubStatus, setError]);
+    if (oauthError) setError(oauthError);
+    else setError(null);
+  }, [oauthError, setError]);
 
   // Auto-switch to URL mode if not connected
   useEffect(() => {
@@ -434,8 +420,8 @@ function GithubTab({
       setError("You must be logged in to connect GitHub.");
       return;
     }
-    // Redirect to the OAuth initiation endpoint
-    window.location.href = `/api/auth/github?walletAddress=${encodeURIComponent(profile.address)}`;
+    // Open the OAuth flow in a popup window — the IDE stays open
+    connectGithubPopup();
   }
 
   async function handleCloneSelectedRepo() {
@@ -572,10 +558,15 @@ function GithubTab({
               <Button
                 size="sm"
                 onClick={handleConnectGithub}
-                className="gap-1.5 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)]"
+                disabled={oauthConnecting}
+                className="gap-1.5 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)] disabled:opacity-60"
               >
-                <Github size={13} strokeWidth={1.75} />
-                Connect GitHub
+                {oauthConnecting ? (
+                  <Loader2 size={13} strokeWidth={1.75} className="animate-spin" />
+                ) : (
+                  <Github size={13} strokeWidth={1.75} />
+                )}
+                {oauthConnecting ? "Connecting…" : "Connect GitHub"}
               </Button>
             </div>
           ) : (

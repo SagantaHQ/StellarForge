@@ -22,6 +22,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import type { UserProfile } from "@/stores/profile-store";
 import { useCollabStore } from "@/stores/collab-store";
+import { useAppKit } from "@saganta/stellar-appkit/react";
 
 interface TopBarProps {
   projectName: string;
@@ -365,15 +366,16 @@ export function TopBar({
 }
 
 /**
- * Mounts the <saganta-appkit-modal> web component on first render.
+ * Mounts the <saganta-appkit-modal> web component and attaches the
+ * StellarAppKit client instance from the React provider context.
  * The modal is always in the DOM but hidden until .open() is called.
- * This ensures it's ready instantly when the user clicks Connect.
  */
 function AppKitModalMount() {
+  const client = useAppKit();
   const mountedRef = useRef(false);
 
   useEffect(() => {
-    if (mountedRef.current) return;
+    if (mountedRef.current || !client) return;
     mountedRef.current = true;
 
     (async () => {
@@ -382,9 +384,9 @@ function AppKitModalMount() {
         await import("@saganta/stellar-appkit/ui-web");
 
         if (typeof document !== "undefined") {
-          let modal = document.querySelector<HTMLElement>("saganta-appkit-modal");
+          let modal = document.querySelector<HTMLElement & { client: unknown }>("saganta-appkit-modal");
           if (!modal) {
-            modal = document.createElement("saganta-appkit-modal") as HTMLElement;
+            modal = document.createElement("saganta-appkit-modal") as HTMLElement & { client: unknown };
             modal.setAttribute("theme", "dark");
             modal.setAttribute("mode", "modal");
             modal.setAttribute("title", "Soroban.Build");
@@ -402,12 +404,14 @@ function AppKitModalMount() {
             modal.style.setProperty("--sak-overlay-color", "rgba(0,0,0,0.5)");
             document.body.appendChild(modal);
           }
+          // Attach the client instance — required before .open() can be called
+          modal.client = client;
         }
       } catch {
-        // Silently fail — the wallet hook will try again when connect is clicked
+        // Silently fail
       }
     })();
-  }, []);
+  }, [client]);
 
   return null;
 }

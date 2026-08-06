@@ -13,22 +13,24 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { useStellarWallet } from "@/lib/wallet/use-stellar-wallet";
+import { useAppKit, useConnect, useSession, useSignIn } from "@saganta/stellar-appkit/react";
 
 /**
- * §11 — Wallet connect + profile completion modal.
+ * §11 — Profile modal using @saganta/stellar-appkit/react hooks.
  *
- * Uses @saganta/stellar-appkit's <saganta-appkit-modal> web component
- * for the wallet picker UI (with theming, wallet icons, network checks,
- * balance display, etc.), and SIWS (Sign-In With Stellar) for proving
- * wallet ownership before saving the username.
+ * The wallet connection is handled by the <StellarAppKitProvider> at the
+ * app root. This modal uses:
+ * - useAppKit() — get the client instance
+ * - useConnect() — connect/disconnect wallets
+ * - useSession() — reactive session (address, connected state)
+ * - useSignIn() — SIWS signing (wallet signs message proving ownership)
  *
  * Flow:
- *   1. User clicks "Connect Wallet" → opens saganta-appkit-modal
- *   2. User picks a wallet (Freighter/Albedo/xBull) → wallet connects
+ *   1. User clicks Connect → opens <saganta-appkit-modal> (handled by TopBar)
+ *   2. sc-connect event fires → this modal captures address → shows profile form
  *   3. User enters username → availability checked against Postgres
- *   4. User clicks "Sign & save profile" → wallet signs SIWS message
- *   5. Server verifies signature + saves profile to Postgres
+ *   4. User clicks "Sign & save profile" → useSignIn() signs SIWS message
+ *   5. Server verifies signature + saves profile
  */
 
 type Step = "wallet" | "profile" | "done";
@@ -37,7 +39,6 @@ interface ProfileModalProps {
   open: boolean;
   onClose: () => void;
   onComplete: (profile: { address: string; username: string; avatarUrl?: string; bio?: string }) => void;
-  /** Existing profile — when set, opens in "edit mode" (username locked) */
   existingProfile?: { address: string; username: string; avatarUrl?: string; bio?: string } | null;
 }
 
@@ -59,11 +60,14 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile }: Pro
   const [signing, setSigning] = useState(false);
   const [signError, setSignError] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const modalRef = useRef<HTMLElement | null>(null);
 
-  const wallet = useStellarWallet();
+  // React hooks from stellar-appkit
+  const client = useAppKit();
+  const { connect: connectWallet, isConnecting: isWalletConnecting } = useConnect();
+  const session = useSession();
+  const { sign: signIn } = useSignIn();
 
-  // When opening with an existing profile, pre-fill fields and skip to profile step
+  // When opening with an existing profile, pre-fill and skip to profile step
   useEffect(() => {
     if (open && existingProfile) {
       setUsername(existingProfile.username || "");
@@ -77,53 +81,46 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile }: Pro
     }
   }, [open, existingProfile]);
 
-  // §11 — Listen for wallet connect events from the saganta-appkit-modal.
-  // When the user connects via the modal, capture the address and skip
-  // directly to the profile step (skip the wallet picker).
+  // Listen for wallet connect events from the saganta-appkit-modal
   useEffect(() => {
     if (!open) return;
-    function handleConnect(event: Event) {
+    function handleConnectEvent(event: Event) {
       const detail = (event as CustomEvent).detail;
       if (detail?.address) {
         setAddress(detail.address);
         setStep("profile");
       }
     }
-    window.addEventListener("sc-connect", handleConnect as EventListener);
-    return () => window.removeEventListener("sc-connect", handleConnect as EventListener);
-  }, [open]);
-
-  const handleConnectWallet = useCallback(async (walletId: string) => {
-    setConnecting(true);
-    setWalletError(null);
-    try {
-      const addr = await wallet.connect(walletId);
-      setAddress(addr);
+    // Also check if session already exists (from useSession hook)
+    if (session?.address && !address) {
+      setAddress(session.address);
       setStep("profile");
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setWalletError(msg);
-    } finally {
-      setConnecting(false);
     }
-  }, [wallet]);
+    window.addEventListener("sc-connect", handleConnectEvent as EventListener);
+    return () => window.removeEventListener("sc-connect", handleConnectEvent as EventListener);
+  }, [open, session, address]);
 
+  // Reset on close
   useEffect(() => {
     if (!open) {
       setTimeout(() => {
-        setStep("wallet");
-        setAddress("");
+        if (!existingProfile) {
+          setStep("wallet");
+          setAddress("");
+        }
         setConnecting(false);
         setWalletError(null);
-        setUsername("");
-        setBio("");
-        setAvatarUrl(undefined);
-        setAsyncUsernameStatus("checking");
+        if (!existingProfile) {
+          setUsername("");
+          setBio("");
+          setAvatarUrl(undefined);
+          setAsyncUsernameStatus("checking");
+        }
         setSigning(false);
         setSignError(null);
       }, 200);
     }
-  }, [open]);
+  }, [open, existingProfile]);
 
   const usernameStatus = useMemo<"idle" | "invalid" | "checking" | "available" | "taken">(() => {
     if (!username) return "idle";
@@ -134,6 +131,7 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile }: Pro
   useEffect(() => {
     if (step !== "profile") return;
     if (!username || username.length < 3 || !/^[a-z0-9_]+$/i.test(username)) return;
+    if (existingProfile?.username) return; // locked, skip check
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(async () => {
       try {
@@ -151,7 +149,21 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile }: Pro
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [username, step]);
+  }, [username, step, existingProfile]);
+
+  const handleConnectWallet = useCallback(async (walletId: string) => {
+    setConnecting(true);
+    setWalletError(null);
+    try {
+      const result = await connectWallet(walletId);
+      setAddress(result.address);
+      setStep("profile");
+    } catch (err) {
+      setWalletError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setConnecting(false);
+    }
+  }, [connectWallet]);
 
   if (!open) return null;
 
@@ -161,19 +173,40 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile }: Pro
     setSignError(null);
 
     try {
-      const siws = await wallet.signInWithStellar(
-        address,
-        `Setting username "${username}" on Soroban.Build`
-      );
+      // 1. Fetch nonce from server
+      const nonceRes = await fetch("/api/auth/nonce");
+      if (!nonceRes.ok) throw new Error("Failed to fetch nonce");
+      const { nonce } = await nonceRes.json();
 
-      await wallet.verifyAndSaveProfile(siws, {
-        username,
-        displayName: undefined,
-        bio: bio.trim() || undefined,
+      // 2. Sign SIWS message using the React hook
+      const siwsResult = await signIn({
+        statement: `Setting username "${username}" on Soroban.Build`,
+        nonce,
       });
 
+      // 3. Send to server for verification + save
+      const res = await fetch("/api/auth/verify-siws", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: siwsResult.message,
+          signedMessage: siwsResult.signedMessage,
+          signerAddress: siwsResult.signerAddress,
+          signedData: siwsResult.signedData,
+          nonce,
+          username,
+          bio: bio.trim() || undefined,
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        const msg = err.reason ? `${err.error}: ${err.reason}` : err.error ?? `Verification failed (${res.status})`;
+        throw new Error(msg);
+      }
+
       onComplete({
-        address,
+        address: siwsResult.signerAddress,
         username,
         avatarUrl,
         bio: bio.trim() || undefined,
@@ -233,27 +266,27 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile }: Pro
               <Button
                 onClick={async () => {
                   setConnecting(true);
-                  setWalletError(null);
                   try {
-                    await wallet.openWalletModal();
+                    const modal = document.querySelector<HTMLElement & { open: () => void }>("saganta-appkit-modal");
+                    modal?.open?.();
                   } catch (err) {
                     setWalletError(err instanceof Error ? err.message : String(err));
                   } finally {
                     setConnecting(false);
                   }
                 }}
-                disabled={connecting}
+                disabled={connecting || isWalletConnecting}
                 className="w-full gap-2 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)]"
               >
-                {connecting ? (
+                {connecting || isWalletConnecting ? (
                   <Loader2 size={14} strokeWidth={1.75} className="animate-spin" />
                 ) : (
                   <Wallet size={14} strokeWidth={1.75} />
                 )}
-                {connecting ? "Opening wallet…" : "Open wallet picker"}
+                {connecting || isWalletConnecting ? "Opening wallet…" : "Open wallet picker"}
               </Button>
 
-              {/* Also provide direct connect buttons as fallback */}
+              {/* Direct connect buttons as fallback */}
               <div className="relative py-2">
                 <div className="absolute inset-0 flex items-center">
                   <span className="w-full border-t border-[var(--border-subtle)]" />
@@ -268,13 +301,10 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile }: Pro
                   <button
                     key={w.id}
                     onClick={() => handleConnectWallet(w.id)}
-                    disabled={connecting}
+                    disabled={connecting || isWalletConnecting}
                     className="flex w-full items-center gap-3 rounded-md border border-[var(--border-subtle)] bg-[var(--surface-sunken)] p-2.5 text-left transition-colors hover:border-[var(--accent)] disabled:opacity-50"
                   >
-                    <div
-                      className="flex h-8 w-8 items-center justify-center rounded-md"
-                      style={{ backgroundColor: w.color }}
-                    >
+                    <div className="flex h-8 w-8 items-center justify-center rounded-md" style={{ backgroundColor: w.color }}>
                       <Wallet size={14} strokeWidth={1.75} className="text-white" />
                     </div>
                     <div className="flex-1">
@@ -288,44 +318,22 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile }: Pro
               {walletError && (
                 <div className="rounded-md border border-[var(--status-error)] bg-[color-mix(in_srgb,var(--status-error)_10%,transparent)] p-2.5 flex items-start gap-2">
                   <AlertCircle size={14} strokeWidth={1.75} className="text-[var(--status-error)] mt-0.5 shrink-0" />
-                  <div className="text-[11px] text-[var(--status-error)]">
-                    {walletError.includes("isn't installed") || walletError.includes("not installed") ? (
-                      <>
-                        <div className="font-medium">Wallet not installed</div>
-                        <div className="mt-0.5 opacity-90">
-                          {walletError.includes("Freighter") && (
-                            <span>Install from <a href="https://freighter.app" target="_blank" rel="noopener" className="underline">freighter.app</a></span>
-                          )}
-                          {walletError.includes("Albedo") && (
-                            <span>Albedo works without installation — try it instead.</span>
-                          )}
-                        </div>
-                      </>
-                    ) : (
-                      <span>{walletError}</span>
-                    )}
-                  </div>
+                  <div className="text-[11px] text-[var(--status-error)]">{walletError}</div>
                 </div>
               )}
               <p className="pt-1 text-[10px] text-[var(--text-muted)]">
-                Powered by <code className="font-mono">@saganta/stellar-appkit</code> — wallet icons, network checks, balance display.
+                Powered by <code className="font-mono">@saganta/stellar-appkit</code>
               </p>
             </div>
           )}
 
           {step === "profile" && (
             <div className="space-y-3">
-              {/* Address display */}
               <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface-sunken)] p-2.5">
-                <div className="text-[10px] uppercase tracking-wide text-[var(--text-muted)] mb-0.5">
-                  Wallet address
-                </div>
-                <div className="font-mono text-[11px] text-[var(--text-secondary)] truncate">
-                  {address}
-                </div>
+                <div className="text-[10px] uppercase tracking-wide text-[var(--text-muted)] mb-0.5">Wallet address</div>
+                <div className="font-mono text-[11px] text-[var(--text-secondary)] truncate">{address}</div>
               </div>
 
-              {/* Avatar */}
               <div className="flex items-center gap-3">
                 <div className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-full bg-[var(--surface-raised)]">
                   {avatarUrl ? (
@@ -339,16 +347,10 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile }: Pro
                     <Upload size={11} strokeWidth={1.75} />
                     Upload avatar
                   </span>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={handleFileUpload}
-                  />
+                  <input type="file" accept="image/*" className="hidden" onChange={handleFileUpload} />
                 </label>
               </div>
 
-              {/* Username */}
               <div>
                 <label className="text-[11px] font-medium text-[var(--text-secondary)] mb-1 block">
                   Username{" "}
@@ -373,42 +375,21 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile }: Pro
                     )}
                   />
                   <div className="absolute right-2 top-1/2 -translate-y-1/2">
-                    {usernameStatus === "checking" && (
-                      <Loader2 size={12} strokeWidth={1.75} className="animate-spin text-[var(--text-muted)]" />
-                    )}
-                    {usernameStatus === "available" && (
-                      <Check size={13} strokeWidth={2} className="text-[var(--status-success)]" />
-                    )}
-                    {usernameStatus === "taken" && (
-                      <X size={13} strokeWidth={2} className="text-[var(--status-error)]" />
-                    )}
-                    {usernameStatus === "invalid" && (
-                      <AlertCircle size={12} strokeWidth={2} className="text-[var(--status-warning)]" />
-                    )}
+                    {usernameStatus === "checking" && <Loader2 size={12} strokeWidth={1.75} className="animate-spin text-[var(--text-muted)]" />}
+                    {usernameStatus === "available" && <Check size={13} strokeWidth={2} className="text-[var(--status-success)]" />}
+                    {usernameStatus === "taken" && <X size={13} strokeWidth={2} className="text-[var(--status-error)]" />}
+                    {usernameStatus === "invalid" && <AlertCircle size={12} strokeWidth={2} className="text-[var(--status-warning)]" />}
                   </div>
                 </div>
                 <div className="mt-1 text-[10px] text-[var(--text-muted)]">
-                  {usernameStatus === "idle" && "3+ chars, letters/numbers/underscore. Used in collab, comments, and line attribution."}
+                  {usernameStatus === "idle" && "3+ chars, letters/numbers/underscore."}
                   {usernameStatus === "checking" && "Checking availability…"}
-                  {usernameStatus === "available" && (
-                    <span className="text-[var(--status-success)]">
-                      &ldquo;{username}&rdquo; is available
-                    </span>
-                  )}
-                  {usernameStatus === "taken" && (
-                    <span className="text-[var(--status-error)]">
-                      &ldquo;{username}&rdquo; is already taken
-                    </span>
-                  )}
-                  {usernameStatus === "invalid" && (
-                    <span className="text-[var(--status-warning)]">
-                      Must be 3+ chars, letters/numbers/underscore only
-                    </span>
-                  )}
+                  {usernameStatus === "available" && <span className="text-[var(--status-success)]">"{username}" is available</span>}
+                  {usernameStatus === "taken" && <span className="text-[var(--status-error)]">"{username}" is already taken</span>}
+                  {usernameStatus === "invalid" && <span className="text-[var(--status-warning)]">Must be 3+ chars, letters/numbers/underscore only</span>}
                 </div>
               </div>
 
-              {/* Bio */}
               <div>
                 <label className="text-[11px] font-medium text-[var(--text-secondary)] mb-1 block">
                   Bio <span className="text-[var(--text-muted)]">(optional)</span>
@@ -422,13 +403,10 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile }: Pro
                 />
               </div>
 
-              {/* SIWS signing indicator */}
               {signing && (
                 <div className="rounded-md border border-[var(--accent)] bg-[var(--accent-subtle)] p-2.5 flex items-center gap-2">
                   <Loader2 size={14} strokeWidth={1.75} className="animate-spin text-[var(--accent)]" />
-                  <span className="text-[11px] text-[var(--text-secondary)]">
-                    Sign the message in your wallet to verify ownership…
-                  </span>
+                  <span className="text-[11px] text-[var(--text-secondary)]">Sign the message in your wallet to verify ownership…</span>
                 </div>
               )}
 
@@ -447,11 +425,7 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile }: Pro
                 disabled={usernameStatus !== "available" || signing}
                 className="w-full gap-2 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)] disabled:opacity-50"
               >
-                {signing ? (
-                  <Loader2 size={14} strokeWidth={1.75} className="animate-spin" />
-                ) : (
-                  <ShieldCheck size={14} strokeWidth={1.75} />
-                )}
+                {signing ? <Loader2 size={14} strokeWidth={1.75} className="animate-spin" /> : <ShieldCheck size={14} strokeWidth={1.75} />}
                 {signing ? "Signing…" : "Sign & save profile"}
               </Button>
 
@@ -467,16 +441,11 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile }: Pro
               <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-[var(--accent-subtle)]">
                 <Check size={24} strokeWidth={2} className="text-[var(--accent)]" />
               </div>
-              <h3 className="text-sm font-medium text-[var(--text-primary)] mb-1">
-                You&apos;re all set, {username}!
-              </h3>
+              <h3 className="text-sm font-medium text-[var(--text-primary)] mb-1">You're all set, {username}!</h3>
               <p className="text-xs text-[var(--text-muted)] mb-4">
                 Your profile is saved. You can now collaborate, comment, and your edits will be attributed.
               </p>
-              <Button
-                onClick={onClose}
-                className="bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)]"
-              >
+              <Button onClick={onClose} className="bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)]">
                 Start building
               </Button>
             </div>

@@ -272,7 +272,7 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile }: Pro
                 ) : (
                   <Wallet size={14} strokeWidth={1.75} />
                 )}
-                {connecting || isWalletConnecting ? "Opening wallet…" : "Open wallet picker"}
+                {connecting || wallet.connecting ? "Opening wallet…" : "Open wallet picker"}
               </Button>
 
               {/* Direct connect buttons as fallback */}

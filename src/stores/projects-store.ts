@@ -324,19 +324,31 @@ export const useProjectsStore = create<ProjectsState>()(
             }
           }
 
-          // Remove from IDB
+          // Remove from IDB (with retry — the IDB layer handles connection issues)
           await projectDelete(projectId);
 
-          // Update store
           const wasActive = get().activeProjectId === projectId;
+
+          // If we're deleting the active project, clear the file system store
+          // and editor tabs BEFORE updating the projects store, so the UI
+          // transitions cleanly to the welcome page.
+          if (wasActive) {
+            try {
+              const { useFileSystemStore } = await import("@/stores/file-system-store");
+              const { useEditorTabsStore } = await import("@/stores/editor-tabs-store");
+              await useFileSystemStore.getState().replaceTree([]);
+              useEditorTabsStore.getState().closeAllTabs();
+            } catch {
+              // Best-effort — the UI will show empty state regardless
+            }
+            await metaSet("activeProjectId", null);
+          }
+
+          // Update store state
           set((s) => ({
             projects: s.projects.filter((p) => p.id !== projectId),
             activeProjectId: wasActive ? null : s.activeProjectId,
           }));
-
-          if (wasActive) {
-            await metaSet("activeProjectId", null);
-          }
         } finally {
           set({ busy: false });
         }

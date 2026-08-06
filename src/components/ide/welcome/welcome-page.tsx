@@ -15,6 +15,7 @@ import {
   Cloud,
   HardDrive,
   AlertCircle,
+  Download,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -24,8 +25,7 @@ import { useProfileStore } from "@/stores/profile-store";
 interface WelcomePageProps {
   onNewProject: () => void;
   onBrowseTemplates: () => void;
-  onImportZip: () => void;
-  onImportGit: () => void;
+  onImportProject: () => void;
   onOpenProject: (projectId: string) => void;
   onDeleteProject: (project: ProjectMeta) => void;
 }
@@ -45,8 +45,7 @@ interface WelcomePageProps {
 export function WelcomePage({
   onNewProject,
   onBrowseTemplates,
-  onImportZip,
-  onImportGit,
+  onImportProject,
   onOpenProject,
   onDeleteProject,
 }: WelcomePageProps) {
@@ -92,31 +91,25 @@ export function WelcomePage({
         </div>
 
         {/* Quick action cards */}
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           <ActionCard
             icon={Plus}
             title="New project"
-            description="Start from a blank workspace"
+            description="Start from a blank workspace or pick a template"
             onClick={onNewProject}
             accent
+          />
+          <ActionCard
+            icon={Download}
+            title="Import project"
+            description="From GitHub repo, zip file, or local folder"
+            onClick={onImportProject}
           />
           <ActionCard
             icon={Sparkles}
             title="Browse templates"
             description="Token, governance, DeFi, and more"
             onClick={onBrowseTemplates}
-          />
-          <ActionCard
-            icon={Upload}
-            title="Import from zip"
-            description="Upload a .zip of your contract"
-            onClick={onImportZip}
-          />
-          <ActionCard
-            icon={GitBranch}
-            title="Import from git"
-            description="Clone an existing repository"
-            onClick={onImportGit}
           />
         </div>
 

@@ -20,8 +20,7 @@ import { ProfileModal } from "./profile/profile-modal";
 import { ShareDialog } from "./collab/share-dialog";
 import { SnapshotPanel } from "./panels/snapshot-panel";
 import { DeleteProjectModal } from "./projects/delete-project-modal";
-import { ImportFromZipModal } from "./projects/import-from-zip-modal";
-import { ImportFromGitModal } from "./projects/import-from-git-modal";
+import { ImportProjectModal } from "./projects/import-project-modal";
 import { WelcomePage } from "./welcome/welcome-page";
 import { useThemeStore } from "@/stores/theme-store";
 import { useFileSystemStore } from "@/stores/file-system-store";
@@ -66,8 +65,7 @@ export function IdeShell() {
   const [profileOpen, setProfileOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [deleteProjectTarget, setDeleteProjectTarget] = useState<ProjectMeta | null>(null);
-  const [importZipOpen, setImportZipOpen] = useState(false);
-  const [importGitOpen, setImportGitOpen] = useState(false);
+  const [importProjectOpen, setImportProjectOpen] = useState(false);
   const [mobileActivePanel, setMobileActivePanel] = useState<"files" | "editor" | "build" | "agent">("editor");
   const [network, setNetwork] = useState("testnet");
 
@@ -270,6 +268,7 @@ export function IdeShell() {
           const target = projectsList.find((p) => p.id === id) ?? null;
           if (target) setDeleteProjectTarget(target);
         }}
+        onImportProject={() => setImportProjectOpen(true)}
       />
 
       {/* Desktop layout — ActivityBar + left panel + center + right panel
@@ -308,8 +307,7 @@ export function IdeShell() {
               <WelcomePage
                 onNewProject={() => setNewProjectOpen(true)}
                 onBrowseTemplates={() => setNewProjectOpen(true)}
-                onImportZip={() => setImportZipOpen(true)}
-                onImportGit={() => setImportGitOpen(true)}
+                onImportProject={() => setImportProjectOpen(true)}
                 onOpenProject={(id) => {
                   projectsSwitch(id).catch(() => {});
                 }}
@@ -345,8 +343,7 @@ export function IdeShell() {
           <WelcomePage
             onNewProject={() => setNewProjectOpen(true)}
             onBrowseTemplates={() => setNewProjectOpen(true)}
-            onImportZip={() => setImportZipOpen(true)}
-            onImportGit={() => setImportGitOpen(true)}
+            onImportProject={() => setImportProjectOpen(true)}
             onOpenProject={(id) => {
               projectsSwitch(id).catch(() => {});
             }}
@@ -438,22 +435,9 @@ export function IdeShell() {
         }}
       />
 
-      <ImportFromZipModal
-        open={importZipOpen}
-        onClose={() => setImportZipOpen(false)}
-        onImport={async (projectName, files) => {
-          const ownerId = await resolveOwnerId(profile?.address);
-          await projectsCreate({
-            name: projectName,
-            files,
-            ownerId,
-          });
-        }}
-      />
-
-      <ImportFromGitModal
-        open={importGitOpen}
-        onClose={() => setImportGitOpen(false)}
+      <ImportProjectModal
+        open={importProjectOpen}
+        onClose={() => setImportProjectOpen(false)}
         onImport={async (projectName, files) => {
           const ownerId = await resolveOwnerId(profile?.address);
           await projectsCreate({

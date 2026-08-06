@@ -21,6 +21,7 @@ import {
   Trash2,
   FolderOpen,
   ChevronRight,
+  Download,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -55,6 +56,7 @@ interface TopBarProps {
   onSwitchProject?: (projectId: string) => void;
   onCloseProject?: () => void;
   onDeleteProject?: (projectId: string) => void;
+  onImportProject?: () => void;
 }
 
 const NETWORKS = ["mainnet", "testnet", "futurenet", "local"] as const;
@@ -81,6 +83,7 @@ export function TopBar({
   onSwitchProject,
   onCloseProject,
   onDeleteProject,
+  onImportProject,
 }: TopBarProps) {
   const [networkOpen, setNetworkOpen] = useState(false);
   const [avatarMenuOpen, setAvatarMenuOpen] = useState(false);
@@ -153,6 +156,10 @@ export function TopBar({
                 onNewProject={() => {
                   setProjectMenuOpen(false);
                   onNewProject();
+                }}
+                onImportProject={() => {
+                  setProjectMenuOpen(false);
+                  onImportProject?.();
                 }}
                 onClose={() => {
                   setProjectMenuOpen(false);
@@ -460,6 +467,7 @@ function ProjectSwitcherMenu({
   busy,
   onSwitch,
   onNewProject,
+  onImportProject,
   onClose,
   onDelete,
   onCloseMenu,
@@ -469,6 +477,7 @@ function ProjectSwitcherMenu({
   busy: boolean;
   onSwitch: (id: string) => void;
   onNewProject: () => void;
+  onImportProject: () => void;
   onClose: () => void;
   onDelete: (id: string) => void;
   onCloseMenu: () => void;
@@ -572,6 +581,15 @@ function ProjectSwitcherMenu({
             <kbd className="ml-auto rounded border border-[var(--border-subtle)] bg-[var(--surface-raised)] px-1.5 py-0.5 text-[9px] font-mono text-[var(--text-muted)]">
               ⌘⇧P
             </kbd>
+          </button>
+
+          <button
+            onClick={onImportProject}
+            className="flex w-full items-center gap-2.5 px-3 py-2 text-[12px] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] transition-colors"
+          >
+            <Download size={14} strokeWidth={1.75} className="text-[var(--text-muted)]" />
+            <span>Import project</span>
+            <span className="ml-auto text-[9px] text-[var(--text-muted)]">GitHub · Zip · Folder</span>
           </button>
 
           <button

@@ -6,6 +6,13 @@ import { openDB, type IDBPDatabase } from "idb";
  * The app is local-first: files, open tabs, editor state, unsaved buffers,
  * and comment drafts live in IndexedDB and sync opportunistically when
  * online. Offline = full editing continues; reconnect = merge + push.
+ *
+ * Connection resilience: the DB connection can close unexpectedly due to
+ * browser tab suspension, storage pressure, or the persist middleware
+ * rehydrating during an operation. We handle this by:
+ *   1. Tracking connection state with `dbClosed`
+ *   2. Resetting the promise on close so the next call reopens
+ *   3. Wrapping all operations in a retry that reopens on failure
  */
 
 const DB_NAME = "soroban-build";
@@ -14,12 +21,15 @@ const DB_VERSION = 2;
 export type StoreName = "files" | "comments" | "tabs" | "meta" | "projects";
 
 let dbPromise: Promise<IDBPDatabase> | null = null;
+let dbClosed = false;
 
-function getDB() {
+function getDB(): Promise<IDBPDatabase> {
   if (typeof window === "undefined") {
-    throw new Error("IndexedDB is only available in the browser");
+    return Promise.reject(new Error("IndexedDB is only available in the browser"));
   }
-  if (!dbPromise) {
+  // If the connection was closed or never opened, (re)open it
+  if (!dbPromise || dbClosed) {
+    dbClosed = false;
     dbPromise = openDB(DB_NAME, DB_VERSION, {
       upgrade(db, oldVersion) {
         // v1 stores
@@ -40,39 +50,74 @@ function getDB() {
           db.createObjectStore("projects", { keyPath: "id" });
         }
       },
+      // Handle unexpected connection termination — reset so next call reopens
+      blocking() {
+        // Another tab wants to upgrade the DB — close our connection
+        if (dbPromise) {
+          dbPromise.then((db) => db.close()).catch(() => {});
+        }
+        dbClosed = true;
+        dbPromise = null;
+      },
+      terminated() {
+        // The connection was unexpectedly terminated (e.g. browser evicted it)
+        dbClosed = true;
+        dbPromise = null;
+      },
     });
   }
   return dbPromise;
 }
 
+/**
+ * Run an IDB operation with automatic retry on connection failure.
+ * If the first attempt fails because the connection is closing/closed,
+ * we reset the connection and try once more.
+ */
+async function withRetry<T>(op: (db: IDBPDatabase) => Promise<T>): Promise<T> {
+  try {
+    const db = await getDB();
+    return await op(db);
+  } catch (err) {
+    // Check if this is a connection-closing error
+    const msg = err instanceof Error ? err.message : String(err);
+    const isConnectionError =
+      msg.includes("closing") ||
+      msg.includes("Connection is closed") ||
+      msg.includes("already closed") ||
+      msg.includes("The database connection is closing");
+    if (!isConnectionError) throw err;
+
+    // Reset the connection and retry once
+    dbClosed = true;
+    dbPromise = null;
+    const db = await getDB();
+    return await op(db);
+  }
+}
+
 export async function idbGet<T>(store: StoreName, key: string): Promise<T | undefined> {
-  const db = await getDB();
-  return db.get(store, key);
+  return withRetry((db) => db.get(store, key));
 }
 
 export async function idbGetAll<T>(store: StoreName): Promise<T[]> {
-  const db = await getDB();
-  return db.getAll(store);
+  return withRetry((db) => db.getAll(store));
 }
 
 export async function idbSet<T>(store: StoreName, value: T): Promise<void> {
-  const db = await getDB();
-  await db.put(store, value);
+  await withRetry((db) => db.put(store, value));
 }
 
 export async function idbSetKey<T>(store: StoreName, key: string, value: T): Promise<void> {
-  const db = await getDB();
-  await db.put(store, value, key);
+  await withRetry((db) => db.put(store, value, key));
 }
 
 export async function idbDelete(store: StoreName, key: string): Promise<void> {
-  const db = await getDB();
-  await db.delete(store, key);
+  await withRetry((db) => db.delete(store, key));
 }
 
 export async function idbClear(store: StoreName): Promise<void> {
-  const db = await getDB();
-  await db.clear(store);
+  await withRetry((db) => db.clear(store));
 }
 
 // Meta store (key-value)

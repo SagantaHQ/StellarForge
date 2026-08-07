@@ -137,22 +137,78 @@ export function IdeShell() {
   }, [profile?.address, projectsSyncFromServer]);
 
   // §11 — Listen for wallet connect/disconnect events.
-  // When a wallet connects, check the server session to see if the user
-  // has a profile. If they do, they're logged in. If not, open the profile
-  // modal to complete their profile.
+  // When a wallet connects, we MUST do SIWS (Sign-In With Stellar):
+  //   1. Wallet signs a message proving ownership
+  //   2. Server verifies the signature → creates a session
+  //   3. Check if the user has a profile → open profile modal if not
   useEffect(() => {
     function handleConnect(event: Event) {
       const detail = (event as CustomEvent).detail;
       if (detail?.address) {
-        // Wallet connected — set flag and check server session
+        // Wallet connected — set flag
         setWalletConnected(true);
-        syncFromWallet(detail.address).then(() => {
-          const state = useProfileStore.getState();
-          if (!state.profile) {
-            // Wallet connected but no profile in DB — open profile modal
-            setProfileOpen(true);
+
+        // Step 1: Try SIWS login (sign message → verify → create session)
+        // We need the appkit instance to sign the SIWS message
+        async function doSiwsLogin() {
+          try {
+            // Get the appkit instance from the modal
+            const modal = document.querySelector<HTMLElement & { client: unknown }>("saganta-appkit-modal");
+            const appkit = modal?.client as {
+              signIn: (opts: { statement: string; nonce: string }) => Promise<{
+                message: string;
+                signedMessage: string;
+                signerAddress: string;
+                signedData?: string;
+              }>;
+            } | null;
+
+            if (!appkit) {
+              // Appkit not mounted yet — fall back to passive session check
+              syncFromWallet(detail.address);
+              return;
+            }
+
+            // Fetch nonce from server
+            const nonceRes = await fetch("/api/auth/nonce");
+            if (!nonceRes.ok) {
+              syncFromWallet(detail.address);
+              return;
+            }
+            const { nonce } = await nonceRes.json();
+
+            // Sign the SIWS message
+            const statement = `Sign in to Soroban.Build`;
+            const siwsResult = await appkit.signIn({ statement, nonce });
+
+            // Verify on server + create session
+            const loginResult = await useProfileStore.getState().loginWithSiws({
+              message: siwsResult.message,
+              signedMessage: siwsResult.signedMessage,
+              signerAddress: siwsResult.signerAddress,
+              nonce,
+              signedData: siwsResult.signedData,
+            });
+
+            // If login succeeded but user has no profile → open profile modal
+            if (loginResult.loggedIn && loginResult.needsProfile) {
+              setProfileOpen(true);
+            }
+          } catch (err) {
+            // SIWS failed (user rejected, network error, etc.)
+            // Fall back to passive session check — if the user already has
+            // a session from a previous login, they can still use the IDE
+            console.error("[SIWS] Login failed, falling back to passive check:", err);
+            syncFromWallet(detail.address).then(() => {
+              const state = useProfileStore.getState();
+              if (!state.profile && state.walletConnected) {
+                setProfileOpen(true);
+              }
+            });
           }
-        });
+        }
+
+        doSiwsLogin();
       }
     }
     function handleDisconnect() {
@@ -242,7 +298,13 @@ export function IdeShell() {
         profile={profile}
         building={buildStatus === "building"}
         hasBuilt={buildStatus === "success"}
-        onShare={() => setShareOpen(true)}
+        onShare={() => {
+          if (!useProfileStore.getState().isLoggedIn()) {
+            setProfileOpen(true);
+            return;
+          }
+          setShareOpen(true);
+        }}
         onConnectWallet={async () => {
           // Try to open the saganta-appkit-modal if already mounted
           const modal = document.querySelector<HTMLElement & { open: () => void }>("saganta-appkit-modal");
@@ -267,17 +329,35 @@ export function IdeShell() {
         onLogout={() => {
           clearProfile();
         }}
-        onNewProject={() => setNewProjectOpen(true)}
+        onNewProject={() => {
+          if (!useProfileStore.getState().isLoggedIn()) {
+            setProfileOpen(true);
+            return;
+          }
+          setNewProjectOpen(true);
+        }}
         onCommandPalette={() => setCommandPaletteOpen(true)}
         onBuild={() => {
+          if (!useProfileStore.getState().isLoggedIn()) {
+            setProfileOpen(true);
+            return;
+          }
           setRightPanelView("compile");
           startBuild();
         }}
         onDeploy={() => {
+          if (!useProfileStore.getState().isLoggedIn()) {
+            setProfileOpen(true);
+            return;
+          }
           setRightPanelView("deploy");
         }}
         onSwitchNetwork={setNetwork}
         onSwitchProject={(id) => {
+          if (!useProfileStore.getState().isLoggedIn()) {
+            setProfileOpen(true);
+            return;
+          }
           projectsSwitch(id).catch(() => {});
         }}
         onCloseProject={() => {
@@ -287,7 +367,13 @@ export function IdeShell() {
           const target = projectsList.find((p) => p.id === id) ?? null;
           if (target) setDeleteProjectTarget(target);
         }}
-        onImportProject={() => setImportProjectOpen(true)}
+        onImportProject={() => {
+          if (!useProfileStore.getState().isLoggedIn()) {
+            setProfileOpen(true);
+            return;
+          }
+          setImportProjectOpen(true);
+        }}
       />
 
       {/* Desktop layout — ActivityBar + left panel + center + right panel

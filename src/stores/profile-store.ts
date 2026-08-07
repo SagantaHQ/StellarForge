@@ -38,8 +38,16 @@ interface ProfileState {
   clearProfile: () => void;
   setWalletConnected: (connected: boolean) => void;
   isLoggedIn: () => boolean;
-  /** Check server session by wallet address */
+  /** Check server session by wallet address (passive check, no SIWS) */
   syncFromWallet: (address: string | null) => Promise<void>;
+  /** Full login flow: SIWS sign → verify on server → create session. Returns needsProfile flag. */
+  loginWithSiws: (siwsResult: {
+    message: string;
+    signedMessage: string;
+    signerAddress: string;
+    nonce: string;
+    signedData?: string;
+  }) => Promise<{ loggedIn: boolean; needsProfile: boolean }>;
   /** Check GitHub connection status (called after profile loads + after OAuth callback) */
   syncGithubStatus: () => Promise<void>;
   /** Disconnect GitHub (clears the token on the server) */
@@ -144,6 +152,59 @@ export const useProfileStore = create<ProfileState>()(
 
         // After session sync, also check GitHub status
         get().syncGithubStatus();
+      },
+
+      loginWithSiws: async (siwsResult) => {
+        try {
+          const res = await fetch("/api/auth/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(siwsResult),
+          });
+
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({ error: res.statusText }));
+            set({ sessionChecked: true });
+            return { loggedIn: false, needsProfile: true };
+          }
+
+          const data = await res.json();
+
+          if (data.loggedIn) {
+            if (data.profile) {
+              // User has a profile — fully logged in
+              set({
+                profile: {
+                  address: siwsResult.signerAddress,
+                  username: data.profile.username,
+                  avatarUrl: data.profile.avatarUrl ?? undefined,
+                  bio: data.profile.bio ?? undefined,
+                  createdAt: Date.now(),
+                },
+                accentColor: colorFromAddress(siwsResult.signerAddress),
+                walletConnected: true,
+                sessionChecked: true,
+              });
+              // Check GitHub status
+              get().syncGithubStatus();
+              return { loggedIn: true, needsProfile: false };
+            } else {
+              // Logged in but no profile — need to complete registration
+              set({
+                profile: null,
+                walletConnected: true,
+                sessionChecked: true,
+              });
+              return { loggedIn: true, needsProfile: true };
+            }
+          }
+
+          set({ sessionChecked: true });
+          return { loggedIn: false, needsProfile: true };
+        } catch {
+          set({ sessionChecked: true });
+          return { loggedIn: false, needsProfile: true };
+        }
       },
 
       syncGithubStatus: async () => {

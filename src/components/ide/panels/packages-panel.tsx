@@ -23,6 +23,22 @@ import {
 } from "@/lib/soroban/cargo-parser";
 
 /**
+ * OpenZeppelin Stellar Contracts — published as separate crates on crates.io.
+ * Users can one-click add any of these to their Cargo.toml.
+ * Source: https://github.com/OpenZeppelin/stellar-contracts
+ * Docs: https://docs.openzeppelin.com/stellar-contracts
+ */
+const OZ_CRATES = [
+  { name: "stellar-access", version: "0.7.2", description: "Ownable, Access Control, Roles" },
+  { name: "stellar-tokens", version: "0.7.2", description: "Fungible + Non-Fungible tokens" },
+  { name: "stellar-governance", version: "0.7.2", description: "Governance utilities" },
+  { name: "stellar-contract-utils", version: "0.7.2", description: "General utilities" },
+  { name: "stellar-macros", version: "0.7.2", description: "Macros for Stellar contracts" },
+  { name: "stellar-fee-abstraction", version: "0.7.2", description: "Fee abstraction utilities" },
+  { name: "stellar-accounts", version: "0.7.2", description: "Smart Account Contracts" },
+] as const;
+
+/**
  * PackagesPanel — Cargo dependency manager for the left sidebar.
  *
  * Lists all dependencies from Cargo.toml, allows adding new packages
@@ -199,6 +215,62 @@ export function PackagesPanel() {
           <span>{error}</span>
         </div>
       )}
+
+      {/* OpenZeppelin quick-add section */}
+      <div className="mx-3 mb-2">
+        <div className="flex items-center gap-1 mb-1.5">
+          <span className="text-[9px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+            OpenZeppelin Contracts
+          </span>
+          <a
+            href="https://docs.openzeppelin.com/stellar-contracts"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[9px] text-[var(--accent)] hover:underline"
+          >
+            docs ↗
+          </a>
+        </div>
+        <div className="space-y-0.5">
+          {OZ_CRATES.map((oz) => {
+            const isAdded = regularDeps.some((d) => d.name === oz.name);
+            return (
+              <div
+                key={oz.name}
+                className="group flex items-center gap-1.5 rounded px-1.5 py-1 hover:bg-[var(--surface-hover)] transition-colors"
+              >
+                <Package size={10} strokeWidth={1.75} className="text-[var(--text-muted)] shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <span className="text-[10px] font-mono text-[var(--text-primary)]">
+                    {oz.name}
+                  </span>
+                  <span className="text-[9px] text-[var(--text-muted)] ml-1">
+                    v{oz.version}
+                  </span>
+                </div>
+                <span className="text-[9px] text-[var(--text-muted)] truncate hidden group-hover:inline">
+                  {oz.description}
+                </span>
+                {isAdded ? (
+                  <span className="text-[9px] text-[var(--status-success)] shrink-0">✓ added</span>
+                ) : (
+                  <button
+                    onClick={() => {
+                      if (!cargoFile) return;
+                      const newContent = addDependency(cargoFile.content, oz.name, oz.version, false);
+                      updateFileContent(cargoFile.path, newContent);
+                      if (buildStatus !== "building") startBuild();
+                    }}
+                    className="shrink-0 text-[9px] text-[var(--accent)] hover:underline"
+                  >
+                    + add
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
 
       {/* Dependencies list */}
       <div className="flex-1 overflow-y-auto px-1 pb-3">

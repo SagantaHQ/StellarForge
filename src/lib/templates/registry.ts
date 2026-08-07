@@ -1520,6 +1520,280 @@ cargo test
       { path: ".gitignore", language: "plaintext", content: GITIGNORE },
     ],
   },
+
+  // ---------------------------------------------------------------
+  // OZ Ownable Contract — uses stellar-access crate
+  // ---------------------------------------------------------------
+  {
+    id: "oz-ownable",
+    name: "Ownable Contract",
+    description: "Contract with ownership control using OpenZeppelin's stellar-access crate. Only the owner can call restricted functions. Includes ownership transfer.",
+    category: "utility",
+    ozWizardUrl: "https://docs.openzeppelin.com/stellar-contracts",
+    sorobanSdkVersion: SOROBAN_SDK_V,
+    preview: { from: "#7B5CB8", to: "#5A3F94" },
+    tags: ["openzeppelin", "ownable", "access-control", "utility"],
+    files: [
+      {
+        path: "src/lib.rs",
+        language: "rust",
+        content: `#![no_std]
+
+use soroban_sdk::{contract, contractimpl, Address, Env, String};
+use stellar_access::ownable::Ownable;
+
+#[contract]
+pub struct OwnableContract;
+
+#[contractimpl]
+impl OwnableContract {
+    /// Initialize the contract and set the owner.
+    pub fn __constructor(env: Env, owner: Address) {
+        Ownable::set_owner(&env, &owner);
+    }
+
+    /// Returns the current owner address.
+    pub fn owner(env: Env) -> Address {
+        Ownable::owner(&env)
+    }
+
+    /// Transfer ownership to a new address. Only the current owner can call this.
+    pub fn transfer_ownership(env: Env, new_owner: Address) {
+        Ownable::require_owner(&env);
+        Ownable::transfer_ownership(&env, &new_owner);
+    }
+
+    /// Renounce ownership (sets owner to None). Only the current owner can call this.
+    pub fn renounce_ownership(env: Env) {
+        Ownable::require_owner(&env);
+        Ownable::renounce_ownership(&env);
+    }
+
+    /// Example of a restricted function — only the owner can call it.
+    pub fn admin_action(env: Env) -> String {
+        Ownable::require_owner(&env);
+        String::from_str(&env, "Admin action executed by owner")
+    }
+}
+`,
+      },
+      {
+        path: "src/test.rs",
+        language: "rust",
+        content: `#![cfg(test)]
+
+use super::*;
+use soroban_sdk::testutils::Address as _;
+
+#[test]
+fn test_owner_set_on_init() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let contract_id = env.register(OwnableContract, (owner.clone(),));
+    let client = OwnableContractClient::new(&env, &contract_id);
+
+    assert_eq!(client.owner(), owner);
+}
+
+#[test]
+fn test_transfer_ownership() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let new_owner = Address::generate(&env);
+    let contract_id = env.register(OwnableContract, (owner.clone(),));
+    let client = OwnableContractClient::new(&env, &contract_id);
+
+    env.mock_all_auths();
+    client.transfer_ownership(&new_owner);
+    assert_eq!(client.owner(), new_owner);
+}
+
+#[test]
+fn test_admin_action_requires_owner() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let contract_id = env.register(OwnableContract, (owner,));
+    let client = OwnableContractClient::new(&env, &contract_id);
+
+    env.mock_all_auths();
+    let result = client.admin_action();
+    assert_eq!(result, String::from_str(&env, "Admin action executed by owner"));
+}
+`,
+      },
+      {
+        path: "Cargo.toml",
+        language: "toml",
+        content: cargoToml("oz-ownable", SOROBAN_SDK_V) + `stellar-access = "0.7.2"\n`,
+      },
+      {
+        path: "README.md",
+        language: "markdown",
+        content: `# Ownable Contract
+
+A contract with ownership control using [OpenZeppelin's stellar-access](https://docs.openzeppelin.com/stellar-contracts) crate.
+
+## Functions
+
+- \`__constructor(owner: Address)\` — sets the initial owner
+- \`owner() -> Address\` — returns the current owner
+- \`transfer_ownership(new_owner: Address)\` — transfers ownership (owner only)
+- \`renounce_ownership()\` — removes the owner (owner only)
+- \`admin_action() -> String\` — example restricted function (owner only)
+
+## Build & Test
+
+\`\`\`sh
+soroban contract build
+cargo test
+\`\`\`
+`,
+      },
+      { path: ".gitignore", language: "plaintext", content: GITIGNORE },
+    ],
+  },
+
+  // ---------------------------------------------------------------
+  // OZ Fungible Token — uses stellar-tokens crate
+  // ---------------------------------------------------------------
+  {
+    id: "oz-fungible-token",
+    name: "OZ Fungible Token",
+    description: "Production-ready fungible token using OpenZeppelin's stellar-tokens crate. Includes mint, burn, transfer, allowance, and metadata (name, symbol, decimals).",
+    category: "token",
+    ozWizardUrl: "https://docs.openzeppelin.com/stellar-contracts",
+    sorobanSdkVersion: SOROBAN_SDK_V,
+    preview: { from: "#8B5CF6", to: "#6D28D9" },
+    tags: ["openzeppelin", "token", "fungible", "erc20"],
+    files: [
+      {
+        path: "src/lib.rs",
+        language: "rust",
+        content: `#![no_std]
+
+use soroban_sdk::{contract, contractimpl, Address, Env, String};
+use stellar_tokens::fungible::{FungibleToken, FungibleTokenClient};
+
+#[contract]
+pub struct OzToken;
+
+const NAME: &str = "OZ Token";
+const SYMBOL: &str = "OZT";
+const DECIMALS: u32 = 7;
+
+#[contractimpl]
+impl OzToken {
+    /// Initialize the token contract.
+    pub fn __constructor(env: Env, admin: Address, initial_supply: i128) {
+        admin.require_auth();
+        // Mint initial supply to the admin
+        FungibleToken::mint(&env, &admin, initial_supply);
+    }
+
+    pub fn name(env: Env) -> String {
+        String::from_str(&env, NAME)
+    }
+
+    pub fn symbol(env: Env) -> String {
+        String::from_str(&env, SYMBOL)
+    }
+
+    pub fn decimals(_env: Env) -> u32 {
+        DECIMALS
+    }
+}
+
+// Implement the FungibleToken trait — this gives us transfer, balance,
+// allowance, approve, transfer_from, total_supply for free.
+impl FungibleToken for OzToken {
+    fn total_supply(env: &Env) -> i128 {
+        FungibleToken::total_supply(env)
+    }
+
+    fn balance(env: &Env, account: Address) -> i128 {
+        FungibleToken::balance(env, &account)
+    }
+
+    fn allowance(env: &Env, owner: Address, spender: Address) -> i128 {
+        FungibleToken::allowance(env, &owner, &spender)
+    }
+
+    fn transfer(env: &Env, from: Address, to: Address, amount: i128) {
+        FungibleToken::transfer(env, &from, &to, amount)
+    }
+
+    fn approve(env: &Env, owner: Address, spender: Address, amount: i128) {
+        FungibleToken::approve(env, &owner, &spender, amount)
+    }
+
+    fn transfer_from(env: &Env, spender: Address, from: Address, to: Address, amount: i128) {
+        FungibleToken::transfer_from(env, &spender, &from, &to, amount)
+    }
+}
+`,
+      },
+      {
+        path: "src/test.rs",
+        language: "rust",
+        content: `#![cfg(test)]
+
+use super::*;
+use soroban_sdk::testutils::Address as _;
+
+#[test]
+fn test_metadata() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let contract_id = env.register(OzToken, (admin, 1_000_000_0000000));
+    let client = OzTokenClient::new(&env, &contract_id);
+
+    assert_eq!(client.name(), String::from_str(&env, "OZ Token"));
+    assert_eq!(client.symbol(), String::from_str(&env, "OZT"));
+    assert_eq!(client.decimals(), 7);
+}
+
+#[test]
+fn test_initial_supply() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let contract_id = env.register(OzToken, (admin.clone(), 1_000_000_0000000));
+    let client = OzTokenClient::new(&env, &contract_id);
+
+    assert_eq!(client.balance(&admin), 1_000_000_0000000);
+    assert_eq!(client.total_supply(), 1_000_000_0000000);
+}
+`,
+      },
+      {
+        path: "Cargo.toml",
+        language: "toml",
+        content: cargoToml("oz-fungible-token", SOROBAN_SDK_V) + `stellar-tokens = "0.7.2"\n`,
+      },
+      {
+        path: "README.md",
+        language: "markdown",
+        content: `# OZ Fungible Token
+
+A production-ready fungible token using [OpenZeppelin's stellar-tokens](https://docs.openzeppelin.com/stellar-contracts) crate.
+
+## Features
+
+- Standard fungible token interface (transfer, balance, allowance, approve)
+- Metadata (name, symbol, decimals)
+- Initial supply minted to admin on construction
+- Built on audited OpenZeppelin contracts
+
+## Build & Test
+
+\`\`\`sh
+soroban contract build
+cargo test
+\`\`\`
+`,
+      },
+      { path: ".gitignore", language: "plaintext", content: GITIGNORE },
+    ],
+  },
 ];
 
 export function getTemplateById(id: string): Template | undefined {

@@ -35,7 +35,7 @@ import type { Template } from "@/lib/templates/registry";
 import { flattenFiles } from "@/lib/soroban/sample-project";
 import { cn } from "@/lib/utils";
 
-type RightPanelView = "agent" | "compile" | "test" | "deploy";
+type RightPanelView = "agent" | "compile" | "test" | "deploy" | "inspect" | "docs";
 
 /**
  * Resolve the server-side user ID from a wallet address.

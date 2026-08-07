@@ -11,12 +11,15 @@ import {
   Loader2,
   X,
   FileCode2,
+  Search as SearchIcon,
+  FileText,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { AgentPanel } from "./agent-panel";
 import { ContractInteractionPanel } from "./contract-interaction";
+import { ContractInspectPanel } from "./contract-inspect-panel";
 import { useBuildStore } from "@/stores/build-store";
 import { useDeployStore } from "@/stores/deploy-store";
 import { useTestStore } from "@/stores/test-store";
@@ -25,7 +28,7 @@ import { useProfileStore } from "@/stores/profile-store";
 import { useProjectsStore } from "@/stores/projects-store";
 import { flattenFiles } from "@/lib/soroban/sample-project";
 
-type RightPanelView = "agent" | "compile" | "test" | "deploy";
+type RightPanelView = "agent" | "compile" | "test" | "deploy" | "inspect" | "docs";
 
 interface RightPanelProps {
   view: RightPanelView;
@@ -39,6 +42,8 @@ const VIEW_ITEMS: { id: RightPanelView; icon: LucideIcon; label: string }[] = [
   { id: "compile", icon: Wrench, label: "Compile" },
   { id: "test", icon: TestTube, label: "Tests" },
   { id: "deploy", icon: Rocket, label: "Deploy" },
+  { id: "inspect", icon: SearchIcon, label: "Inspect" },
+  { id: "docs", icon: FileText, label: "Docs" },
 ];
 
 export function RightPanel({ view, onChangeView, onOpenSettings, network = "testnet" }: RightPanelProps) {
@@ -72,6 +77,7 @@ export function RightPanel({ view, onChangeView, onOpenSettings, network = "test
         {view === "compile" && <CompilePanel />}
         {view === "test" && <TestPanel />}
         {view === "deploy" && <DeployPanel network={network} />}
+        {(view === "inspect" || view === "docs") && <ContractInspectPanel />}
       </div>
     </div>
   );

@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { AgentPanel } from "./agent-panel";
 import { ContractInteractionPanel } from "./contract-interaction";
 import { CommitToGithubModal } from "../projects/commit-to-github-modal";
+import { LoadingOverlay } from "../ui/loading-overlay";
 import { useBuildStore } from "@/stores/build-store";
 import { useDeployStore } from "@/stores/deploy-store";
 import { useFileSystemStore } from "@/stores/file-system-store";
@@ -540,7 +541,12 @@ function GitPanel() {
 
   // Connected state — show sync status + commit button
   return (
-    <div className="flex h-full flex-col p-3 gap-3 overflow-y-auto">
+    <div className="relative flex h-full flex-col p-3 gap-3 overflow-y-auto">
+      <LoadingOverlay
+        visible={comparing}
+        message="Comparing files…"
+        submessage="Checking for conflicts with the GitHub repo"
+      />
       <div className="flex items-center justify-between">
         <h3 className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">
           Source Control

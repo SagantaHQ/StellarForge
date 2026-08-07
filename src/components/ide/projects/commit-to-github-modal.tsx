@@ -18,6 +18,7 @@ import { useProfileStore } from "@/stores/profile-store";
 import { useFileSystemStore } from "@/stores/file-system-store";
 import { useProjectsStore } from "@/stores/projects-store";
 import { useGithubOAuth } from "@/hooks/use-github-oauth";
+import { LoadingOverlay } from "../ui/loading-overlay";
 import { flattenFiles } from "@/lib/soroban/sample-project";
 
 interface CommitToGithubModalProps {
@@ -297,7 +298,12 @@ export function CommitToGithubModal({ open, onClose }: CommitToGithubModalProps)
         </div>
 
         {/* Body */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="relative flex-1 overflow-y-auto p-4 space-y-4">
+          <LoadingOverlay
+            visible={submitting}
+            message={forceCommit ? "Committing (force)…" : "Checking for conflicts…"}
+            submessage={forceCommit ? "Pushing files to GitHub" : "Comparing local files with the repo"}
+          />
           {/* Not connected — show CTA */}
           {!githubConnected && (
             <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-sunken)] p-6 text-center">

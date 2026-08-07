@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { useProfileStore } from "@/stores/profile-store";
 import { useGithubOAuth } from "@/hooks/use-github-oauth";
+import { LoadingOverlay } from "../ui/loading-overlay";
 import {
   validateSorobanProject,
   formatValidationResult,
@@ -202,7 +203,12 @@ export function ImportProjectModal({ open, onClose, onImport }: ImportProjectMod
         </div>
 
         {/* Body — tab content */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="relative flex-1 overflow-y-auto p-4 space-y-4">
+          <LoadingOverlay
+            visible={submitting}
+            message="Creating project…"
+            submessage="Saving files and syncing to the cloud"
+          />
           {activeTab === "github" && (
             <GithubTab
               files={files}

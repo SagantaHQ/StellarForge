@@ -83,10 +83,10 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-soroban-sdk = "22.0.0"
+soroban-sdk = "22.1.0"
 
 [dev_dependencies]
-soroban-sdk = { version = "22.0.0", features = ["testutils"] }
+soroban-sdk = { version = "22.1.0", features = ["testutils"] }
 
 [profile.release]
 opt-level = "z"

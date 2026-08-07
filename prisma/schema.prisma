@@ -190,6 +190,22 @@ model WasmVersion {
 }
 
 // ============================================================
+// Autocomplete artifacts (cached per package+version)
+// ============================================================
+
+model AutocompleteArtifact {
+  id               String   @id @default(cuid())
+  packageVersion   String   @unique // "soroban-sdk@22.0.0"
+  packageName      String
+  packageVersionStr String
+  artifactsJson    String   @db.Text // serialized AutocompleteArtifacts
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([packageName])
+}
+
+// ============================================================
 // Comments (file-level)
 // ============================================================
 

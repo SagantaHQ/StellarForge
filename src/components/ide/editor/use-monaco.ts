@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import type * as Monaco from "monaco-editor";
 import { useThemeStore } from "@/stores/theme-store";
 import { buildMonacoTheme } from "@/lib/themes/mappers";
+import { useAutocompleteStore, type AutocompleteArtifacts } from "@/stores/autocomplete-store";
 
 // Monaco must be loaded client-side only via dynamic import in the consumer.
 // This hook sets up: theme registration, Rust/Soroban language config, dispose.
@@ -319,4 +320,162 @@ export function registerSorobanLanguage(monaco: typeof Monaco) {
       };
     },
   });
+}
+
+/**
+ * Hook that registers a dynamic autocomplete provider using build artifacts.
+ * Fetches artifacts from the autocomplete store and provides:
+ *   - User's contract functions, structs, enums, etc.
+ *   - Dependency API items (soroban-sdk, OZ crates, etc.)
+ *   - Auto-import suggestions (use crate::Item)
+ */
+export function useAutocompleteProvider() {
+  const artifacts = useAutocompleteStore((s) => s.artifacts);
+  const buildAutocomplete = useAutocompleteStore((s) => s.build);
+  const providerRef = useRef<{ dispose: () => void } | null>(null);
+
+  // Register/update the completion provider whenever artifacts change
+  useEffect(() => {
+    let disposed = false;
+
+    (async () => {
+      const monaco = (await import("monaco-editor")).default as typeof Monaco;
+      if (disposed) return;
+
+      // Dispose previous provider
+      if (providerRef.current) {
+        providerRef.current.dispose();
+        providerRef.current = null;
+      }
+
+      // Register new provider with current artifacts
+      const provider = monaco.languages.registerCompletionItemProvider("soroban", {
+        triggerCharacters: [".", ":", "::"],
+        provideCompletionItems: (model, position) => {
+          const word = model.getWordUntilPosition(position);
+          const range = {
+            startLineNumber: position.lineNumber,
+            endLineNumber: position.lineNumber,
+            startColumn: word.startColumn,
+            endColumn: word.endColumn,
+          };
+
+          const suggestions: Monaco.languages.CompletionItem[] = [];
+
+          // Check if user is typing after `::` (module path) — show import suggestions
+          const lineUntilPosition = model.getValueInRange({
+            startLineNumber: position.lineNumber,
+            startColumn: 1,
+            endLineNumber: position.lineNumber,
+            endColumn: position.column,
+          });
+
+          const isAfterDoubleColon = lineUntilPosition.endsWith("::");
+
+          if (artifacts) {
+            // Functions
+            for (const fn of artifacts.functions) {
+              suggestions.push({
+                label: fn.label,
+                kind: monaco.languages.CompletionItemKind.Function,
+                detail: fn.detail,
+                documentation: fn.documentation ? { value: fn.documentation } : undefined,
+                insertText: fn.insertText || fn.label,
+                insertTextRules: fn.insertTextRules === "InsertAsSnippet"
+                  ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
+                  : undefined,
+                range,
+              });
+            }
+
+            // Structs
+            for (const s of artifacts.structs) {
+              suggestions.push({
+                label: s.label,
+                kind: monaco.languages.CompletionItemKind.Struct,
+                detail: s.detail,
+                documentation: s.documentation ? { value: s.documentation } : undefined,
+                insertText: s.label,
+                range,
+              });
+            }
+
+            // Enums
+            for (const e of artifacts.enums) {
+              suggestions.push({
+                label: e.label,
+                kind: monaco.languages.CompletionItemKind.Enum,
+                detail: e.detail,
+                documentation: e.documentation ? { value: e.documentation } : undefined,
+                insertText: e.label,
+                range,
+              });
+            }
+
+            // Traits
+            for (const t of artifacts.traits) {
+              suggestions.push({
+                label: t.label,
+                kind: monaco.languages.CompletionItemKind.Interface,
+                detail: t.detail,
+                documentation: t.documentation ? { value: t.documentation } : undefined,
+                insertText: t.label,
+                range,
+              });
+            }
+
+            // Constants
+            for (const c of artifacts.constants) {
+              suggestions.push({
+                label: c.label,
+                kind: monaco.languages.CompletionItemKind.Constant,
+                detail: c.detail,
+                documentation: c.documentation ? { value: c.documentation } : undefined,
+                insertText: c.label,
+                range,
+              });
+            }
+
+            // Type aliases
+            for (const ta of artifacts.typeAliases) {
+              suggestions.push({
+                label: ta.label,
+                kind: monaco.languages.CompletionItemKind.TypeParameter,
+                detail: ta.detail,
+                documentation: ta.documentation ? { value: ta.documentation } : undefined,
+                insertText: ta.label,
+                range,
+              });
+            }
+
+            // Import suggestions (after `::` or when typing `use`)
+            if (isAfterDoubleColon || lineUntilPosition.trim().startsWith("use ")) {
+              for (const imp of artifacts.imports) {
+                suggestions.push({
+                  label: imp.path,
+                  kind: monaco.languages.CompletionItemKind.Module,
+                  detail: `use ${imp.path}::*`,
+                  documentation: `Import all items from \`${imp.name}\` crate`,
+                  insertText: imp.path,
+                  range,
+                });
+              }
+            }
+          }
+
+          return { suggestions };
+        },
+      });
+
+      providerRef.current = provider;
+    })();
+
+    return () => {
+      disposed = true;
+      if (providerRef.current) {
+        providerRef.current.dispose();
+        providerRef.current = null;
+      }
+    };
+  }, [artifacts]);
 }

@@ -31,6 +31,7 @@ import { useEditorTabsStore } from "@/stores/editor-tabs-store";
 import { useProfileStore } from "@/stores/profile-store";
 import { useBuildStore } from "@/stores/build-store";
 import { useProjectsStore, type ProjectMeta } from "@/stores/projects-store";
+import { useAutocompleteStore } from "@/stores/autocomplete-store";
 import type { Template } from "@/lib/templates/registry";
 import { flattenFiles } from "@/lib/soroban/sample-project";
 import { cn } from "@/lib/utils";
@@ -96,6 +97,10 @@ export function IdeShell() {
     ? projectsList.find((p) => p.id === activeProjectId) ?? null
     : null;
 
+  // Autocomplete store — builds artifacts after a successful build
+  const buildAutocomplete = useAutocompleteStore((s) => s.build);
+  const tree = useFileSystemStore((s) => s.tree);
+
   // §8 — Hydrate file system from IndexedDB on mount (local-first)
   useEffect(() => {
     hydrate();
@@ -123,6 +128,19 @@ export function IdeShell() {
       return () => clearTimeout(timer);
     }
   }, [activeProject?.id, projectsHydrated, startBuild]);
+
+  // Build autocomplete artifacts after a successful build (or project load)
+  // This refreshes the completion DB with the latest functions, types, and
+  // dependency APIs. Also runs on project switch.
+  useEffect(() => {
+    if (activeProject && projectsHydrated && buildStatus === "success") {
+      // Small delay to ensure file system is settled
+      const timer = setTimeout(() => {
+        buildAutocomplete(tree);
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [buildStatus, activeProject?.id, projectsHydrated, buildAutocomplete, tree]);
 
   // When the user logs in, pull their server-side projects and merge into the
   // local list. Also push any local-only projects to the server.

@@ -121,54 +121,110 @@ async function pollStatus(
   set: (fn: (s: BuildState) => Partial<BuildState>) => void,
   get: () => BuildState
 ) {
-  try {
-    const state = get();
-    const since = state.lines.length > 0 ? state.lines[state.lines.length - 1].ts : 0;
-    const res = await fetch(`/api/build/status?id=${buildId}&since=${since}`);
-    if (!res.ok) {
-      set({ status: "failed", error: `Status poll failed: ${res.status}`, finishedAt: Date.now() });
-      return;
+  // Retry counter for transient errors (502, 503, network failures).
+  // The build process is CPU/memory-intensive and can make the server
+  // temporarily unresponsive — a 502 from the proxy during a build is
+  // normal and should be retried, not treated as a build failure.
+  const MAX_RETRIES = 5;
+  let retryCount = 0;
+
+  async function doPoll() {
+    try {
+      const state = get();
+      const since = state.lines.length > 0 ? state.lines[state.lines.length - 1].ts : 0;
+      const res = await fetch(`/api/build/status?id=${buildId}&since=${since}`);
+
+      // Transient errors: 502 (bad gateway), 503 (service unavailable),
+      // 504 (gateway timeout) — these happen when the server is busy
+      // running the build and the proxy can't reach it. Retry instead
+      // of failing.
+      if (res.status === 502 || res.status === 503 || res.status === 504) {
+        retryCount++;
+        if (retryCount >= MAX_RETRIES) {
+          set(() => ({
+            status: "failed" as const,
+            error: `Server unreachable after ${MAX_RETRIES} retries (last: ${res.status}). The build may still be running — check back in a moment.`,
+            finishedAt: Date.now(),
+            _buildId: undefined,
+            _pollTimer: undefined,
+          }));
+          return;
+        }
+        // Wait 2s before retrying (longer than normal poll interval)
+        const timer = setTimeout(() => doPoll(), 2000);
+        set(() => ({ _pollTimer: timer }));
+        return;
+      }
+
+      // Reset retry counter on successful response
+      retryCount = 0;
+
+      if (!res.ok) {
+        // 404 = build job not found (server restarted, job expired)
+        // 500 = actual server error
+        set(() => ({
+          status: "failed" as const,
+          error: `Status poll failed: ${res.status}`,
+          finishedAt: Date.now(),
+        }));
+        return;
+      }
+
+      const data = await res.json() as {
+        status: "building" | "success" | "failed";
+        lines: BuildLine[];
+        wasmInfo?: { path: string; sizeBytes: number };
+        error?: string;
+        finishedAt?: number;
+      };
+
+      // Append new lines
+      if (data.lines.length > 0) {
+        set((s) => ({ lines: [...s.lines, ...data.lines] }));
+      }
+
+      // Update wasm info if present
+      if (data.wasmInfo) {
+        set(() => ({ wasmInfo: data.wasmInfo }));
+      }
+
+      // Check if done
+      if (data.status === "success" || data.status === "failed") {
+        set(() => ({
+          status: data.status,
+          error: data.error,
+          finishedAt: data.finishedAt ?? Date.now(),
+          _buildId: undefined,
+          _pollTimer: undefined,
+        }));
+        return;
+      }
+
+      // Schedule next poll (1s interval — balances responsiveness with
+      // not hammering the server while it's compiling)
+      const timer = setTimeout(() => doPoll(), 1000);
+      set(() => ({ _pollTimer: timer }));
+    } catch (err) {
+      // Network error (fetch failed) — retry if we haven't exhausted retries
+      retryCount++;
+      if (retryCount >= MAX_RETRIES) {
+        set(() => ({
+          status: "failed" as const,
+          error: err instanceof Error ? err.message : String(err),
+          finishedAt: Date.now(),
+          _buildId: undefined,
+          _pollTimer: undefined,
+        }));
+        return;
+      }
+      // Retry after 2s
+      const timer = setTimeout(() => doPoll(), 2000);
+      set(() => ({ _pollTimer: timer }));
     }
-
-    const data = await res.json() as {
-      status: "building" | "success" | "failed";
-      lines: BuildLine[];
-      wasmInfo?: { path: string; sizeBytes: number };
-      error?: string;
-      finishedAt?: number;
-    };
-
-    // Append new lines
-    if (data.lines.length > 0) {
-      set((s) => ({ lines: [...s.lines, ...data.lines] }));
-    }
-
-    // Update wasm info if present
-    if (data.wasmInfo) {
-      set({ wasmInfo: data.wasmInfo });
-    }
-
-    // Check if done
-    if (data.status === "success" || data.status === "failed") {
-      set({
-        status: data.status,
-        error: data.error,
-        finishedAt: data.finishedAt ?? Date.now(),
-        _buildId: undefined,
-        _pollTimer: undefined,
-      });
-      return;
-    }
-
-    // Schedule next poll
-    const timer = setTimeout(() => pollStatus(buildId, set, get), 500);
-    set({ _pollTimer: timer });
-  } catch (err) {
-    set({
-      status: "failed",
-      error: err instanceof Error ? err.message : String(err),
-      finishedAt: Date.now(),
-      _pollTimer: undefined,
-    });
   }
+
+  // Initial delay before first poll — gives the server time to set up
+  // the build job and start spawning the build process
+  const initialTimer = setTimeout(() => doPoll(), 1000);
+  set(() => ({ _pollTimer: initialTimer }));
 }

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifySiws } from "@saganta/stellar-appkit-siws-verify";
 import { db } from "@/lib/db";
+import { generateUniqueUsername } from "@/lib/username-generator";
 
 /**
  * POST /api/auth/login
@@ -85,18 +86,45 @@ export async function POST(req: NextRequest) {
       },
     });
 
+    // If the user doesn't have a profile, auto-generate a username and
+    // create one. The user can change it later in the profile modal.
+    // This eliminates the need to force the profile modal open on connect.
+    let profileData = user.profile;
+    if (!user.profile) {
+      const generatedUsername = await generateUniqueUsername(async (uname) => {
+        const existing = await db.profile.findUnique({
+          where: { username: uname },
+        });
+        return !!existing;
+      });
+
+      const newProfile = await db.profile.create({
+        data: {
+          userId: user.id,
+          username: generatedUsername,
+        },
+      });
+
+      profileData = {
+        username: newProfile.username,
+        displayName: newProfile.displayName,
+        avatarUrl: newProfile.avatarUrl,
+        bio: newProfile.bio,
+      };
+    }
+
     return NextResponse.json({
       loggedIn: true,
       user: { id: user.id, walletAddress: user.walletAddress },
-      profile: user.profile
+      profile: profileData
         ? {
-            username: user.profile.username,
-            displayName: user.profile.displayName,
-            avatarUrl: user.profile.avatarUrl,
-            bio: user.profile.bio,
+            username: profileData.username,
+            displayName: profileData.displayName,
+            avatarUrl: profileData.avatarUrl,
+            bio: profileData.bio,
           }
         : null,
-      needsProfile: !user.profile,
+      needsProfile: false, // always false now — we auto-generate
     });
   } catch (err) {
     return NextResponse.json(

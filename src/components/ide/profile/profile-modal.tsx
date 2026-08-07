@@ -237,7 +237,7 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile, walle
       aria-label="Connect wallet"
     >
       <div
-        className="w-full max-w-md overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-panel)] shadow-2xl"
+        className="w-full max-w-md max-h-[90vh] overflow-y-auto rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-panel)] shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

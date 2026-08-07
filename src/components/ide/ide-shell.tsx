@@ -203,12 +203,7 @@ export function IdeShell() {
             // Fall back to passive session check — if the user already has
             // a session from a previous login, they can still use the IDE
             console.error("[SIWS] Login failed, falling back to passive check:", err);
-            syncFromWallet(detail.address).then(() => {
-              const state = useProfileStore.getState();
-              if (!state.profile && state.walletConnected) {
-                setProfileOpen(true);
-              }
-            });
+            syncFromWallet(detail.address);
           }
         }
 

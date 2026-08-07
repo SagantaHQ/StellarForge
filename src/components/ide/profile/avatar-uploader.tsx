@@ -194,6 +194,11 @@ export function AvatarUploader({ address, currentAvatar, onUploaded, onCancel }:
 
       const data = await res.json();
       onUploaded(data.avatarUrl);
+      // Close the cropper — reset to the file picker state
+      setSelectedFile(null);
+      setImageUrl(null);
+      setZoom(1);
+      setOffset({ x: 0, y: 0 });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

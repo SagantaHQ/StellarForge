@@ -12,6 +12,7 @@ import { FileExplorer } from "./explorer/file-explorer";
 import { EditorArea } from "./editor/editor-area";
 import { BuildOutputPanel } from "./panels/build-output-panel";
 import { RightPanel } from "./panels/right-panel";
+import { GitPanel } from "./panels/git-panel";
 import { StatusBar } from "./panels/status-bar";
 import { CommandPalette } from "./panels/command-palette";
 import { SettingsDialog } from "./panels/settings-dialog";
@@ -34,7 +35,7 @@ import type { Template } from "@/lib/templates/registry";
 import { flattenFiles } from "@/lib/soroban/sample-project";
 import { cn } from "@/lib/utils";
 
-type RightPanelView = "agent" | "compile" | "test" | "deploy" | "git";
+type RightPanelView = "agent" | "compile" | "test" | "deploy";
 
 /**
  * Resolve the server-side user ID from a wallet address.
@@ -188,7 +189,6 @@ export function IdeShell() {
       } else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "g") {
         e.preventDefault();
         setActivityView("git");
-        setRightPanelView("git");
       } else if (cmd && e.shiftKey && e.key.toLowerCase() === "p") {
         e.preventDefault();
         setNewProjectOpen(true);
@@ -202,7 +202,6 @@ export function IdeShell() {
   function handleActivityChange(view: ActivityView) {
     setActivityView(view);
     if (view === "deploy") setRightPanelView("deploy");
-    else if (view === "git") setRightPanelView("git");
     else if (view === "agent") setRightPanelView("agent");
   }
 
@@ -630,18 +629,7 @@ function SearchPanel() {
 }
 
 function GitSidePanel() {
-  return (
-    <div className="flex h-full flex-col bg-[var(--surface-panel)]">
-      <div className="px-3 py-2.5">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">Source Control</span>
-      </div>
-      <div className="px-3 pb-2 space-y-2">
-        <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
-          Use the Git tab in the right panel to commit changes to GitHub.
-        </p>
-      </div>
-    </div>
-  );
+  return <GitPanel />;
 }
 
 function DeploySidePanel() {

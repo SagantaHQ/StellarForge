@@ -77,7 +77,7 @@ const ConfigSchema = z.object({
 
   // Toolchain (§7)
   RUST_TOOLCHAIN: z.string().default("stable"),
-  SOROBAN_SDK_VERSION: z.string().default("22.1.0"),
+  SOROBAN_SDK_VERSION: z.string().default("27.0.5"),
 
   // Terminal sandbox (§15.4)
   TERMINAL_EGRESS_ALLOWLIST: z

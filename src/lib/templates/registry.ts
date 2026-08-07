@@ -34,7 +34,7 @@ export interface Template {
   tags: string[];
 }
 
-const SOROBAN_SDK_V = "22.1.0";
+const SOROBAN_SDK_V = "27.0.5";
 
 // Shared Cargo.toml template — includes overflow-checks (required by stellar-cli 27+)
 // and a size-optimized release profile.

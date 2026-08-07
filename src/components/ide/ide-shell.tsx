@@ -378,7 +378,7 @@ export function IdeShell() {
         network={network}
         branch="main"
         rustToolchain="1.81.0"
-        stellarCliVersion="22.1.0"
+        stellarCliVersion="27.0.5"
         syncStatus="offline"
         errors={0}
         warnings={0}
@@ -444,7 +444,7 @@ export function IdeShell() {
             {
               path: "Cargo.toml",
               language: "toml",
-              content: `[package]\nname = "${slug}"\nversion = "0.1.0"\nedition = "2021"\npublish = false\n\n[lib]\ncrate-type = ["cdylib"]\n\n[dependencies]\nsoroban-sdk = "22.1.0"\n\n[dev_dependencies]\nsoroban-sdk = { version = "22.1.0", features = ["testutils"] }\n\n[profile.release]\nopt-level = "z"\noverflow-checks = true\ndebug = 0\nstrip = "symbols"\ndebug-assertions = false\npanic = "abort"\ncodegen-units = 1\nlto = true\n`,
+              content: `[package]\nname = "${slug}"\nversion = "0.1.0"\nedition = "2021"\npublish = false\n\n[lib]\ncrate-type = ["cdylib"]\n\n[dependencies]\nsoroban-sdk = "27.0.5"\n\n[dev_dependencies]\nsoroban-sdk = { version = "27.0.5", features = ["testutils"] }\n\n[profile.release]\nopt-level = "z"\noverflow-checks = true\ndebug = 0\nstrip = "symbols"\ndebug-assertions = false\npanic = "abort"\ncodegen-units = 1\nlto = true\n`,
             },
             {
               path: ".gitignore",

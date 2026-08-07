@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useMemo } from "react";
+import { Search } from "lucide-react";
 import {
   PanelGroup,
   Panel,
@@ -190,7 +191,6 @@ export function IdeShell() {
         useThemeStore.getState().toggleMode();
       } else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "i") {
         e.preventDefault();
-        setActivityView("agent");
         setRightPanelView("agent");
       } else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "b") {
         e.preventDefault();
@@ -218,7 +218,6 @@ export function IdeShell() {
   function handleActivityChange(view: ActivityView) {
     setActivityView(view);
     if (view === "deploy") setRightPanelView("deploy");
-    else if (view === "agent") setRightPanelView("agent");
   }
 
   return (
@@ -519,7 +518,6 @@ function SidePanel({
   if (view === "git") return <GitSidePanel />;
   if (view === "packages") return <PackagesPanel />;
   if (view === "deploy") return <DeploySidePanel />;
-  if (view === "agent") return <AgentSidePanel />;
   if (view === "collab") return <CollabSidePanel />;
   return <FileExplorer onOpenSettings={onOpenSettings} />;
 }
@@ -528,20 +526,28 @@ function SearchPanel() {
   const [query, setQuery] = useState("");
   const [replace, setReplace] = useState("");
   const [caseSensitive, setCaseSensitive] = useState(false);
+  const [hasSearched, setHasSearched] = useState(false);
 
   const tree = useFileSystemStore((s) => s.tree);
   const setActiveFile = useFileSystemStore((s) => s.setActiveFile);
   const openTab = useEditorTabsStore((s) => s.openTab);
+  const activeProjectId = useProjectsStore((s) => s.activeProjectId);
+
+  const allFiles = useMemo(() => flattenFiles(tree), [tree]);
 
   const results = useMemo(() => {
-    if (!query.trim()) return [];
-    const allFiles = flattenFiles(tree);
+    if (!query.trim() || !activeProjectId || allFiles.length === 0) return [];
     const searchResults: {
       filePath: string;
       matches: { line: number; text: string; preview: string }[];
     }[] = [];
     const flags = caseSensitive ? "g" : "gi";
-    const regex = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), flags);
+    let regex: RegExp;
+    try {
+      regex = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), flags);
+    } catch {
+      return [];
+    }
 
     for (const file of allFiles) {
       const lines = file.content.split("\n");
@@ -558,13 +564,48 @@ function SearchPanel() {
       }
     }
     return searchResults;
-  }, [query, caseSensitive, tree]);
+  }, [query, caseSensitive, allFiles, activeProjectId]);
 
   const totalMatches = results.reduce((sum, r) => sum + r.matches.length, 0);
 
   function handleResultClick(filePath: string, _line: number) {
     setActiveFile(filePath);
     openTab(filePath, filePath.split("/").pop() ?? filePath);
+  }
+
+  function handleReplaceAll() {
+    if (!query.trim() || results.length === 0) return;
+    const flags = caseSensitive ? "g" : "gi";
+    let regex: RegExp;
+    try {
+      regex = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), flags);
+    } catch {
+      return;
+    }
+    for (const result of results) {
+      const file = allFiles.find((f) => f.path === result.filePath);
+      if (!file) continue;
+      const newContent = file.content.replace(regex, replace);
+      useFileSystemStore.getState().updateFileContent(file.path, newContent);
+    }
+    setHasSearched(true);
+  }
+
+  // No project active — show message
+  if (!activeProjectId) {
+    return (
+      <div className="flex h-full flex-col bg-[var(--surface-panel)]">
+        <div className="px-3 py-2.5">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">Search</span>
+        </div>
+        <div className="flex flex-1 flex-col items-center justify-center px-4 py-8 text-center">
+          <Search size={24} strokeWidth={1.5} className="mx-auto mb-3 text-[var(--text-muted)]" />
+          <p className="text-[11px] text-[var(--text-muted)]">
+            Open a project to search across its files.
+          </p>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -575,9 +616,12 @@ function SearchPanel() {
       <div className="px-3 pb-2 space-y-1.5">
         <input
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setHasSearched(false);
+          }}
           autoFocus
-          placeholder="Search across files…"
+          placeholder="Search in project…"
           className="w-full rounded border border-[var(--border-subtle)] bg-[var(--surface-sunken)] px-2 py-1.5 text-[13px] text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
         />
         <input
@@ -603,12 +647,30 @@ function SearchPanel() {
               {totalMatches} {totalMatches === 1 ? "result" : "results"} in {results.length} {results.length === 1 ? "file" : "files"}
             </span>
           )}
+          {query && results.length > 0 && replace && (
+            <button
+              onClick={handleReplaceAll}
+              className="ml-auto text-[var(--accent)] hover:underline"
+            >
+              Replace all
+            </button>
+          )}
         </div>
       </div>
       <div className="flex-1 overflow-y-auto">
-        {results.length === 0 && query && (
+        {query && results.length === 0 && allFiles.length > 0 && (
           <div className="px-3 py-4 text-xs text-[var(--text-muted)]">
-            No results found.
+            No results found for &ldquo;{query}&rdquo;.
+          </div>
+        )}
+        {query && allFiles.length === 0 && (
+          <div className="px-3 py-4 text-xs text-[var(--text-muted)]">
+            No files in this project to search.
+          </div>
+        )}
+        {!query && allFiles.length > 0 && (
+          <div className="px-3 py-4 text-xs text-[var(--text-muted)] italic">
+            Type to search across {allFiles.length} files…
           </div>
         )}
         {results.map((result) => (
@@ -676,20 +738,6 @@ function DeploySidePanel() {
       <div className="flex-1 overflow-hidden">
         <SnapshotPanel />
       </div>
-    </div>
-  );
-}
-
-function AgentSidePanel() {
-  return (
-    <div className="flex h-full flex-col bg-[var(--surface-panel)] p-3 gap-3 overflow-y-auto">
-      <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">AI Agent</h3>
-      <p className="text-xs text-[var(--text-muted)]">
-        BYOK agent for Soroban contract work. Configure a provider in Settings.
-      </p>
-      <button className="w-full rounded bg-[var(--accent)] py-2 text-xs font-medium text-[var(--accent-contrast)] hover:bg-[var(--accent-hover)] transition-colors">
-        Open Agent Chat
-      </button>
     </div>
   );
 }

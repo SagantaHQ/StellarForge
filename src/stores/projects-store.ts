@@ -71,6 +71,8 @@ interface ProjectsState {
   closeActiveProject: () => Promise<void>;
   /** Persist the current file tree into the active project's IDB record */
   persistActiveProjectFiles: (tree: TreeNode[]) => Promise<void>;
+  /** Schedule a debounced auto-sync of the active project to the server */
+  scheduleAutoSync: () => void;
   /** Get the active project meta (or null) */
   getActiveProject: () => ProjectMeta | null;
 }
@@ -445,6 +447,23 @@ export const useProjectsStore = create<ProjectsState>()(
         await saveCurrentFilesToProject(activeId, tree);
       },
 
+      /**
+       * Schedule a debounced auto-sync of the active project's files to the
+       * server. Called by the file-system store whenever a file is edited.
+       * The sync is delayed by 2 seconds to batch rapid edits, and only
+       * runs if the user is logged in and the project has a serverProjectId.
+       */
+      scheduleAutoSync: (() => {
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        return () => {
+          if (timer) clearTimeout(timer);
+          timer = setTimeout(async () => {
+            timer = null;
+            await syncActiveProjectToServer();
+          }, 2000);
+        };
+      })(),
+
       getActiveProject: () => {
         const { projects, activeProjectId } = get();
         if (!activeProjectId) return null;
@@ -527,5 +546,53 @@ async function loadFilesIntoFileSystem(
       firstFile.path,
       firstFile.path.split("/").pop() ?? firstFile.path
     );
+  }
+}
+
+/**
+ * Sync the active project's files to the server (Postgres).
+ * Called by scheduleAutoSync (debounced) after the user edits files.
+ *
+ * Only syncs if:
+ *   - The project has a serverProjectId (was created on the server)
+ *   - The user is logged in (has a wallet address + server profile)
+ *
+ * Uses PATCH /api/projects/[id] with the full file list. The server
+ * soft-deletes old files and creates new ones.
+ */
+async function syncActiveProjectToServer() {
+  try {
+    const state = useProjectsStore.getState();
+    const activeId = state.activeProjectId;
+    if (!activeId) return;
+
+    const project = state.projects.find((p) => p.id === activeId);
+    if (!project || !project.serverProjectId) return;
+
+    // Get the current files from the file system store
+    const { useFileSystemStore } = await import("@/stores/file-system-store");
+    const tree = useFileSystemStore.getState().tree;
+    const files = flattenFiles(tree).map((f) => ({
+      path: f.path,
+      content: f.content,
+      language: f.language,
+    }));
+
+    // Save to IDB first (fast, local)
+    await saveCurrentFilesToProject(activeId, tree);
+
+    // Then sync to server (fire-and-forget — don't block the UI)
+    fetch(`/api/projects/${project.serverProjectId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        files,
+        requesterId: project.ownerId,
+      }),
+    }).catch(() => {
+      // Best-effort — sync will retry on next edit
+    });
+  } catch {
+    // Best-effort — don't crash the app if sync fails
   }
 }

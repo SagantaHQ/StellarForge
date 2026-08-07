@@ -5,7 +5,6 @@ import {
   Search,
   GitBranch,
   Rocket,
-  Bot,
   Users,
   Settings,
   Package,
@@ -19,7 +18,6 @@ export type ActivityView =
   | "git"
   | "packages"
   | "deploy"
-  | "agent"
   | "collab"
   | "settings";
 
@@ -36,7 +34,6 @@ const ITEMS: ActivityItem[] = [
   { id: "git", icon: GitBranch, label: "Source Control", shortcut: "⌃⇧G" },
   { id: "packages", icon: Package, label: "Packages", shortcut: "⌃⇧P" },
   { id: "deploy", icon: Rocket, label: "Compile & Deploy", shortcut: "⌃⇧B" },
-  { id: "agent", icon: Bot, label: "AI Agent", shortcut: "⌃⌘I" },
   { id: "collab", icon: Users, label: "Collaboration", shortcut: "⌃⇧C" },
 ];
 

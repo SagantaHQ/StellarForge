@@ -97,6 +97,21 @@ function persistFile(file: FileNode) {
   fileSet(file.path, file.content, file.language, file.gitStatus).catch(() => {});
 }
 
+/** Debounced auto-sync timer — shared across all updateFileContent calls. */
+let autoSyncTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleProjectAutoSync() {
+  if (autoSyncTimer) clearTimeout(autoSyncTimer);
+  autoSyncTimer = setTimeout(() => {
+    autoSyncTimer = null;
+    // Dynamic import to avoid circular dependency between stores
+    import("@/stores/projects-store")
+      .then(({ useProjectsStore }) => {
+        useProjectsStore.getState().scheduleAutoSync();
+      })
+      .catch(() => {});
+  }, 2000);
+}
+
 /** Persist the entire tree to IndexedDB (used on hydrate/replace). */
 async function persistAllFiles(tree: TreeNode[]) {
   await fileClearAll();
@@ -215,6 +230,12 @@ export const useFileSystemStore = create<FileSystemState>((set, get) => ({
         }
         return node;
       });
+
+      // Schedule a debounced auto-sync to the server (local-first: IDB
+      // is already persisted above via persistFile). The sync only runs
+      // if the user is logged in and the project has a serverProjectId.
+      scheduleProjectAutoSync();
+
       return { tree: newTree };
     }),
 

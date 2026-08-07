@@ -268,19 +268,23 @@ model CollabSessionParticipant {
 // ============================================================
 
 model SharePermission {
-  id          String   @id @default(cuid())
-  projectId   String
-  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  shareType   ShareType
-  shareToken  String?  @unique // for public-link shares
-  sharedToId  String?  // for private user shares
-  sharedTo    User?    @relation("SharedToUser", fields: [sharedToId], references: [id], onDelete: Cascade)
-  role        ProjectRole
-  createdAt   DateTime @default(now())
-  revokedAt   DateTime?
+  id            String   @id @default(cuid())
+  projectId     String
+  project       Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  shareType     ShareType  // PUBLIC_LINK or PRIVATE_USER
+  shareToken    String?  @unique // for public-link shares
+  sharedToId    String?  // for private user shares (by user ID)
+  sharedTo      User?    @relation("SharedToUser", fields: [sharedToId], references: [id], onDelete: Cascade)
+  guestUsername String?  // for private invites by username (resolved on join)
+  role          ProjectRole  // VIEWER (read-only + comments) or EDITOR (full edit + comments)
+  isActive      Boolean  @default(true)  // can be revoked by host
+  createdAt     DateTime @default(now())
+  revokedAt     DateTime?
 
   @@index([projectId])
   @@index([sharedToId])
+  @@index([shareToken])
+  @@index([guestUsername])
 }
 
 enum ShareType {

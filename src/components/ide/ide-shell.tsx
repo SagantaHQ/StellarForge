@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useMemo } from "react";
-import { Search } from "lucide-react";
+import { Search, Rocket } from "lucide-react";
 import {
   PanelGroup,
   Panel,
@@ -21,7 +21,6 @@ import { SettingsDialog } from "./panels/settings-dialog";
 import { NewProjectModal } from "./templates/new-project-modal";
 import { ProfileModal } from "./profile/profile-modal";
 import { ShareDialog } from "./collab/share-dialog";
-import { SnapshotPanel } from "./panels/snapshot-panel";
 import { DeleteProjectModal } from "./projects/delete-project-modal";
 import { ImportProjectModal } from "./projects/import-project-modal";
 import { WelcomePage } from "./welcome/welcome-page";
@@ -31,7 +30,6 @@ import { useFileSystemStore } from "@/stores/file-system-store";
 import { useEditorTabsStore } from "@/stores/editor-tabs-store";
 import { useProfileStore } from "@/stores/profile-store";
 import { useBuildStore } from "@/stores/build-store";
-import { useSnapshotStore } from "@/stores/snapshot-store";
 import { useProjectsStore, type ProjectMeta } from "@/stores/projects-store";
 import type { Template } from "@/lib/templates/registry";
 import { flattenFiles } from "@/lib/soroban/sample-project";
@@ -712,32 +710,57 @@ function GitSidePanel() {
 }
 
 function DeploySidePanel() {
-  const tree = useFileSystemStore((s) => s.tree);
+  const buildStatus = useBuildStore((s) => s.status);
+  const startBuild = useBuildStore((s) => s.startBuild);
+  const wasmInfo = useBuildStore((s) => s.wasmInfo);
+  const activeProjectId = useProjectsStore((s) => s.activeProjectId);
+
   return (
     <div className="flex h-full flex-col bg-[var(--surface-panel)]">
-      <div className="p-3 space-y-2 border-b border-[var(--border-subtle)]">
-        <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">Compile & Deploy</h3>
-        <button
-          onClick={() => {
-            useBuildStore.getState().startBuild();
-          }}
-          className="w-full rounded bg-[var(--accent)] py-2 text-xs font-medium text-[var(--accent-contrast)] hover:bg-[var(--accent-hover)] transition-colors"
-        >
-          stellar contract build
-        </button>
-        <button
-          onClick={() => {
-            const files = flattenFiles(tree).map((f) => ({ path: f.path, content: f.content, language: f.language }));
-            useSnapshotStore.getState().createSnapshot("Auto-snapshot before deploy", "", files);
-          }}
-          className="w-full rounded border border-[var(--border-subtle)] bg-[var(--surface-sunken)] py-2 text-xs text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)] transition-colors"
-        >
-          Deploy to Testnet
-        </button>
+      <div className="px-3 py-2.5">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+          Compile & Deploy
+        </span>
       </div>
-      <div className="flex-1 overflow-hidden">
-        <SnapshotPanel />
-      </div>
+      {!activeProjectId ? (
+        <div className="flex flex-1 flex-col items-center justify-center px-4 py-8 text-center">
+          <Rocket size={24} strokeWidth={1.5} className="mx-auto mb-3 text-[var(--text-muted)]" />
+          <p className="text-[11px] text-[var(--text-muted)]">
+            Open a project to compile and deploy.
+          </p>
+        </div>
+      ) : (
+        <div className="px-3 pb-3 space-y-2">
+          <button
+            onClick={() => startBuild()}
+            disabled={buildStatus === "building"}
+            className="w-full rounded bg-[var(--accent)] py-2 text-xs font-medium text-[var(--accent-contrast)] hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50"
+          >
+            {buildStatus === "building" ? "Building…" : "stellar contract build"}
+          </button>
+
+          {wasmInfo && (
+            <div className="rounded-md bg-[var(--surface-sunken)] px-2.5 py-1.5">
+              <div className="text-[10px] uppercase tracking-wide text-[var(--text-muted)] mb-0.5">
+                Built WASM
+              </div>
+              <div className="text-[11px] font-mono text-[var(--text-primary)] truncate">
+                {wasmInfo.path.split("/").pop()}
+              </div>
+              <div className="text-[10px] text-[var(--text-muted)]">
+                {(wasmInfo.sizeBytes / 1024).toFixed(2)} KB
+              </div>
+            </div>
+          )}
+
+          <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface-sunken)] px-2.5 py-2">
+            <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
+              Use the <span className="font-medium text-[var(--text-secondary)]">Deploy</span> tab in the right panel
+              to deploy your contract to Stellar testnet.
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

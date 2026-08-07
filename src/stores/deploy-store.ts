@@ -61,7 +61,8 @@ export const useDeployStore = create<DeployState>((set, get) => ({
     const tree = useFileSystemStore.getState().tree;
     const files = flattenFiles(tree).map((f) => ({ path: f.path, content: f.content }));
 
-    // Build first to ensure the WASM exists
+    // Build first to ensure the WASM exists — use stellar contract build
+    // (not cargo build) because we need the .wasm file for deployment
     try {
       const buildRes = await fetch("/api/build", {
         method: "POST",
@@ -69,7 +70,7 @@ export const useDeployStore = create<DeployState>((set, get) => ({
         body: JSON.stringify({
           projectId: "local-project",
           files,
-          command: "cargo",
+          command: "stellar",
         }),
       });
       if (!buildRes.ok) {

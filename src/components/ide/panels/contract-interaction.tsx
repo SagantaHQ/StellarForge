@@ -68,10 +68,14 @@ export function ContractInteractionPanel({ contractId }: ContractInteractionPane
     try {
       const args = fn.args
         .filter((a) => a.name !== "env" && a.name !== "_env")
-        .map((a) => getArgValue(fn.name, a.name));
+        .map((a) => getArgValue(fn.name, a.name) || defaultValueForType(a.type));
 
-      // Build the stellar CLI invoke command
-      // stellar contract invoke --id <contractId> --fn <fnName> --arg <val> --network <network>
+      // Call the terminal API to run stellar contract invoke
+      const { useFileSystemStore } = await import("@/stores/file-system-store");
+      const { flattenFiles } = await import("@/lib/soroban/sample-project");
+      const tree = useFileSystemStore.getState().tree;
+      const files = flattenFiles(tree).map((f) => ({ path: f.path, content: f.content }));
+
       const argFlags = args.flatMap((val) => ["--arg", val]);
       const command = [
         "stellar", "contract", "invoke",
@@ -80,12 +84,6 @@ export function ContractInteractionPanel({ contractId }: ContractInteractionPane
         ...argFlags,
         "--network", "testnet",
       ].join(" ");
-
-      // Execute via the terminal API
-      const { useFileSystemStore } = await import("@/stores/file-system-store");
-      const { flattenFiles } = await import("@/lib/soroban/sample-project");
-      const tree = useFileSystemStore.getState().tree;
-      const files = flattenFiles(tree).map((f) => ({ path: f.path, content: f.content }));
 
       const res = await fetch("/api/terminal", {
         method: "POST",
@@ -104,7 +102,7 @@ export function ContractInteractionPanel({ contractId }: ContractInteractionPane
       };
 
       if (data.exitCode === 0 && data.stdout.trim()) {
-        // Parse the result from stellar CLI output
+        // Parse the result from stellar CLI output (last line is usually the result)
         const result = data.stdout.trim().split("\n").pop() ?? data.stdout.trim();
         setResults((prev) => ({ ...prev, [fn.name]: result }));
       } else if (data.stderr) {
@@ -113,18 +111,10 @@ export function ContractInteractionPanel({ contractId }: ContractInteractionPane
           [fn.name]: `Error: ${data.stderr.trim()}`,
         }));
       } else {
-        // If stellar CLI isn't installed, fall back to simulation
-        let result: unknown;
-        if (fn.name === "hello" || fn.name === "greet") {
-          result = args[0] ? `Hello, ${args[0]}!` : "Hello, World!";
-        } else if (fn.name === "get_greeting") {
-          result = "Hello";
-        } else if (fn.returnType === "()") {
-          result = "()";
-        } else {
-          result = `(stellar CLI not available — install with: cargo install stellar-cli)`;
-        }
-        setResults((prev) => ({ ...prev, [fn.name]: result }));
+        setResults((prev) => ({
+          ...prev,
+          [fn.name]: "(no output — the function may have returned void)",
+        }));
       }
     } catch (err) {
       setResults((prev) => ({

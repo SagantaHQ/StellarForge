@@ -423,19 +423,43 @@ export const useProjectsStore = create<ProjectsState>()(
 
         set({ busy: true });
         try {
-          // Save current files into the outgoing project
-          await saveCurrentFilesToProject(outgoingId);
+          const project = get().projects.find((p) => p.id === outgoingId);
 
-          // Clear active project
-          set({ activeProjectId: null });
-          await metaSet("activeProjectId", null);
+          // 1. Delete from the server if it has a serverProjectId.
+          //    The server cascade-deletes: files, comments, members,
+          //    snapshots, audit logs, share permissions, collab sessions.
+          if (project?.serverProjectId && project.ownerId) {
+            try {
+              await fetch(
+                `/api/projects/${encodeURIComponent(project.serverProjectId)}?requesterId=${encodeURIComponent(project.ownerId)}`,
+                { method: "DELETE" }
+              );
+            } catch {
+              // Best-effort — local delete still proceeds
+            }
+          }
 
-          // Clear the file system store so the IDE shows "no project"
+          // 2. Delete from IndexedDB (local project record + cached files)
+          await projectDelete(outgoingId);
+
+          // 3. Clear the file system store (the IDB "files" object store
+          //    still has the file contents — clear them so the next project
+          //    doesn't see stale data)
           const { useFileSystemStore } = await import("@/stores/file-system-store");
+          const { fileClearAll } = await import("@/lib/storage/idb");
+          await fileClearAll();
           await useFileSystemStore.getState().replaceTree([]);
-          // Close all editor tabs
+
+          // 4. Close all editor tabs
           const { useEditorTabsStore } = await import("@/stores/editor-tabs-store");
           useEditorTabsStore.getState().closeAllTabs();
+
+          // 5. Clear active project + remove from the projects list
+          set((s) => ({
+            projects: s.projects.filter((p) => p.id !== outgoingId),
+            activeProjectId: null,
+          }));
+          await metaSet("activeProjectId", null);
         } finally {
           set({ busy: false });
         }

@@ -5,7 +5,6 @@ import {
   Search,
   GitBranch,
   Rocket,
-  Users,
   Settings,
   Package,
   type LucideIcon,
@@ -18,7 +17,6 @@ export type ActivityView =
   | "git"
   | "packages"
   | "deploy"
-  | "collab"
   | "settings";
 
 interface ActivityItem {
@@ -34,7 +32,6 @@ const ITEMS: ActivityItem[] = [
   { id: "git", icon: GitBranch, label: "Source Control", shortcut: "⌃⇧G" },
   { id: "packages", icon: Package, label: "Packages", shortcut: "⌃⇧P" },
   { id: "deploy", icon: Rocket, label: "Compile & Deploy", shortcut: "⌃⇧B" },
-  { id: "collab", icon: Users, label: "Collaboration", shortcut: "⌃⇧C" },
 ];
 
 interface ActivityBarProps {

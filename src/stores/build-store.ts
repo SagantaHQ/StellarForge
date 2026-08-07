@@ -160,7 +160,24 @@ async function pollStatus(
       retryCount = 0;
 
       if (!res.ok) {
-        // 404 = build job not found (server restarted, job expired)
+        // 404 = build job not found (server restarted, job expired, or
+        // the build hasn't started yet). Retry a few times before giving up.
+        if (res.status === 404) {
+          retryCount++;
+          if (retryCount >= MAX_RETRIES) {
+            set(() => ({
+              status: "failed" as const,
+              error: "Build job not found. The server may have restarted. Try building again.",
+              finishedAt: Date.now(),
+              _buildId: undefined,
+              _pollTimer: undefined,
+            }));
+            return;
+          }
+          const timer = setTimeout(() => doPoll(), 2000);
+          set(() => ({ _pollTimer: timer }));
+          return;
+        }
         // 500 = actual server error
         set(() => ({
           status: "failed" as const,

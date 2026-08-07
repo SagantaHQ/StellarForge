@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useRef, lazy, Suspense } from "react";
 import {
-  Share2,
   Wallet,
   Play,
   ChevronDown,
@@ -264,9 +263,9 @@ export function TopBar({
           {collabConnected ? (
             <span className="h-2 w-2 rounded-full bg-[var(--status-success)] animate-pulse" />
           ) : (
-            <Share2 size={14} strokeWidth={1.75} />
+            <Users size={14} strokeWidth={1.75} />
           )}
-          <span className="hidden sm:inline">{collabConnected ? "Live" : "Share"}</span>
+          <span className="hidden sm:inline">{collabConnected ? "Live" : "Collab"}</span>
         </Button>
 
         {/* Build + Deploy — disabled if not logged in or not built */}

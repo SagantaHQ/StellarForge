@@ -521,7 +521,6 @@ function SidePanel({
   if (view === "git") return <GitSidePanel />;
   if (view === "packages") return <PackagesPanel />;
   if (view === "deploy") return <DeploySidePanel />;
-  if (view === "collab") return <CollabSidePanel />;
   return <FileExplorer onOpenSettings={onOpenSettings} />;
 }
 
@@ -766,21 +765,6 @@ function DeploySidePanel() {
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-function CollabSidePanel() {
-  return (
-    <div className="flex h-full flex-col bg-[var(--surface-panel)] p-3 gap-3 overflow-y-auto">
-      <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">Collaboration</h3>
-      <div className="rounded border border-[var(--border-subtle)] bg-[var(--surface-sunken)] p-2.5">
-        <div className="text-xs text-[var(--text-secondary)] mb-1">Active session</div>
-        <div className="text-[11px] text-[var(--text-muted)]">No one else is here. Share the project to invite collaborators.</div>
-      </div>
-      <button className="w-full rounded bg-[var(--accent)] py-2 text-xs font-medium text-[var(--accent-contrast)] hover:bg-[var(--accent-hover)] transition-colors">
-        Generate share link
-      </button>
     </div>
   );
 }

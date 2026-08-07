@@ -90,6 +90,7 @@ model Project {
   sharePermissions SharePermission[]
   auditLogs     AuditLog[]
   snapshots     ProjectSnapshot[]
+  deployedContracts DeployedContract[]
 
   @@index([ownerId])
   @@index([slug])
@@ -146,6 +147,45 @@ model ProjectSnapshot {
   createdAt   DateTime @default(now())
 
   @@index([projectId])
+}
+
+// ============================================================
+// Deployed contracts + WASM versions
+// ============================================================
+
+model DeployedContract {
+  id            String   @id @default(cuid())
+  projectId     String
+  project       Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  contractId    String   // on-chain contract ID (C...)
+  network       String   // mainnet | testnet | futurenet
+  deployerAddress String // wallet that deployed
+  wasmHash      String   // hash of the deployed WASM
+  isUpgradeable Boolean  @default(true) // all Soroban contracts are upgradeable by default
+  upgradeCount  Int      @default(0)    // how many times the wasm was upgraded
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  wasmVersions  WasmVersion[]
+
+  @@unique([projectId, network])
+  @@index([projectId])
+  @@index([contractId])
+}
+
+model WasmVersion {
+  id            String   @id @default(cuid())
+  contractId    String   // references DeployedContract.id (not the on-chain ID)
+  contract      DeployedContract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  wasmHash      String   // SHA-256 hash of the WASM binary
+  wasmPath      String   // path to the .wasm file on disk
+  wasmSizeBytes Int      // file size
+  version       Int      // incrementing version number (1 = initial, 2 = first upgrade, etc.)
+  isUpgrade     Boolean  @default(false) // true if this was an upgrade (not the initial deploy)
+  createdAt     DateTime @default(now())
+
+  @@index([contractId])
+  @@index([wasmHash])
 }
 
 // ============================================================

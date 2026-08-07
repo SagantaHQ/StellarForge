@@ -13,6 +13,7 @@ import {
   FileCode2,
   Search as SearchIcon,
   FileText,
+  ExternalLink,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -21,7 +22,6 @@ import { AgentPanel } from "./agent-panel";
 import { ContractInteractionPanel } from "./contract-interaction";
 import { ContractInspectPanel } from "./contract-inspect-panel";
 import { useBuildStore } from "@/stores/build-store";
-import { useDeployStore } from "@/stores/deploy-store";
 import { useTestStore } from "@/stores/test-store";
 import { useFileSystemStore } from "@/stores/file-system-store";
 import { useProfileStore } from "@/stores/profile-store";
@@ -475,20 +475,176 @@ function TestPanel() {
 }
 
 function DeployPanel({ network }: { network: string }) {
-  const status = useDeployStore((s) => s.status);
-  const lines = useDeployStore((s) => s.lines);
-  const contractId = useDeployStore((s) => s.contractId);
-  const error = useDeployStore((s) => s.error);
-  const deploy = useDeployStore((s) => s.deploy);
   const wasmInfo = useBuildStore((s) => s.wasmInfo);
-  const [sourceAccountSecret, setSourceAccountSecret] = useState("");
-  const [showSecret, setShowSecret] = useState(false);
+  const buildStatus = useBuildStore((s) => s.status);
+  const profile = useProfileStore((s) => s.profile);
+  const walletConnected = useProfileStore((s) => s.walletConnected);
+  const activeProjectId = useProjectsStore((s) => s.activeProjectId);
+  const projectsList = useProjectsStore((s) => s.projects);
+  const activeProject = activeProjectId
+    ? projectsList.find((p) => p.id === activeProjectId) ?? null
+    : null;
+
+  const [deploying, setDeploying] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<{
+    contractId: string;
+    hash: string;
+    isUpgrade: boolean;
+  } | null>(null);
+  const [existingContract, setExistingContract] = useState<{
+    contractId: string;
+    network: string;
+    upgradeCount: number;
+    wasmVersions: { version: number; wasmHash: string; isUpgrade: boolean; createdAt: string }[];
+  } | null>(null);
+  const [statusMsg, setStatusMsg] = useState<string>("");
+  const [checkingExisting, setCheckingExisting] = useState(false);
+
+  // Fetch existing deployed contracts when project changes
+  useEffect(() => {
+    if (activeProject?.serverProjectId && walletConnected) {
+      checkExistingContract();
+    } else {
+      setExistingContract(null);
+    }
+  }, [activeProject?.serverProjectId, network, walletConnected]);
+
+  async function checkExistingContract() {
+    if (!activeProject?.serverProjectId) return;
+    setCheckingExisting(true);
+    try {
+      const res = await fetch(
+        `/api/contracts/list?projectId=${activeProject.serverProjectId}&network=${network}`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        if (data.contracts && data.contracts.length > 0) {
+          setExistingContract(data.contracts[0]);
+        } else {
+          setExistingContract(null);
+        }
+      }
+    } catch {
+      // ignore
+    } finally {
+      setCheckingExisting(false);
+    }
+  }
+
+  async function handleDeploy() {
+    if (!profile?.address || !activeProject?.serverProjectId) {
+      setError("You must be logged in and have an active project to deploy.");
+      return;
+    }
+
+    setDeploying(true);
+    setError(null);
+    setSuccess(null);
+    setStatusMsg("Building deploy transaction…");
+
+    try {
+      // Step 1: Build the unsigned deploy/upgrade transaction
+      const buildTxRes = await fetch("/api/contracts/deploy-tx", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: activeProject.serverProjectId,
+          walletAddress: profile.address,
+          network,
+          wasmPath: wasmInfo?.path,
+        }),
+      });
+
+      const txData = await buildTxRes.json();
+      if (!buildTxRes.ok) {
+        setError(txData.error || "Failed to build deploy transaction");
+        setDeploying(false);
+        setStatusMsg("");
+        return;
+      }
+
+      // Step 2: Sign the transaction with the wallet
+      setStatusMsg("Please sign the transaction in your wallet…");
+
+      // Get the appkit instance to sign the transaction
+      const appkit = await getAppKitForSigning();
+      if (!appkit) {
+        setError("Wallet not connected. Connect your wallet first.");
+        setDeploying(false);
+        setStatusMsg("");
+        return;
+      }
+
+      const signResult = await appkit.signTransaction(txData.unsignedXdr, {
+        network: network.toUpperCase(),
+        networkPassphrase: txData.networkPassphrase,
+      });
+
+      const signedXdr = signResult.signedTxXdr || signResult.signedXdr;
+      if (!signedXdr) {
+        throw new Error("Wallet did not return a signed transaction");
+      }
+
+      // Step 3: Submit the signed transaction
+      setStatusMsg("Submitting to the network…");
+
+      const submitRes = await fetch("/api/contracts/submit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          signedXdr,
+          walletAddress: profile.address,
+          network,
+          projectId: activeProject.serverProjectId,
+          wasmHash: txData.wasmHash,
+          wasmSizeBytes: txData.wasmSizeBytes,
+          wasmPath: txData.wasmPath ?? wasmInfo?.path ?? "",
+          isUpgrade: txData.isUpgrade,
+          existingContractId: txData.contractId,
+        }),
+      });
+
+      const submitData = await submitRes.json();
+      if (!submitRes.ok) {
+        setError(submitData.error || "Failed to submit transaction");
+        setDeploying(false);
+        setStatusMsg("");
+        return;
+      }
+
+      setSuccess({
+        contractId: submitData.contractId,
+        hash: submitData.hash,
+        isUpgrade: submitData.isUpgrade,
+      });
+      setStatusMsg("");
+
+      // Refresh the existing contract info
+      await checkExistingContract();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Deploy failed");
+      setStatusMsg("");
+    } finally {
+      setDeploying(false);
+    }
+  }
+
+  const isUpgrade = !!existingContract;
+  const canDeploy = profile && walletConnected && activeProject?.serverProjectId && wasmInfo && !deploying;
 
   return (
     <div className="flex h-full flex-col p-3 gap-3 overflow-y-auto">
       <h3 className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">
-        Deploy Contract
+        {isUpgrade ? "Upgrade Contract" : "Deploy Contract"}
       </h3>
+
+      {/* Not logged in */}
+      {!walletConnected && (
+        <div className="rounded-md border border-[var(--status-warning)]/40 bg-[color-mix(in_srgb,var(--status-warning)_8%,transparent)] p-2.5 text-[11px] text-[var(--text-secondary)]">
+          Connect your wallet to deploy a contract.
+        </div>
+      )}
 
       {/* WASM info */}
       <div className="rounded-md border border-[var(--border-subtle)] p-2.5">
@@ -504,35 +660,34 @@ function DeployPanel({ network }: { network: string }) {
           </>
         ) : (
           <div className="text-xs text-[var(--text-muted)] italic">
-            No build yet. Run Build first.
+            {buildStatus === "building" ? "Building…" : "No build yet. Run Build first."}
           </div>
         )}
       </div>
 
-      {/* Source account */}
-      <div>
-        <label className="text-[11px] font-medium text-[var(--text-secondary)] mb-1 block">
-          Source account secret
-        </label>
-        <div className="flex items-center gap-1.5">
-          <input
-            type={showSecret ? "text" : "password"}
-            value={sourceAccountSecret}
-            onChange={(e) => setSourceAccountSecret(e.target.value)}
-            placeholder="S..."
-            className="flex-1 rounded border border-[var(--border-subtle)] bg-[var(--surface-sunken)] px-2 py-1.5 text-[11px] font-mono text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
-          />
-          <button
-            onClick={() => setShowSecret((v) => !v)}
-            className="rounded px-1.5 py-1 text-[10px] text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
-          >
-            {showSecret ? "Hide" : "Show"}
-          </button>
+      {/* Existing contract info (upgrade scenario) */}
+      {existingContract && (
+        <div className="rounded-md border border-[var(--status-info)]/30 bg-[color-mix(in_srgb,var(--status-info)_8%,transparent)] p-2.5">
+          <div className="text-[10px] uppercase tracking-wide text-[var(--status-info)] mb-1">
+            Contract already deployed
+          </div>
+          <div className="font-mono text-[11px] text-[var(--text-primary)] break-all mb-1">
+            {existingContract.contractId}
+          </div>
+          <div className="flex items-center gap-2 text-[10px] text-[var(--text-muted)]">
+            <span>Network: {existingContract.network}</span>
+            <span>·</span>
+            <span>Upgrades: {existingContract.upgradeCount}</span>
+            <span>·</span>
+            <span>WASM versions: {existingContract.wasmVersions.length}</span>
+          </div>
+          {existingContract.wasmVersions.length > 0 && (
+            <div className="mt-1.5 text-[10px] text-[var(--text-muted)]">
+              Latest WASM: v{existingContract.wasmVersions[0].version} ({existingContract.wasmVersions[0].wasmHash.substring(0, 12)}…)
+            </div>
+          )}
         </div>
-        <p className="mt-1 text-[10px] text-[var(--text-muted)]">
-          Secret travels with the deploy request, never stored. In production, sign via wallet instead.
-        </p>
-      </div>
+      )}
 
       {/* Network */}
       <div className="flex items-center justify-between text-xs">
@@ -540,78 +695,125 @@ function DeployPanel({ network }: { network: string }) {
         <span className="font-medium text-[var(--text-primary)] capitalize">{network}</span>
       </div>
 
-      {/* Deploy button */}
+      {/* Deploy / Upgrade button */}
       <Button
         size="sm"
-        onClick={() => deploy({ network, sourceAccountSecret })}
-        disabled={status === "deploying" || !sourceAccountSecret}
+        onClick={handleDeploy}
+        disabled={!canDeploy}
         className="w-full h-9 gap-2 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)] disabled:opacity-50"
       >
-        {status === "deploying" ? (
+        {deploying ? (
           <Loader2 size={13} strokeWidth={1.75} className="animate-spin" />
         ) : (
           <Rocket size={13} strokeWidth={1.75} />
         )}
-        Deploy to {network}
+        {deploying
+          ? "Processing…"
+          : isUpgrade
+          ? `Upgrade Contract${existingContract ? ` (v${existingContract.upgradeCount + 2})` : ""}`
+          : `Deploy to ${network}`}
       </Button>
 
-      {/* Deploy output */}
-      {lines.length > 0 && (
-        <div>
-          <div className="flex items-center justify-between mb-1.5">
-            <h4 className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">
-              Output
-            </h4>
-            {status === "success" && (
-              <span className="flex items-center gap-1 text-[10px] text-[var(--status-success)]">
-                <Check size={9} strokeWidth={2} />
-                deployed
-              </span>
-            )}
-            {status === "failed" && (
-              <span className="flex items-center gap-1 text-[10px] text-[var(--status-error)]">
-                <X size={9} strokeWidth={2} />
-                failed
-              </span>
-            )}
+      {/* Status message */}
+      {statusMsg && (
+        <div className="flex items-center gap-2 rounded-md border border-[var(--accent)]/30 bg-[color-mix(in_srgb,var(--accent)_8%,transparent)] p-2.5 text-[11px] text-[var(--text-secondary)]">
+          <Loader2 size={12} strokeWidth={1.75} className="animate-spin text-[var(--accent)] shrink-0" />
+          <span>{statusMsg}</span>
+        </div>
+      )}
+
+      {/* Success */}
+      {success && (
+        <div className="rounded-md border border-[var(--status-success)]/40 bg-[color-mix(in_srgb,var(--status-success)_8%,transparent)] p-2.5 space-y-1">
+          <div className="flex items-center gap-1.5">
+            <Check size={12} strokeWidth={2} className="text-[var(--status-success)]" />
+            <span className="text-[11px] font-medium text-[var(--status-success)]">
+              {success.isUpgrade ? "Contract upgraded!" : "Contract deployed!"}
+            </span>
           </div>
-          <div className="rounded-md bg-[var(--surface-sunken)] p-2 font-mono text-[10px] space-y-0.5 max-h-32 overflow-y-auto">
-            {lines.map((line, i) => (
+          <div className="text-[10px] text-[var(--text-muted)]">Contract ID</div>
+          <div className="font-mono text-[11px] text-[var(--text-primary)] break-all">
+            {success.contractId}
+          </div>
+          <div className="text-[10px] text-[var(--text-muted)] mt-1">Transaction hash</div>
+          <div className="font-mono text-[10px] text-[var(--text-secondary)] break-all">
+            {success.hash}
+          </div>
+          <a
+            href={network === "testnet"
+              ? `https://stellar.expert/explorer/testnet/contract/${success.contractId}`
+              : `https://stellar.expert/explorer/public/contract/${success.contractId}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 mt-1.5 text-[10px] text-[var(--accent)] hover:underline"
+          >
+            <ExternalLink size={10} strokeWidth={1.75} />
+            View on explorer
+          </a>
+        </div>
+      )}
+
+      {/* Error */}
+      {error && (
+        <div className="rounded-md border border-[var(--status-error)]/40 bg-[color-mix(in_srgb,var(--status-error)_8%,transparent)] p-2 text-[11px] text-[var(--status-error)]">
+          {error}
+        </div>
+      )}
+
+      {/* Contract interaction — after deploy */}
+      {success?.contractId && success.contractId.startsWith("C") && (
+        <ContractInteractionPanel contractId={success.contractId} />
+      )}
+
+      {/* WASM version history */}
+      {existingContract && existingContract.wasmVersions.length > 0 && !deploying && (
+        <div>
+          <h4 className="text-[10px] uppercase tracking-wide text-[var(--text-muted)] mb-1.5">
+            WASM Versions ({existingContract.wasmVersions.length})
+          </h4>
+          <div className="space-y-0.5 max-h-32 overflow-y-auto">
+            {existingContract.wasmVersions.map((v) => (
               <div
-                key={i}
-                className={line.type === "stderr" ? "text-[var(--status-error)]" : "text-[var(--text-secondary)]"}
+                key={v.version}
+                className="flex items-center gap-2 rounded px-2 py-1 text-[10px] bg-[var(--surface-sunken)]"
               >
-                {line.text || "\u00A0"}
+                <span className="font-mono font-medium text-[var(--text-primary)]">v{v.version}</span>
+                {v.isUpgrade && (
+                  <span className="rounded bg-[var(--status-info)]/20 px-1 text-[9px] text-[var(--status-info)]">
+                    upgrade
+                  </span>
+                )}
+                <span className="font-mono text-[var(--text-muted)] truncate">
+                  {v.wasmHash.substring(0, 16)}…
+                </span>
+                <span className="ml-auto text-[var(--text-muted)]">
+                  {new Date(v.createdAt).toLocaleDateString()}
+                </span>
               </div>
             ))}
           </div>
         </div>
       )}
-
-      {/* Contract ID on success */}
-      {contractId && (
-        <div className="rounded-md border border-[var(--status-success)] bg-[color-mix(in_srgb,var(--status-success)_10%,transparent)] p-2.5">
-          <div className="text-[10px] uppercase tracking-wide text-[var(--status-success)] mb-0.5">
-            Contract deployed
-          </div>
-          <div className="font-mono text-[11px] text-[var(--text-primary)] break-all">
-            {contractId}
-          </div>
-        </div>
-      )}
-
-      {/* Error */}
-      {error && status === "failed" && (
-        <div className="rounded-md border border-[var(--status-error)] bg-[color-mix(in_srgb,var(--status-error)_10%,transparent)] p-2 text-[11px] text-[var(--status-error)]">
-          {error}
-        </div>
-      )}
-
-      {/* Contract interaction — auto-generated from contract spec */}
-      {contractId && (
-        <ContractInteractionPanel contractId={contractId} />
-      )}
     </div>
   );
+}
+
+// Helper to get the appkit instance for signing
+async function getAppKitForSigning(): Promise<{
+  signTransaction: (xdr: string, opts?: Record<string, unknown>) => Promise<{ signedTxXdr?: string; signedXdr?: string }>;
+} | null> {
+  try {
+    const profileState = (window as unknown as { __profileStore?: { profile: { address: string } | null } }).__profileStore;
+    if (!profileState?.profile?.address) return null;
+
+    const modal = document.querySelector<HTMLElement & { client: unknown }>("saganta-appkit-modal");
+    if (!modal?.client) return null;
+
+    return modal.client as {
+      signTransaction: (xdr: string, opts?: Record<string, unknown>) => Promise<{ signedTxXdr?: string; signedXdr?: string }>;
+    };
+  } catch {
+    return null;
+  }
 }
 

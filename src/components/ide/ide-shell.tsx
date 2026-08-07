@@ -439,6 +439,11 @@ export function IdeShell() {
               content: "#![no_std]\n\nuse soroban_sdk::{contract, contractimpl, Env, String};\n\n#[contract]\npub struct Contract;\n\n#[contractimpl]\nimpl Contract {\n    /// Initialize the contract.\n    pub fn __constructor(_env: Env) {\n        // Initialize storage here\n    }\n\n    /// Returns a greeting.\n    pub fn hello(env: Env) -> String {\n        String::from_str(&env, \"Hello, Soroban!\")\n    }\n}\n",
             },
             {
+              path: "src/test.rs",
+              language: "rust",
+              content: "#![cfg(test)]\n\nuse super::*;\nuse soroban_sdk::testutils::Address as _;\n\n#[test]\nfn test_hello() {\n    let env = Env::default();\n    let contract_id = env.register(Contract, ());\n    let client = ContractClient::new(&env, &contract_id);\n\n    let result = client.hello();\n    assert_eq!(result, String::from_str(&env, \"Hello, Soroban!\"));\n}\n",
+            },
+            {
               path: "Cargo.toml",
               language: "toml",
               content: `[package]\nname = "${slug}"\nversion = "0.1.0"\nedition = "2021"\npublish = false\n\n[lib]\ncrate-type = ["cdylib"]\n\n[dependencies]\nsoroban-sdk = "27.0.5"\n\n[dev_dependencies]\nsoroban-sdk = { version = "27.0.5", features = ["testutils"] }\n\n[profile.release]\nopt-level = "z"\noverflow-checks = true\ndebug = 0\nstrip = "symbols"\ndebug-assertions = false\npanic = "abort"\ncodegen-units = 1\nlto = true\n`,

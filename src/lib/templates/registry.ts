@@ -1624,7 +1624,7 @@ fn test_admin_action_requires_owner() {
       {
         path: "Cargo.toml",
         language: "toml",
-        content: cargoToml("oz-ownable", SOROBAN_SDK_V) + `stellar-access = "0.7.2"\n`,
+        content: cargoToml("oz-ownable", SOROBAN_SDK_V) + `stellar-access = "*"\n`,
       },
       {
         path: "README.md",
@@ -1767,7 +1767,7 @@ fn test_initial_supply() {
       {
         path: "Cargo.toml",
         language: "toml",
-        content: cargoToml("oz-fungible-token", SOROBAN_SDK_V) + `stellar-tokens = "0.7.2"\n`,
+        content: cargoToml("oz-fungible-token", SOROBAN_SDK_V) + `stellar-tokens = "*"\n`,
       },
       {
         path: "README.md",

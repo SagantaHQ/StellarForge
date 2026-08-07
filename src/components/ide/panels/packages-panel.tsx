@@ -8,6 +8,8 @@ import {
   Loader2,
   Search,
   AlertCircle,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -27,15 +29,18 @@ import {
  * Users can one-click add any of these to their Cargo.toml.
  * Source: https://github.com/OpenZeppelin/stellar-contracts
  * Docs: https://docs.openzeppelin.com/stellar-contracts
+ *
+ * Versions are fetched dynamically from crates.io on mount so users always
+ * get the latest version when adding a dependency.
  */
 const OZ_CRATES = [
-  { name: "stellar-access", version: "0.7.2", description: "Ownable, Access Control, Roles" },
-  { name: "stellar-tokens", version: "0.7.2", description: "Fungible + Non-Fungible tokens" },
-  { name: "stellar-governance", version: "0.7.2", description: "Governance utilities" },
-  { name: "stellar-contract-utils", version: "0.7.2", description: "General utilities" },
-  { name: "stellar-macros", version: "0.7.2", description: "Macros for Stellar contracts" },
-  { name: "stellar-fee-abstraction", version: "0.7.2", description: "Fee abstraction utilities" },
-  { name: "stellar-accounts", version: "0.7.2", description: "Smart Account Contracts" },
+  { name: "stellar-access", description: "Ownable, Access Control, Roles" },
+  { name: "stellar-tokens", description: "Fungible + Non-Fungible tokens" },
+  { name: "stellar-governance", description: "Governance utilities" },
+  { name: "stellar-contract-utils", description: "General utilities" },
+  { name: "stellar-macros", description: "Macros for Stellar contracts" },
+  { name: "stellar-fee-abstraction", description: "Fee abstraction utilities" },
+  { name: "stellar-accounts", description: "Smart Account Contracts" },
 ] as const;
 
 /**
@@ -57,6 +62,34 @@ export function PackagesPanel() {
   const [newPkgName, setNewPkgName] = useState("");
   const [newPkgVersion, setNewPkgVersion] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [ozExpanded, setOzExpanded] = useState(true);
+  const [ozVersions, setOzVersions] = useState<Record<string, string>>({});
+  const [ozLoading, setOzLoading] = useState(false);
+
+  // Fetch latest versions of all OZ crates from crates.io on mount
+  useEffect(() => {
+    async function fetchOzVersions() {
+      setOzLoading(true);
+      const versions: Record<string, string> = {};
+      for (const crate of OZ_CRATES) {
+        try {
+          const res = await fetch(`https://crates.io/api/v1/crates/${crate.name}`, {
+            headers: { "User-Agent": "Soroban.Build IDE" },
+          });
+          if (res.ok) {
+            const data = await res.json();
+            const maxVersion = data?.crate?.max_stable_version || data?.crate?.max_version;
+            if (maxVersion) versions[crate.name] = maxVersion;
+          }
+        } catch {
+          // If crates.io is unreachable, fall back to "*" (cargo picks latest)
+        }
+      }
+      setOzVersions(versions);
+      setOzLoading(false);
+    }
+    fetchOzVersions();
+  }, []);
 
   const files = flattenFiles(tree);
   const cargoFile = useMemo(() => findCargoToml(files), [files]);
@@ -216,60 +249,75 @@ export function PackagesPanel() {
         </div>
       )}
 
-      {/* OpenZeppelin quick-add section */}
+      {/* OpenZeppelin quick-add section (collapsible) */}
       <div className="mx-3 mb-2">
-        <div className="flex items-center gap-1 mb-1.5">
+        <button
+          onClick={() => setOzExpanded((v) => !v)}
+          className="flex w-full items-center gap-1 mb-1 hover:text-[var(--text-primary)] transition-colors"
+        >
+          {ozExpanded ? (
+            <ChevronDown size={11} strokeWidth={1.75} className="text-[var(--text-muted)] shrink-0" />
+          ) : (
+            <ChevronRight size={11} strokeWidth={1.75} className="text-[var(--text-muted)] shrink-0" />
+          )}
           <span className="text-[9px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">
             OpenZeppelin Contracts
           </span>
+          {ozLoading && (
+            <Loader2 size={9} strokeWidth={1.75} className="animate-spin text-[var(--text-muted)] shrink-0" />
+          )}
           <a
             href="https://docs.openzeppelin.com/stellar-contracts"
             target="_blank"
             rel="noopener noreferrer"
-            className="text-[9px] text-[var(--accent)] hover:underline"
+            onClick={(e) => e.stopPropagation()}
+            className="text-[9px] text-[var(--accent)] hover:underline ml-auto"
           >
             docs ↗
           </a>
-        </div>
-        <div className="space-y-0.5">
-          {OZ_CRATES.map((oz) => {
-            const isAdded = regularDeps.some((d) => d.name === oz.name);
-            return (
-              <div
-                key={oz.name}
-                className="group flex items-center gap-1.5 rounded px-1.5 py-1 hover:bg-[var(--surface-hover)] transition-colors"
-              >
-                <Package size={10} strokeWidth={1.75} className="text-[var(--text-muted)] shrink-0" />
-                <div className="min-w-0 flex-1">
-                  <span className="text-[10px] font-mono text-[var(--text-primary)]">
-                    {oz.name}
+        </button>
+        {ozExpanded && (
+          <div className="space-y-0.5">
+            {OZ_CRATES.map((oz) => {
+              const isAdded = regularDeps.some((d) => d.name === oz.name);
+              const version = ozVersions[oz.name] || "*";
+              return (
+                <div
+                  key={oz.name}
+                  className="group flex items-center gap-1.5 rounded px-1.5 py-1 hover:bg-[var(--surface-hover)] transition-colors"
+                >
+                  <Package size={10} strokeWidth={1.75} className="text-[var(--text-muted)] shrink-0" />
+                  <div className="min-w-0 flex-1">
+                    <span className="text-[10px] font-mono text-[var(--text-primary)]">
+                      {oz.name}
+                    </span>
+                    <span className="text-[9px] text-[var(--text-muted)] ml-1">
+                      v{version}
+                    </span>
+                  </div>
+                  <span className="text-[9px] text-[var(--text-muted)] truncate hidden group-hover:inline">
+                    {oz.description}
                   </span>
-                  <span className="text-[9px] text-[var(--text-muted)] ml-1">
-                    v{oz.version}
-                  </span>
+                  {isAdded ? (
+                    <span className="text-[9px] text-[var(--status-success)] shrink-0">✓ added</span>
+                  ) : (
+                    <button
+                      onClick={() => {
+                        if (!cargoFile) return;
+                        const newContent = addDependency(cargoFile.content, oz.name, version, false);
+                        updateFileContent(cargoFile.path, newContent);
+                        if (buildStatus !== "building") startBuild();
+                      }}
+                      className="shrink-0 text-[9px] text-[var(--accent)] hover:underline"
+                    >
+                      + add
+                    </button>
+                  )}
                 </div>
-                <span className="text-[9px] text-[var(--text-muted)] truncate hidden group-hover:inline">
-                  {oz.description}
-                </span>
-                {isAdded ? (
-                  <span className="text-[9px] text-[var(--status-success)] shrink-0">✓ added</span>
-                ) : (
-                  <button
-                    onClick={() => {
-                      if (!cargoFile) return;
-                      const newContent = addDependency(cargoFile.content, oz.name, oz.version, false);
-                      updateFileContent(cargoFile.path, newContent);
-                      if (buildStatus !== "building") startBuild();
-                    }}
-                    className="shrink-0 text-[9px] text-[var(--accent)] hover:underline"
-                  >
-                    + add
-                  </button>
-                )}
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Dependencies list */}

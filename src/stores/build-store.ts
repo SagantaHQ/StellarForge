@@ -33,11 +33,13 @@ interface BuildState {
   error?: string;
   startedAt?: number;
   finishedAt?: number;
+  /** Whether the current build is silent (auto-build, no UI loading spinner) */
+  silent?: boolean;
   /** Internal: build ID from the server + polling timer */
   _buildId?: string;
   _pollTimer?: ReturnType<typeof setTimeout>;
 
-  startBuild: (opts?: { tree?: TreeNode[]; command?: "stellar" | "cargo" }) => Promise<void>;
+  startBuild: (opts?: { tree?: TreeNode[]; command?: "stellar" | "cargo"; silent?: boolean }) => Promise<void>;
   reset: () => void;
   clearOutput: () => void;
 }
@@ -45,6 +47,7 @@ interface BuildState {
 export const useBuildStore = create<BuildState>((set, get) => ({
   status: "idle",
   lines: [],
+  silent: false,
 
   startBuild: async (opts = {}) => {
     if (get().status === "building") return;
@@ -56,6 +59,7 @@ export const useBuildStore = create<BuildState>((set, get) => ({
       wasmInfo: undefined,
       startedAt: Date.now(),
       finishedAt: undefined,
+      silent: opts.silent ?? false,
     });
 
     // Build the files list from the in-browser file system store

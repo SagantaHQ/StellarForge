@@ -80,6 +80,7 @@ export function IdeShell() {
   const setWalletConnected = useProfileStore((s) => s.setWalletConnected);
   const syncFromWallet = useProfileStore((s) => s.syncFromWallet);
   const buildStatus = useBuildStore((s) => s.status);
+  const buildSilent = useBuildStore((s) => s.silent);
   const startBuild = useBuildStore((s) => s.startBuild);
 
   // Projects store — hydrates from IDB and syncs with Postgres when logged in
@@ -122,7 +123,7 @@ export function IdeShell() {
       const timer = setTimeout(() => {
         // Only build if the build status is idle (not already building)
         if (useBuildStore.getState().status === "idle") {
-          startBuild();
+          startBuild({ silent: true }); // auto-build is silent — no loading spinner
         }
       }, 1000);
       return () => clearTimeout(timer);
@@ -313,7 +314,7 @@ export function IdeShell() {
         network={network}
         collabUsers={[]}
         profile={profile}
-        building={buildStatus === "building"}
+        building={buildStatus === "building" && !buildSilent}
         hasBuilt={buildStatus === "success"}
         onShare={() => {
           if (!useProfileStore.getState().isLoggedIn()) {

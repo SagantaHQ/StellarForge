@@ -86,6 +86,7 @@ function CompilePanel() {
   const lines = useBuildStore((s) => s.lines);
   const wasmInfo = useBuildStore((s) => s.wasmInfo);
   const error = useBuildStore((s) => s.error);
+  const silent = useBuildStore((s) => s.silent);
   const startBuild = useBuildStore((s) => s.startBuild);
   const outputRef = useRef<HTMLDivElement>(null);
   const tree = useFileSystemStore((s) => s.tree);
@@ -152,11 +153,11 @@ function CompilePanel() {
         <div className="space-y-2">
           <Button
             size="sm"
-            onClick={() => startBuild()}
+            onClick={() => startBuild({ silent: false })}
             disabled={status === "building"}
             className="w-full h-8 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)] gap-2 disabled:opacity-60"
           >
-            {status === "building" ? (
+            {status === "building" && !silent ? (
               <Loader2 size={13} strokeWidth={1.75} className="animate-spin" />
             ) : (
               <Wrench size={13} strokeWidth={1.75} />
@@ -165,13 +166,13 @@ function CompilePanel() {
           </Button>
           <Button
             size="sm"
-            onClick={() => startBuild({ command: "cargo" })}
+            onClick={() => startBuild({ command: "cargo", silent: false })}
             disabled={status === "building"}
             variant="outline"
             className="w-full h-8 gap-2 border-[var(--border-strong)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] disabled:opacity-60"
             title="Run cargo build (compiles dependencies, checks types)"
           >
-            {status === "building" ? (
+            {status === "building" && !silent ? (
               <Loader2 size={13} strokeWidth={1.75} className="animate-spin" />
             ) : (
               <Check size={13} strokeWidth={1.75} />
@@ -186,7 +187,8 @@ function CompilePanel() {
           <h3 className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">
             Output
           </h3>
-          {status === "building" && (
+          {/* Only show building spinner for non-silent builds */}
+          {status === "building" && !silent && (
             <span className="flex items-center gap-1 text-[10px] text-[var(--text-muted)]">
               <Loader2 size={9} strokeWidth={2} className="animate-spin" />
               building…

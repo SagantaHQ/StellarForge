@@ -339,8 +339,9 @@ export function useAutocompleteProvider() {
     let disposed = false;
 
     (async () => {
-      const monaco = (await import("monaco-editor")).default as typeof Monaco;
-      if (disposed) return;
+      const monacoModule = await import("monaco-editor");
+      const monaco = (monacoModule.default ?? monacoModule) as typeof Monaco;
+      if (disposed || !monaco?.languages) return;
 
       // Dispose previous provider
       if (providerRef.current) {

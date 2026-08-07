@@ -90,15 +90,33 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
 
+    // If the user doesn't have a profile yet, create a minimal one with
+    // a placeholder username. The user will set their real username in the
+    // profile modal. This allows avatar upload before profile completion.
     if (!user.profile) {
-      return NextResponse.json({ error: "Profile not found — complete profile setup first" }, { status: 404 });
-    }
+      const placeholderUsername = `user_${address.substring(0, 8).toLowerCase()}`;
+      // Check if the placeholder is taken (unlikely but possible)
+      const existingPlaceholder = await db.profile.findUnique({
+        where: { username: placeholderUsername },
+      });
+      const finalUsername = existingPlaceholder
+        ? `user_${Date.now().toString(36)}`
+        : placeholderUsername;
 
-    // Update the profile avatar
-    await db.profile.update({
-      where: { id: user.profile.id },
-      data: { avatarUrl: processedDataUrl },
-    });
+      await db.profile.create({
+        data: {
+          userId: user.id,
+          username: finalUsername,
+          avatarUrl: processedDataUrl,
+        },
+      });
+    } else {
+      // Update the existing profile avatar
+      await db.profile.update({
+        where: { id: user.profile.id },
+        data: { avatarUrl: processedDataUrl },
+      });
+    }
 
     return NextResponse.json({
       avatarUrl: processedDataUrl,

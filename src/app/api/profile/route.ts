@@ -27,17 +27,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Check username uniqueness (server-enforced)
-    const existing = await db.profile.findUnique({
-      where: { username: username.toLowerCase() },
-    });
-    if (existing) {
-      return NextResponse.json(
-        { error: "Username already taken", field: "username" },
-        { status: 409 }
-      );
-    }
-
     // Upsert user (find by walletAddress, create if not exists)
     const user = await db.user.upsert({
       where: { walletAddress },
@@ -49,9 +38,31 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // Create profile
-    const profile = await db.profile.create({
-      data: {
+    // Check username uniqueness (server-enforced) — only if this username
+    // belongs to a DIFFERENT user
+    const existingProfile = await db.profile.findFirst({
+      where: {
+        username: username.toLowerCase(),
+        userId: { not: user.id },
+      },
+    });
+    if (existingProfile) {
+      return NextResponse.json(
+        { error: "Username already taken", field: "username" },
+        { status: 409 }
+      );
+    }
+
+    // Upsert profile (create if doesn't exist, update if it does)
+    const profile = await db.profile.upsert({
+      where: { userId: user.id },
+      update: {
+        username: username.toLowerCase(),
+        displayName: displayName || null,
+        avatarUrl: avatarUrl || null,
+        bio: bio || null,
+      },
+      create: {
         userId: user.id,
         username: username.toLowerCase(),
         displayName: displayName || null,

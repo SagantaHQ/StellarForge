@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useRef } from "react";
 import { Search, Rocket } from "lucide-react";
 import {
   PanelGroup,
@@ -105,20 +105,24 @@ export function IdeShell() {
     (window as unknown as { __profileStore: unknown }).__profileStore = useProfileStore.getState();
   }, [hydrate, projectsHydrate]);
 
-  // Auto-build on project load: when a project becomes active and the build
-  // status is idle (no wasm has been built yet), trigger a stellar contract
-  // build so the user sees compile results immediately.
+  // Auto-build on project load: when a project becomes active (and we haven't
+  // built for this project yet), trigger a stellar contract build so the user
+  // sees compile results immediately. Only runs ONCE per project switch —
+  // uses a ref to track the last-built project ID to prevent loops.
+  const lastBuiltProjectRef = useRef<string | null>(null);
   useEffect(() => {
-    if (activeProject && projectsHydrated && buildStatus === "idle") {
+    if (activeProject && projectsHydrated && lastBuiltProjectRef.current !== activeProject.id) {
+      lastBuiltProjectRef.current = activeProject.id;
       // Small delay to let the file system store settle after project switch
       const timer = setTimeout(() => {
+        // Only build if the build status is idle (not already building)
         if (useBuildStore.getState().status === "idle") {
           startBuild();
         }
-      }, 500);
+      }, 1000);
       return () => clearTimeout(timer);
     }
-  }, [activeProject?.id, projectsHydrated, buildStatus, startBuild]);
+  }, [activeProject?.id, projectsHydrated, startBuild]);
 
   // When the user logs in, pull their server-side projects and merge into the
   // local list. Also push any local-only projects to the server.
@@ -145,8 +149,8 @@ export function IdeShell() {
     function handleConnect(event: Event) {
       const detail = (event as CustomEvent).detail;
       if (detail?.address) {
-        // Wallet connected — set flag
-        setWalletConnected(true);
+        // Wallet connected — set flag + store the address
+        setWalletConnected(true, detail.address);
 
         // Step 1: Try SIWS login (sign message → verify → create session)
         // We need the appkit instance to sign the SIWS message
@@ -581,6 +585,8 @@ export function IdeShell() {
         open={profileOpen}
         onClose={() => setProfileOpen(false)}
         existingProfile={profile}
+        walletAddress={useProfileStore((s) => s.walletAddress)}
+        walletConnected={useProfileStore((s) => s.walletConnected)}
         onComplete={(p) => {
           setProfile({
             address: p.address,

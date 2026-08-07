@@ -26,6 +26,8 @@ interface ProfileState {
   profile: UserProfile | null;
   /** Whether the wallet is currently connected (sc-connect fired, not disconnected) */
   walletConnected: boolean;
+  /** The connected wallet address (available even before profile is created) */
+  walletAddress: string | null;
   /** Whether the server session check has completed */
   sessionChecked: boolean;
   /** Per-user accent color used for collab cursors and avatars */
@@ -36,7 +38,7 @@ interface ProfileState {
 
   setProfile: (p: UserProfile) => void;
   clearProfile: () => void;
-  setWalletConnected: (connected: boolean) => void;
+  setWalletConnected: (connected: boolean, address?: string | null) => void;
   isLoggedIn: () => boolean;
   /** Check server session by wallet address (passive check, no SIWS) */
   syncFromWallet: (address: string | null) => Promise<void>;
@@ -72,6 +74,7 @@ export const useProfileStore = create<ProfileState>()(
     (set, get) => ({
       profile: null,
       walletConnected: false, // starts false — wallet not connected on fresh page load
+      walletAddress: null,
       sessionChecked: false,
       accentColor: "#4F8C8C",
       githubConnected: false,
@@ -89,25 +92,30 @@ export const useProfileStore = create<ProfileState>()(
         set({
           profile: null,
           walletConnected: false,
+          walletAddress: null,
           sessionChecked: true,
           accentColor: "#4F8C8C",
           githubConnected: false,
           githubUsername: null,
         }),
 
-      setWalletConnected: (connected: boolean) =>
+      setWalletConnected: (connected: boolean, address?: string | null) =>
         set((s) => {
           if (!connected) {
-            // Wallet disconnected — clear everything including GitHub state
+            // Wallet disconnected — clear everything
             return {
               walletConnected: false,
+              walletAddress: null,
               profile: null,
               sessionChecked: true,
               githubConnected: false,
               githubUsername: null,
             };
           }
-          return { walletConnected: true };
+          return {
+            walletConnected: true,
+            walletAddress: address ?? s.walletAddress,
+          };
         }),
 
       // BOTH conditions must be true: wallet connected AND server profile exists

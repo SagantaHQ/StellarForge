@@ -40,6 +40,10 @@ interface ProfileModalProps {
   onClose: () => void;
   onComplete: (profile: { address: string; username: string; avatarUrl?: string; bio?: string }) => void;
   existingProfile?: { address: string; username: string; avatarUrl?: string; bio?: string } | null;
+  /** If the wallet is already connected, pass the address to skip the wallet step */
+  walletAddress?: string | null;
+  /** If true, the wallet is already connected — skip to profile step */
+  walletConnected?: boolean;
 }
 
 const WALLETS = [
@@ -48,7 +52,7 @@ const WALLETS = [
   { id: "xbull", name: "xBull", description: "Browser extension", color: "#C9A66B" },
 ];
 
-export function ProfileModal({ open, onClose, onComplete, existingProfile }: ProfileModalProps) {
+export function ProfileModal({ open, onClose, onComplete, existingProfile, walletAddress, walletConnected }: ProfileModalProps) {
   const [step, setStep] = useState<Step>("wallet");
   const [address, setAddress] = useState<string>("");
   const [connecting, setConnecting] = useState(false);
@@ -77,6 +81,14 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile }: Pro
       }
     }
   }, [open, existingProfile]);
+
+  // If wallet is already connected (but no profile yet), skip to profile step
+  useEffect(() => {
+    if (open && walletConnected && walletAddress && !existingProfile) {
+      setAddress(walletAddress);
+      setStep("profile");
+    }
+  }, [open, walletConnected, walletAddress, existingProfile]);
 
   // Listen for wallet connect events from the saganta-appkit-modal
   useEffect(() => {

@@ -55,6 +55,7 @@ model Profile {
   bio           String?
   preferredTheme String?
   accentColor   String?
+  isCustomUsername Boolean @default(false) // false = auto-generated, true = user-changed (locked)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 

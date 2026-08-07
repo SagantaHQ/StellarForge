@@ -55,6 +55,7 @@ export async function GET(req: NextRequest) {
         displayName: user.profile.displayName,
         avatarUrl: user.profile.avatarUrl,
         bio: user.profile.bio,
+        isCustomUsername: user.profile.isCustomUsername,
       },
     });
   } catch {
@@ -101,6 +102,7 @@ export async function POST(req: NextRequest) {
         displayName: user.profile.displayName,
         avatarUrl: user.profile.avatarUrl,
         bio: user.profile.bio,
+        isCustomUsername: user.profile.isCustomUsername,
       },
     });
   } catch (err) {

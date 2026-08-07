@@ -81,6 +81,7 @@ export async function POST(req: NextRequest) {
             displayName: true,
             avatarUrl: true,
             bio: true,
+            isCustomUsername: true,
           },
         },
       },
@@ -89,7 +90,15 @@ export async function POST(req: NextRequest) {
     // If the user doesn't have a profile, auto-generate a username and
     // create one. The user can change it later in the profile modal.
     // This eliminates the need to force the profile modal open on connect.
-    let profileData = user.profile;
+    let profileData: { username: string; displayName: string | null; avatarUrl: string | null; bio: string | null; isCustomUsername: boolean } | null = user.profile
+      ? {
+          username: user.profile.username,
+          displayName: user.profile.displayName,
+          avatarUrl: user.profile.avatarUrl,
+          bio: user.profile.bio,
+          isCustomUsername: user.profile.isCustomUsername,
+        }
+      : null;
     if (!user.profile) {
       const generatedUsername = await generateUniqueUsername(async (uname) => {
         const existing = await db.profile.findUnique({
@@ -102,6 +111,7 @@ export async function POST(req: NextRequest) {
         data: {
           userId: user.id,
           username: generatedUsername,
+          isCustomUsername: false, // auto-generated — user can change it
         },
       });
 
@@ -110,6 +120,7 @@ export async function POST(req: NextRequest) {
         displayName: newProfile.displayName,
         avatarUrl: newProfile.avatarUrl,
         bio: newProfile.bio,
+        isCustomUsername: newProfile.isCustomUsername,
       };
     }
 
@@ -122,6 +133,7 @@ export async function POST(req: NextRequest) {
             displayName: profileData.displayName,
             avatarUrl: profileData.avatarUrl,
             bio: profileData.bio,
+            isCustomUsername: profileData.isCustomUsername,
           }
         : null,
       needsProfile: false, // always false now — we auto-generate

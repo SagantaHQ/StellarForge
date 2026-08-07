@@ -20,6 +20,7 @@ export interface UserProfile {
   avatarUrl?: string;
   bio?: string;
   createdAt: number;
+  isCustomUsername?: boolean;
 }
 
 interface ProfileState {
@@ -145,9 +146,11 @@ export const useProfileStore = create<ProfileState>()(
                 avatarUrl: data.profile.avatarUrl ?? undefined,
                 bio: data.profile.bio ?? undefined,
                 createdAt: Date.now(),
+                isCustomUsername: data.profile.isCustomUsername ?? true,
               },
               accentColor: colorFromAddress(address),
               walletConnected: true,
+              walletAddress: address,
               sessionChecked: true,
             });
           } else {
@@ -188,6 +191,7 @@ export const useProfileStore = create<ProfileState>()(
                   avatarUrl: data.profile.avatarUrl ?? undefined,
                   bio: data.profile.bio ?? undefined,
                   createdAt: Date.now(),
+                  isCustomUsername: data.profile.isCustomUsername ?? true,
                 },
                 accentColor: colorFromAddress(siwsResult.signerAddress),
                 walletConnected: true,

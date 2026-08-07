@@ -39,7 +39,7 @@ interface ProfileModalProps {
   open: boolean;
   onClose: () => void;
   onComplete: (profile: { address: string; username: string; avatarUrl?: string; bio?: string }) => void;
-  existingProfile?: { address: string; username: string; avatarUrl?: string; bio?: string } | null;
+  existingProfile?: { address: string; username: string; avatarUrl?: string; bio?: string; isCustomUsername?: boolean } | null;
   /** If the wallet is already connected, pass the address to skip the wallet step */
   walletAddress?: string | null;
   /** If true, the wallet is already connected — skip to profile step */
@@ -363,20 +363,26 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile, walle
               <div>
                 <label className="text-[11px] font-medium text-[var(--text-secondary)] mb-1 block">
                   Username{" "}
-                  {existingProfile?.username ? (
-                    <span className="text-[var(--text-muted)]">(locked)</span>
+                  {existingProfile?.isCustomUsername ? (
+                    <span className="text-[var(--text-muted)]">(locked — already set)</span>
                   ) : (
-                    <span className="text-[var(--status-error)]">*</span>
+                    <span className="text-[var(--status-success)]">(changeable)</span>
                   )}
                 </label>
                 <div className="relative">
                   <input
                     value={username}
-                    onChange={(e) => !existingProfile?.username && setUsername(e.target.value)}
-                    readOnly={!!existingProfile?.username}
+                    onChange={(e) => {
+                      // Only allow editing if the username is NOT custom (not locked)
+                      if (!existingProfile?.isCustomUsername) {
+                        setUsername(e.target.value);
+                      }
+                    }}
+                    readOnly={!!existingProfile?.isCustomUsername}
                     placeholder="e.g. soroban-dev"
                     className={cn(
                       "w-full rounded border bg-[var(--surface-sunken)] px-2.5 py-1.5 text-[13px] text-[var(--text-primary)] outline-none transition-colors placeholder:text-[var(--text-muted)]",
+                      existingProfile?.isCustomUsername && "opacity-60 cursor-not-allowed",
                       usernameStatus === "available" && "border-[var(--status-success)]",
                       usernameStatus === "taken" && "border-[var(--status-error)]",
                       usernameStatus === "invalid" && "border-[var(--status-warning)]",

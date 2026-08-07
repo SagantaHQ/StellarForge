@@ -53,6 +53,25 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Get the current profile to check if the username is changing
+    const currentProfile = await db.profile.findUnique({
+      where: { userId: user.id },
+      select: { username: true, isCustomUsername: true },
+    });
+
+    // If the username is different from the current one, mark it as custom
+    // (locked). Once the user sets a custom username, it can't be changed again.
+    const usernameChanged = currentProfile && currentProfile.username !== username.toLowerCase();
+    const alreadyCustom = currentProfile?.isCustomUsername ?? false;
+
+    // Reject username change if already custom (locked)
+    if (alreadyCustom && usernameChanged) {
+      return NextResponse.json(
+        { error: "Username is locked and cannot be changed after being set", field: "username" },
+        { status: 403 }
+      );
+    }
+
     // Upsert profile (create if doesn't exist, update if it does)
     const profile = await db.profile.upsert({
       where: { userId: user.id },
@@ -61,6 +80,8 @@ export async function POST(req: NextRequest) {
         displayName: displayName || null,
         avatarUrl: avatarUrl || null,
         bio: bio || null,
+        // Mark as custom (locked) if the username changed
+        ...(usernameChanged ? { isCustomUsername: true } : {}),
       },
       create: {
         userId: user.id,
@@ -68,6 +89,7 @@ export async function POST(req: NextRequest) {
         displayName: displayName || null,
         avatarUrl: avatarUrl || null,
         bio: bio || null,
+        isCustomUsername: true, // user explicitly set this username
       },
     });
 

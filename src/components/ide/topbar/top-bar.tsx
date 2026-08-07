@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useRef, lazy, Suspense } from "react";
 import {
-  GitBranch,
   Share2,
   Wallet,
   Play,
@@ -107,7 +106,7 @@ export function TopBar({
       className="flex h-12 items-center justify-between gap-3 border-b border-[var(--border-subtle)] bg-[var(--surface-panel)] px-3"
       role="banner"
     >
-      {/* Left: logo + project + branch */}
+      {/* Left: logo + project switcher */}
       <div className="flex items-center gap-3 min-w-0">
         <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-[var(--surface-raised)]">
           <svg viewBox="0 0 256 256" className="h-5 w-5">
@@ -173,15 +172,6 @@ export function TopBar({
               />
             )}
           </div>
-
-          <span className="text-[var(--text-muted)]">·</span>
-          <button
-            className="flex items-center gap-1 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
-            onClick={() => {}}
-          >
-            <GitBranch size={12} strokeWidth={1.75} />
-            <span>{branch}</span>
-          </button>
         </div>
       </div>
 

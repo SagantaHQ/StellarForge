@@ -7,7 +7,6 @@ import {
   PanelResizeHandle,
 } from "react-resizable-panels";
 import { TopBar } from "./topbar/top-bar";
-import { ActivityBar, type ActivityView } from "./topbar/activity-bar";
 import { FileExplorer } from "./explorer/file-explorer";
 import { EditorArea } from "./editor/editor-area";
 import { BuildOutputPanel } from "./panels/build-output-panel";
@@ -27,11 +26,8 @@ import { useFileSystemStore } from "@/stores/file-system-store";
 import { useEditorTabsStore } from "@/stores/editor-tabs-store";
 import { useProfileStore } from "@/stores/profile-store";
 import { useBuildStore } from "@/stores/build-store";
-import { useFixWithAIStore } from "@/stores/fix-with-ai-store";
-import { useSnapshotStore } from "@/stores/snapshot-store";
 import { useProjectsStore, type ProjectMeta } from "@/stores/projects-store";
 import type { Template } from "@/lib/templates/registry";
-import { flattenFiles } from "@/lib/soroban/sample-project";
 import { cn } from "@/lib/utils";
 
 type RightPanelView = "agent" | "compile" | "test" | "deploy" | "git";
@@ -56,7 +52,6 @@ async function resolveOwnerId(walletAddress: string | null | undefined): Promise
 }
 
 export function IdeShell() {
-  const [activityView, setActivityView] = useState<ActivityView>("explorer");
   const [rightPanelView, setRightPanelView] = useState<RightPanelView>("agent");
   const [terminalCollapsed, setTerminalCollapsed] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
@@ -72,7 +67,6 @@ export function IdeShell() {
   const editorFontSize = useThemeStore((s) => s.editorFontSize);
   const createFile = useFileSystemStore((s) => s.createFile);
   const hydrate = useFileSystemStore((s) => s.hydrate);
-  const fsHydrated = useFileSystemStore((s) => s.hydrated);
   const profile = useProfileStore((s) => s.profile);
   const setProfile = useProfileStore((s) => s.setProfile);
   const clearProfile = useProfileStore((s) => s.clearProfile);
@@ -80,7 +74,6 @@ export function IdeShell() {
   const syncFromWallet = useProfileStore((s) => s.syncFromWallet);
   const buildStatus = useBuildStore((s) => s.status);
   const startBuild = useBuildStore((s) => s.startBuild);
-  const requestFix = useFixWithAIStore((s) => s.requestFix);
 
   // Projects store — hydrates from IDB and syncs with Postgres when logged in
   const projectsHydrate = useProjectsStore((s) => s.hydrate);
@@ -173,21 +166,13 @@ export function IdeShell() {
         useThemeStore.getState().toggleMode();
       } else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "i") {
         e.preventDefault();
-        setActivityView("agent");
         setRightPanelView("agent");
       } else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "b") {
         e.preventDefault();
         setRightPanelView("compile");
         startBuild();
-      } else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "e") {
-        e.preventDefault();
-        setActivityView("explorer");
-      } else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "f") {
-        e.preventDefault();
-        setActivityView("search");
       } else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "g") {
         e.preventDefault();
-        setActivityView("git");
         setRightPanelView("git");
       } else if (cmd && e.shiftKey && e.key.toLowerCase() === "p") {
         e.preventDefault();
@@ -197,20 +182,6 @@ export function IdeShell() {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [createFile]);
-
-  // Map activity view → right panel view
-  function handleActivityChange(view: ActivityView) {
-    setActivityView(view);
-    if (view === "deploy") setRightPanelView("deploy");
-    else if (view === "git") setRightPanelView("git");
-    else if (view === "agent") setRightPanelView("agent");
-  }
-
-  function handleActivityToRightPanel(view: ActivityView) {
-    if (view === "deploy" || view === "git" || view === "agent") {
-      setRightPanelView(view);
-    }
-  }
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-[var(--surface-app)] text-[var(--text-primary)]">
@@ -254,7 +225,6 @@ export function IdeShell() {
           startBuild();
         }}
         onDeploy={() => {
-          setActivityView("deploy");
           setRightPanelView("deploy");
         }}
         onSwitchNetwork={setNetwork}
@@ -271,20 +241,15 @@ export function IdeShell() {
         onImportProject={() => setImportProjectOpen(true)}
       />
 
-      {/* Desktop layout — ActivityBar + left panel + center + right panel
-          are always visible. The center area switches between the editor
-          (when a project is active) and the welcome page (when not). */}
+      {/* Desktop layout — left panel + center + right panel are always visible.
+          The center area switches between the editor (when a project is active)
+          and the welcome page (when not). The left panel is always the File
+          Explorer (no ActivityBar tabs — the right panel handles view switching). */}
       <div className="hidden md:flex flex-1 overflow-hidden">
-        <ActivityBar
-          active={activityView}
-          onChange={handleActivityChange}
-          onOpenSettings={() => setSettingsOpen(true)}
-        />
-
         <PanelGroup direction="horizontal" className="flex-1">
-          {/* Left panel — explorer / search / git / etc */}
+          {/* Left panel — file explorer (always visible) */}
           <Panel defaultSize={18} minSize={12} maxSize={30} className="bg-[var(--surface-panel)]">
-            <SidePanel view={activityView} onOpenSettings={() => setSettingsOpen(true)} />
+            <FileExplorer onOpenSettings={() => setSettingsOpen(true)} />
           </Panel>
           <PanelResizeHandle className="w-px bg-[var(--border-subtle)] hover:bg-[var(--accent)] transition-colors" />
 
@@ -377,11 +342,9 @@ export function IdeShell() {
           startBuild();
         }}
         onDeploy={() => {
-          setActivityView("deploy");
           setRightPanelView("deploy");
         }}
         onOpenAgent={() => {
-          setActivityView("agent");
           setRightPanelView("agent");
         }}
       />
@@ -476,237 +439,6 @@ export function IdeShell() {
   );
 }
 
-function SidePanel({
-  view,
-  onOpenSettings,
-}: {
-  view: ActivityView;
-  onOpenSettings: () => void;
-}) {
-  if (view === "explorer") return <FileExplorer onOpenSettings={onOpenSettings} />;
-  if (view === "search") return <SearchPanel />;
-  if (view === "git") return <GitSidePanel />;
-  if (view === "deploy") return <DeploySidePanel />;
-  if (view === "agent") return <AgentSidePanel />;
-  if (view === "collab") return <CollabSidePanel />;
-  return <FileExplorer onOpenSettings={onOpenSettings} />;
-}
-
-function SearchPanel() {
-  const [query, setQuery] = useState("");
-  const [replace, setReplace] = useState("");
-  const [caseSensitive, setCaseSensitive] = useState(false);
-
-  const tree = useFileSystemStore((s) => s.tree);
-  const setActiveFile = useFileSystemStore((s) => s.setActiveFile);
-  const openTab = useEditorTabsStore((s) => s.openTab);
-
-  // Compute search results synchronously (debounced via query change)
-  const results = useMemo(() => {
-    if (!query.trim()) return [];
-    const allFiles = flattenFiles(tree);
-    const searchResults: {
-      filePath: string;
-      matches: { line: number; text: string; preview: string }[];
-    }[] = [];
-    const flags = caseSensitive ? "g" : "gi";
-    const regex = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), flags);
-
-    for (const file of allFiles) {
-      const lines = file.content.split("\n");
-      const matches: { line: number; text: string; preview: string }[] = [];
-      for (let i = 0; i < lines.length; i++) {
-        if (regex.test(lines[i])) {
-          const preview = lines[i].trim().substring(0, 80);
-          matches.push({ line: i + 1, text: lines[i], preview });
-        }
-        regex.lastIndex = 0;
-      }
-      if (matches.length > 0) {
-        searchResults.push({ filePath: file.path, matches });
-      }
-    }
-    return searchResults;
-  }, [query, caseSensitive, tree]);
-
-  const totalMatches = results.reduce((sum, r) => sum + r.matches.length, 0);
-
-  function handleResultClick(filePath: string, line: number) {
-    setActiveFile(filePath);
-    openTab(filePath, filePath.split("/").pop() ?? filePath);
-  }
-
-  return (
-    <div className="flex h-full flex-col bg-[var(--surface-panel)]">
-      <div className="px-3 py-2.5">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">Search</span>
-      </div>
-      <div className="px-3 pb-2 space-y-1.5">
-        <input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          autoFocus
-          placeholder="Search across files…"
-          className="w-full rounded border border-[var(--border-subtle)] bg-[var(--surface-sunken)] px-2 py-1.5 text-[13px] text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
-        />
-        <input
-          value={replace}
-          onChange={(e) => setReplace(e.target.value)}
-          placeholder="Replace…"
-          className="w-full rounded border border-[var(--border-subtle)] bg-[var(--surface-sunken)] px-2 py-1.5 text-[13px] text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
-        />
-        <div className="flex items-center gap-2 text-[10px]">
-          <button
-            onClick={() => setCaseSensitive((v) => !v)}
-            className={cn(
-              "rounded px-1.5 py-0.5 transition-colors",
-              caseSensitive
-                ? "bg-[var(--accent-subtle)] text-[var(--accent)]"
-                : "text-[var(--text-muted)] hover:bg-[var(--surface-hover)]"
-            )}
-          >
-            Aa
-          </button>
-          {query && (
-            <span className="text-[var(--text-muted)]">
-              {totalMatches} {totalMatches === 1 ? "result" : "results"} in {results.length} {results.length === 1 ? "file" : "files"}
-            </span>
-          )}
-        </div>
-      </div>
-      <div className="flex-1 overflow-y-auto">
-        {results.length === 0 && query && (
-          <div className="px-3 py-4 text-xs text-[var(--text-muted)]">
-            No results found.
-          </div>
-        )}
-        {results.map((result) => (
-          <div key={result.filePath} className="border-b border-[var(--border-subtle)]">
-            <div className="px-3 py-1 text-[11px] font-medium text-[var(--text-secondary)] bg-[var(--surface-sunken)]">
-              {result.filePath}
-              <span className="ml-2 text-[var(--text-muted)]">
-                {result.matches.length} {result.matches.length === 1 ? "match" : "matches"}
-              </span>
-            </div>
-            {result.matches.slice(0, 20).map((match, i) => (
-              <button
-                key={i}
-                onClick={() => handleResultClick(result.filePath, match.line)}
-                className="flex w-full items-baseline gap-2 px-3 py-1 text-left hover:bg-[var(--surface-hover)] transition-colors"
-              >
-                <span className="text-[10px] font-mono text-[var(--text-muted)] shrink-0">
-                  {match.line}
-                </span>
-                <span className="text-[11px] font-mono text-[var(--text-secondary)] truncate">
-                  {match.preview}
-                </span>
-              </button>
-            ))}
-            {result.matches.length > 20 && (
-              <div className="px-3 py-1 text-[10px] text-[var(--text-muted)]">
-                +{result.matches.length - 20} more matches
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function GitSidePanel() {
-  return (
-    <div className="flex h-full flex-col bg-[var(--surface-panel)]">
-      <div className="px-3 py-2.5">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">Source Control</span>
-      </div>
-      <div className="px-3 pb-2 space-y-2">
-        <textarea
-          placeholder="Commit message"
-          rows={2}
-          className="w-full rounded border border-[var(--border-subtle)] bg-[var(--surface-sunken)] px-2 py-1.5 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)] resize-none"
-        />
-        <button className="w-full rounded bg-[var(--accent)] py-1.5 text-xs font-medium text-[var(--accent-contrast)] hover:bg-[var(--accent-hover)] transition-colors">
-          Commit & Push
-        </button>
-      </div>
-      <div className="flex-1 overflow-y-auto px-3 py-2">
-        <div className="text-[10px] uppercase tracking-wide text-[var(--text-muted)] mb-1.5">Changes (2)</div>
-        <div className="space-y-0.5">
-          <div className="flex items-center gap-2 rounded px-2 py-1 text-xs hover:bg-[var(--surface-hover)] cursor-pointer">
-            <span className="font-mono text-[var(--status-warning)] text-[10px]">M</span>
-            <span className="text-[var(--text-secondary)]">src/lib.rs</span>
-          </div>
-          <div className="flex items-center gap-2 rounded px-2 py-1 text-xs hover:bg-[var(--surface-hover)] cursor-pointer">
-            <span className="font-mono text-[var(--status-info)] text-[10px]">U</span>
-            <span className="text-[var(--text-secondary)]">src/test.rs</span>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function DeploySidePanel() {
-  return (
-    <div className="flex h-full flex-col bg-[var(--surface-panel)]">
-      <div className="p-3 space-y-2 border-b border-[var(--border-subtle)]">
-        <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">Compile & Deploy</h3>
-        <button
-          onClick={() => {
-            useBuildStore.getState().startBuild();
-          }}
-          className="w-full rounded bg-[var(--accent)] py-2 text-xs font-medium text-[var(--accent-contrast)] hover:bg-[var(--accent-hover)] transition-colors"
-        >
-          stellar contract build
-        </button>
-        <button
-          onClick={() => {
-            // §13.4 — Auto-snapshot before deploy
-            const tree = useFileSystemStore.getState().tree;
-            const files = flattenFiles(tree).map((f) => ({ path: f.path, content: f.content, language: f.language }));
-            useSnapshotStore.getState().createSnapshot("Auto-snapshot before deploy", "", files);
-          }}
-          className="w-full rounded border border-[var(--border-subtle)] bg-[var(--surface-sunken)] py-2 text-xs text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)] transition-colors"
-        >
-          Deploy to Testnet
-        </button>
-      </div>
-      <div className="flex-1 overflow-hidden">
-        <SnapshotPanel />
-      </div>
-    </div>
-  );
-}
-
-function AgentSidePanel() {
-  return (
-    <div className="flex h-full flex-col bg-[var(--surface-panel)] p-3 gap-3 overflow-y-auto">
-      <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">AI Agent</h3>
-      <p className="text-xs text-[var(--text-muted)]">
-        BYOK agent for Soroban contract work. Configure a provider in Settings.
-      </p>
-      <button className="w-full rounded bg-[var(--accent)] py-2 text-xs font-medium text-[var(--accent-contrast)] hover:bg-[var(--accent-hover)] transition-colors">
-        Open Agent Chat
-      </button>
-    </div>
-  );
-}
-
-function CollabSidePanel() {
-  return (
-    <div className="flex h-full flex-col bg-[var(--surface-panel)] p-3 gap-3 overflow-y-auto">
-      <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">Collaboration</h3>
-      <div className="rounded border border-[var(--border-subtle)] bg-[var(--surface-sunken)] p-2.5">
-        <div className="text-xs text-[var(--text-secondary)] mb-1">Active session</div>
-        <div className="text-[11px] text-[var(--text-muted)]">No one else is here. Share the project to invite collaborators.</div>
-      </div>
-      <button className="w-full rounded bg-[var(--accent)] py-2 text-xs font-medium text-[var(--accent-contrast)] hover:bg-[var(--accent-hover)] transition-colors">
-        Generate share link
-      </button>
-    </div>
-  );
-}
 
 function MobilePanel({ active }: { active: "files" | "editor" | "build" | "agent" }) {
   if (active === "files") return <FileExplorer />;

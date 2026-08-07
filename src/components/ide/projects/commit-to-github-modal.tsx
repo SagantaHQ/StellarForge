@@ -57,6 +57,12 @@ export function CommitToGithubModal({ open, onClose }: CommitToGithubModalProps)
   const [branch, setBranch] = useState("");
   const [commitMessage, setCommitMessage] = useState("");
   const [createBranch, setCreateBranch] = useState(false);
+  const [forceCommit, setForceCommit] = useState(false);
+  const [conflictWarning, setConflictWarning] = useState<{
+    modified: number;
+    deleted: number;
+    unchanged: number;
+  } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<{
@@ -89,6 +95,8 @@ export function CommitToGithubModal({ open, onClose }: CommitToGithubModalProps)
       setBranch("");
       setCommitMessage("");
       setCreateBranch(false);
+      setForceCommit(false);
+      setConflictWarning(null);
       setError(null);
       setSuccess(null);
       setRepos([]);
@@ -165,6 +173,47 @@ export function CommitToGithubModal({ open, onClose }: CommitToGithubModalProps)
         return;
       }
 
+      // Conflict check: compare local files against the repo's current state.
+      // If the repo has files that differ from local, warn the user before
+      // committing (the commit will overwrite them).
+      const targetBranch = branch.trim() || selectedRepo.default_branch;
+      if (!forceCommit) {
+        try {
+          const compareRes = await fetch("/api/github/compare", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              walletAddress: profile.address,
+              owner: selectedRepo.owner.login,
+              repo: selectedRepo.name,
+              branch: targetBranch,
+              localFiles: files,
+            }),
+          });
+
+          if (compareRes.ok) {
+            const compareData = await compareRes.json();
+            // If the repo has files that exist remotely but not locally (deleted)
+            // or have different content (modified), that's a potential conflict.
+            if (
+              compareData.hasConflicts &&
+              compareData.summary.modified > 0
+            ) {
+              setConflictWarning({
+                modified: compareData.summary.modified,
+                deleted: compareData.summary.deleted,
+                unchanged: compareData.summary.unchanged,
+              });
+              setSubmitting(false);
+              return;
+            }
+          }
+          // If compare fails (e.g. empty repo), proceed with commit
+        } catch {
+          // Compare failed — proceed with commit (best-effort)
+        }
+      }
+
       const res = await fetch("/api/github/commit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -172,7 +221,7 @@ export function CommitToGithubModal({ open, onClose }: CommitToGithubModalProps)
           walletAddress: profile.address,
           owner: selectedRepo.owner.login,
           repo: selectedRepo.name,
-          branch: branch.trim() || selectedRepo.default_branch,
+          branch: targetBranch,
           message: commitMessage.trim(),
           files,
           createBranch,
@@ -427,6 +476,44 @@ export function CommitToGithubModal({ open, onClose }: CommitToGithubModalProps)
                     />
                   </div>
                 </>
+              )}
+
+              {conflictWarning && (
+                <div className="rounded-md border border-[var(--status-warning)]/40 bg-[color-mix(in_srgb,var(--status-warning)_8%,transparent)] p-3 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <AlertCircle size={13} strokeWidth={1.75} className="text-[var(--status-warning)] shrink-0" />
+                    <span className="text-[12px] font-medium text-[var(--status-warning)]">
+                      Conflicts detected
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed pl-5">
+                    The repo has <span className="font-semibold">{conflictWarning.modified} modified</span> file(s)
+                    {conflictWarning.deleted > 0 && (
+                      <> and <span className="font-semibold">{conflictWarning.deleted} file(s)</span> that don&apos;t exist locally</>
+                    )}
+                    . Committing will <span className="font-semibold">overwrite</span> the remote files with your local versions.
+                    {conflictWarning.unchanged > 0 && (
+                      <> {conflictWarning.unchanged} file(s) are unchanged.</>
+                    )}
+                  </p>
+                  <div className="flex items-center gap-2 pl-5">
+                    <button
+                      onClick={() => {
+                        setForceCommit(true);
+                        setConflictWarning(null);
+                      }}
+                      className="rounded bg-[var(--status-warning)] px-2.5 py-1 text-[10px] font-medium text-white hover:bg-[color-mix(in_srgb,var(--status-warning)_88%,black)]"
+                    >
+                      Force commit (overwrite remote)
+                    </button>
+                    <button
+                      onClick={() => setConflictWarning(null)}
+                      className="rounded border border-[var(--border-subtle)] px-2.5 py-1 text-[10px] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
               )}
 
               {error && (

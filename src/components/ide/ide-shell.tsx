@@ -13,6 +13,7 @@ import { EditorArea } from "./editor/editor-area";
 import { BuildOutputPanel } from "./panels/build-output-panel";
 import { RightPanel } from "./panels/right-panel";
 import { GitPanel } from "./panels/git-panel";
+import { PackagesPanel } from "./panels/packages-panel";
 import { StatusBar } from "./panels/status-bar";
 import { CommandPalette } from "./panels/command-palette";
 import { SettingsDialog } from "./panels/settings-dialog";
@@ -104,6 +105,21 @@ export function IdeShell() {
     // Expose profile store on window for cross-store access (avoids circular imports)
     (window as unknown as { __profileStore: unknown }).__profileStore = useProfileStore.getState();
   }, [hydrate, projectsHydrate]);
+
+  // Auto-build on project load: when a project becomes active and the build
+  // status is idle (no wasm has been built yet), trigger a stellar contract
+  // build so the user sees compile results immediately.
+  useEffect(() => {
+    if (activeProject && projectsHydrated && buildStatus === "idle") {
+      // Small delay to let the file system store settle after project switch
+      const timer = setTimeout(() => {
+        if (useBuildStore.getState().status === "idle") {
+          startBuild();
+        }
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [activeProject?.id, projectsHydrated, buildStatus, startBuild]);
 
   // When the user logs in, pull their server-side projects and merge into the
   // local list. Also push any local-only projects to the server.
@@ -501,6 +517,7 @@ function SidePanel({
   if (view === "explorer") return <FileExplorer onOpenSettings={onOpenSettings} />;
   if (view === "search") return <SearchPanel />;
   if (view === "git") return <GitSidePanel />;
+  if (view === "packages") return <PackagesPanel />;
   if (view === "deploy") return <DeploySidePanel />;
   if (view === "agent") return <AgentSidePanel />;
   if (view === "collab") return <CollabSidePanel />;

@@ -125,6 +125,21 @@ function CompilePanel() {
             )}
             stellar contract build
           </Button>
+          <Button
+            size="sm"
+            onClick={() => startBuild({ command: "cargo" })}
+            disabled={status === "building"}
+            variant="outline"
+            className="w-full h-8 gap-2 border-[var(--border-strong)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] disabled:opacity-60"
+            title="Run cargo build (compiles dependencies, checks types)"
+          >
+            {status === "building" ? (
+              <Loader2 size={13} strokeWidth={1.75} className="animate-spin" />
+            ) : (
+              <Check size={13} strokeWidth={1.75} />
+            )}
+            cargo build
+          </Button>
         </div>
       </div>
 

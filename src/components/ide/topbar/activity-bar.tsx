@@ -8,6 +8,7 @@ import {
   Bot,
   Users,
   Settings,
+  Package,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -16,6 +17,7 @@ export type ActivityView =
   | "explorer"
   | "search"
   | "git"
+  | "packages"
   | "deploy"
   | "agent"
   | "collab"
@@ -32,6 +34,7 @@ const ITEMS: ActivityItem[] = [
   { id: "explorer", icon: Files, label: "Explorer", shortcut: "⇧⌘E" },
   { id: "search", icon: Search, label: "Search", shortcut: "⇧⌘F" },
   { id: "git", icon: GitBranch, label: "Source Control", shortcut: "⌃⇧G" },
+  { id: "packages", icon: Package, label: "Packages", shortcut: "⌃⇧P" },
   { id: "deploy", icon: Rocket, label: "Compile & Deploy", shortcut: "⌃⇧B" },
   { id: "agent", icon: Bot, label: "AI Agent", shortcut: "⌃⌘I" },
   { id: "collab", icon: Users, label: "Collaboration", shortcut: "⌃⇧C" },

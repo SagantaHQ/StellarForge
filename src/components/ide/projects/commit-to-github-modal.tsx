@@ -11,6 +11,7 @@ import {
   ArrowRight,
   ExternalLink,
   RefreshCw,
+  Plus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -64,6 +65,12 @@ export function CommitToGithubModal({ open, onClose }: CommitToGithubModalProps)
     deleted: number;
     unchanged: number;
   } | null>(null);
+  // Create new repo state
+  const [showCreateRepo, setShowCreateRepo] = useState(false);
+  const [newRepoName, setNewRepoName] = useState("");
+  const [newRepoDesc, setNewRepoDesc] = useState("");
+  const [newRepoPrivate, setNewRepoPrivate] = useState(false);
+  const [creatingRepo, setCreatingRepo] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<{
@@ -98,6 +105,11 @@ export function CommitToGithubModal({ open, onClose }: CommitToGithubModalProps)
       setCreateBranch(false);
       setForceCommit(false);
       setConflictWarning(null);
+      setShowCreateRepo(false);
+      setNewRepoName("");
+      setNewRepoDesc("");
+      setNewRepoPrivate(false);
+      setCreatingRepo(false);
       setError(null);
       setSuccess(null);
       setRepos([]);
@@ -153,6 +165,57 @@ export function CommitToGithubModal({ open, onClose }: CommitToGithubModalProps)
     await disconnectGithub();
     setRepos([]);
     setSelectedRepo(null);
+  }
+
+  async function handleCreateRepo() {
+    if (!profile?.address || !newRepoName.trim()) return;
+
+    setCreatingRepo(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/github/create-repo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          walletAddress: profile.address,
+          name: newRepoName.trim(),
+          description: newRepoDesc.trim() || undefined,
+          private: newRepoPrivate,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "Failed to create repo");
+        setCreatingRepo(false);
+        return;
+      }
+
+      // Auto-select the newly created repo
+      const newRepo: GitHubRepoInfo = {
+        id: data.repo.id,
+        name: data.repo.name,
+        full_name: data.repo.full_name,
+        private: data.repo.private,
+        default_branch: data.repo.default_branch,
+        html_url: data.repo.html_url,
+        language: "Rust",
+        owner: { login: data.repo.owner.login },
+      };
+
+      // Add to the repos list + select it
+      setRepos((prev) => [newRepo, ...prev]);
+      setSelectedRepo(newRepo);
+      setBranch(newRepo.default_branch);
+      setShowCreateRepo(false);
+      setNewRepoName("");
+      setNewRepoDesc("");
+      setNewRepoPrivate(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create repo");
+    } finally {
+      setCreatingRepo(false);
+    }
   }
 
   async function handleCommit() {
@@ -444,6 +507,79 @@ export function CommitToGithubModal({ open, onClose }: CommitToGithubModalProps)
                     </button>
                   ))}
               </div>
+
+              {/* Create new repo toggle */}
+              {!showCreateRepo && !selectedRepo && (
+                <button
+                  onClick={() => setShowCreateRepo(true)}
+                  className="flex items-center gap-1.5 text-[11px] text-[var(--accent)] hover:underline"
+                >
+                  <Plus size={12} strokeWidth={1.75} />
+                  Create a new repository
+                </button>
+              )}
+
+              {/* Create new repo form */}
+              {showCreateRepo && (
+                <div className="rounded-md border border-[var(--accent)]/30 bg-[color-mix(in_srgb,var(--accent)_5%,transparent)] p-3 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-medium text-[var(--text-primary)]">
+                      Create new repository
+                    </span>
+                    <button
+                      onClick={() => setShowCreateRepo(false)}
+                      className="text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                    >
+                      <X size={14} strokeWidth={1.75} />
+                    </button>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-medium uppercase tracking-wide text-[var(--text-muted)] mb-1 block">
+                      Repo name
+                    </label>
+                    <input
+                      value={newRepoName}
+                      onChange={(e) => setNewRepoName(e.target.value)}
+                      placeholder="my-contract"
+                      className="w-full rounded border border-[var(--border-subtle)] bg-[var(--surface-sunken)] px-2.5 py-1.5 text-[12px] font-mono text-[var(--text-primary)] outline-none focus:border-[var(--accent)] placeholder:text-[var(--text-muted)]"
+                      autoFocus
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-medium uppercase tracking-wide text-[var(--text-muted)] mb-1 block">
+                      Description <span className="normal-case">(optional)</span>
+                    </label>
+                    <input
+                      value={newRepoDesc}
+                      onChange={(e) => setNewRepoDesc(e.target.value)}
+                      placeholder="My Soroban contract"
+                      className="w-full rounded border border-[var(--border-subtle)] bg-[var(--surface-sunken)] px-2.5 py-1.5 text-[12px] text-[var(--text-primary)] outline-none focus:border-[var(--accent)] placeholder:text-[var(--text-muted)]"
+                    />
+                  </div>
+                  <label className="flex items-center gap-1.5 text-[11px] text-[var(--text-secondary)] cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={newRepoPrivate}
+                      onChange={(e) => setNewRepoPrivate(e.target.checked)}
+                      className="h-3 w-3"
+                    />
+                    Private repository
+                  </label>
+                  <Button
+                    size="sm"
+                    onClick={handleCreateRepo}
+                    disabled={!newRepoName.trim() || creatingRepo}
+                    className="w-full gap-1.5 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)] disabled:opacity-50"
+                  >
+                    {creatingRepo ? (
+                      <Loader2 size={13} strokeWidth={1.75} className="animate-spin" />
+                    ) : (
+                      <Plus size={13} strokeWidth={1.75} />
+                    )}
+                    {creatingRepo ? "Creating…" : "Create repository"}
+                  </Button>
+                </div>
+              )}
 
               {/* Branch + commit message */}
               {selectedRepo && (

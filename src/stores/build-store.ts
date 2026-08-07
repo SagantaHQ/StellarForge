@@ -37,7 +37,7 @@ interface BuildState {
   _buildId?: string;
   _pollTimer?: ReturnType<typeof setTimeout>;
 
-  startBuild: (opts?: { tree?: TreeNode[] }) => Promise<void>;
+  startBuild: (opts?: { tree?: TreeNode[]; command?: "stellar" | "cargo" }) => Promise<void>;
   reset: () => void;
   clearOutput: () => void;
 }
@@ -70,6 +70,7 @@ export const useBuildStore = create<BuildState>((set, get) => ({
         body: JSON.stringify({
           projectId: "local-project",
           files,
+          command: opts.command ?? "stellar",
         }),
       });
 

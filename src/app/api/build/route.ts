@@ -41,6 +41,7 @@ export async function POST(req: NextRequest) {
   let body: {
     projectId: string;
     files: { path: string; content: string }[];
+    command?: "stellar" | "cargo";
   };
   try {
     body = await req.json();
@@ -85,17 +86,22 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Always use `stellar contract build` — it's the canonical Soroban build command
-  const buildCommand = "stellar";
-  const args = ["contract", "build"];
+  // Determine the build command:
+  // - "stellar" (default): `stellar contract build` — the canonical Soroban build
+  // - "cargo": `cargo build` — compiles dependencies without producing a wasm
+  //   Useful for checking that Cargo.toml changes compile correctly
+  const useCargo = body.command === "cargo";
+  const buildCommand = useCargo ? "cargo" : "stellar";
+  const args = useCargo ? ["build"] : ["contract", "build"];
 
-  // Verify stellar CLI is installed
+  // Verify the CLI is installed
   const { existsSync } = await import("fs");
-  if (!existsSync(`${cargoBin}/stellar`)) {
+  const cliPath = `${cargoBin}/${buildCommand}`;
+  if (!existsSync(cliPath) && !existsSync(`/usr/bin/${buildCommand}`) && !existsSync(`/usr/local/bin/${buildCommand}`)) {
     return NextResponse.json({
       buildId: `error-${Date.now()}`,
       status: "failed",
-      message: "stellar CLI not installed. Run: cargo install stellar-cli",
+      message: `${buildCommand} CLI not installed. Run: cargo install ${useCargo ? "" : "stellar-cli"}`.trim(),
     });
   }
 

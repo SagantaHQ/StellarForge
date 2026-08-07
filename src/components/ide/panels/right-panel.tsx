@@ -28,7 +28,7 @@ import { useProfileStore } from "@/stores/profile-store";
 import { useProjectsStore } from "@/stores/projects-store";
 import { flattenFiles } from "@/lib/soroban/sample-project";
 
-type RightPanelView = "agent" | "compile" | "test" | "deploy" | "inspect" | "docs";
+type RightPanelView = "agent" | "compile" | "deploy" | "inspect";
 
 interface RightPanelProps {
   view: RightPanelView;
@@ -39,11 +39,9 @@ interface RightPanelProps {
 
 const VIEW_ITEMS: { id: RightPanelView; icon: LucideIcon; label: string }[] = [
   { id: "agent", icon: Bot, label: "AI Agent" },
-  { id: "compile", icon: Wrench, label: "Compile" },
-  { id: "test", icon: TestTube, label: "Tests" },
+  { id: "compile", icon: Wrench, label: "Build" },
   { id: "deploy", icon: Rocket, label: "Deploy" },
   { id: "inspect", icon: SearchIcon, label: "Inspect" },
-  { id: "docs", icon: FileText, label: "Docs" },
 ];
 
 export function RightPanel({ view, onChangeView, onOpenSettings, network = "testnet" }: RightPanelProps) {
@@ -75,15 +73,15 @@ export function RightPanel({ view, onChangeView, onOpenSettings, network = "test
       <div className="flex-1 overflow-hidden">
         {view === "agent" && <AgentPanel onOpenSettings={() => onOpenSettings?.()} />}
         {view === "compile" && <CompilePanel />}
-        {view === "test" && <TestPanel />}
         {view === "deploy" && <DeployPanel network={network} />}
-        {(view === "inspect" || view === "docs") && <ContractInspectPanel />}
+        {view === "inspect" && <ContractInspectPanel />}
       </div>
     </div>
   );
 }
 
 function CompilePanel() {
+  const [subTab, setSubTab] = useState<"build" | "tests">("build");
   const status = useBuildStore((s) => s.status);
   const lines = useBuildStore((s) => s.lines);
   const wasmInfo = useBuildStore((s) => s.wasmInfo);
@@ -115,6 +113,38 @@ function CompilePanel() {
 
   return (
     <div className="flex h-full flex-col p-3 gap-3 overflow-hidden">
+      {/* Sub-tabs: Build / Tests */}
+      <div className="flex items-center gap-1 border-b border-[var(--border-subtle)] pb-2">
+        <button
+          onClick={() => setSubTab("build")}
+          className={cn(
+            "flex items-center gap-1.5 rounded px-2 py-1 text-[10px] font-medium uppercase tracking-wide transition-colors",
+            subTab === "build"
+              ? "bg-[var(--surface-raised)] text-[var(--text-primary)]"
+              : "text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+          )}
+        >
+          <Wrench size={11} strokeWidth={1.75} />
+          Build
+        </button>
+        <button
+          onClick={() => setSubTab("tests")}
+          className={cn(
+            "flex items-center gap-1.5 rounded px-2 py-1 text-[10px] font-medium uppercase tracking-wide transition-colors",
+            subTab === "tests"
+              ? "bg-[var(--surface-raised)] text-[var(--text-primary)]"
+              : "text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+          )}
+        >
+          <TestTube size={11} strokeWidth={1.75} />
+          Tests
+        </button>
+      </div>
+
+      {subTab === "tests" ? (
+        <TestPanel />
+      ) : (
+        <>
       <div>
         <h3 className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)] mb-2">
           Build
@@ -255,6 +285,8 @@ function CompilePanel() {
           </div>
         )}
       </div>
+        </>
+      )}
     </div>
   );
 }

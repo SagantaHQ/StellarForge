@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useMemo, useRef } from "react";
+import dynamic from "next/dynamic";
 import { Search, Rocket } from "lucide-react";
 import {
   PanelGroup,
@@ -20,7 +21,12 @@ import { CommandPalette } from "./panels/command-palette";
 import { SettingsDialog } from "./panels/settings-dialog";
 import { NewProjectModal } from "./templates/new-project-modal";
 import { ProfileModal } from "./profile/profile-modal";
-import { LspManagerMount } from "./editor/lsp-manager-mount";
+// LSP manager — loaded with ssr:false to prevent monaco-languageclient
+// CSS imports from breaking SSR (Unknown file extension ".css" error)
+const LspManagerMount = dynamic(
+  () => import("./editor/lsp-manager-mount").then((m) => m.LspManagerMount),
+  { ssr: false, loading: () => null }
+);
 import { ShareDialog } from "./collab/share-dialog";
 import { DeleteProjectModal } from "./projects/delete-project-modal";
 import { ImportProjectModal } from "./projects/import-project-modal";

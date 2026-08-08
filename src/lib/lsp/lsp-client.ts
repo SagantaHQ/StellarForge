@@ -9,8 +9,18 @@ import {
   WebSocketMessageWriter,
   type IWebSocket,
 } from "vscode-ws-jsonrpc";
-import { CloseAction, ErrorAction } from "vscode-languageclient/browser";
 import type * as Monaco from "monaco-editor";
+
+/**
+ * CloseAction / ErrorAction enums — defined inline to avoid importing from
+ * 'vscode-languageclient/browser' which Turbopack can't resolve via the
+ * package's subpath exports (the 'browser' condition isn't recognized
+ * during SSR). These values must match vscode-languageclient's enums.
+ *   CloseAction.DoNotRestart = 1, CloseAction.Restart = 2
+ *   ErrorAction.Continue = 1, ErrorAction.Shutdown = 2
+ */
+const CloseAction = { DoNotRestart: 1, Restart: 2 } as const;
+const ErrorAction = { Continue: 1, Shutdown: 2 } as const;
 
 /**
  * LSP client for Soroban.Build — connects Monaco to the rust-analyzer

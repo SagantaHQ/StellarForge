@@ -800,7 +800,9 @@ function DeployPanel({ network }: { network: string }) {
   );
 }
 
-// Helper to get the appkit instance for signing
+// Helper to get the appkit instance for signing.
+// Reads from the global window.__appkitClient (set by the provider) so
+// any component can sign transactions without being inside the provider tree.
 async function getAppKitForSigning(): Promise<{
   signTransaction: (xdr: string, opts?: Record<string, unknown>) => Promise<{ signedTxXdr?: string; signedXdr?: string }>;
 } | null> {
@@ -808,12 +810,23 @@ async function getAppKitForSigning(): Promise<{
     const profileState = (window as unknown as { __profileStore?: { profile: { address: string } | null } }).__profileStore;
     if (!profileState?.profile?.address) return null;
 
-    const modal = document.querySelector<HTMLElement & { client: unknown }>("saganta-appkit-modal");
-    if (!modal?.client) return null;
+    // Try the new <stellar-appkit-modal> element first
+    const modal = document.querySelector<HTMLElement & { client: unknown }>("stellar-appkit-modal");
+    if (modal?.client) {
+      return modal.client as {
+        signTransaction: (xdr: string, opts?: Record<string, unknown>) => Promise<{ signedTxXdr?: string; signedXdr?: string }>;
+      };
+    }
 
-    return modal.client as {
-      signTransaction: (xdr: string, opts?: Record<string, unknown>) => Promise<{ signedTxXdr?: string; signedXdr?: string }>;
-    };
+    // Fallback: old element name (for backwards compat during migration)
+    const oldModal = document.querySelector<HTMLElement & { client: unknown }>("saganta-appkit-modal");
+    if (oldModal?.client) {
+      return oldModal.client as {
+        signTransaction: (xdr: string, opts?: Record<string, unknown>) => Promise<{ signedTxXdr?: string; signedXdr?: string }>;
+      };
+    }
+
+    return null;
   } catch {
     return null;
   }

@@ -43,6 +43,17 @@ interface ProfileState {
   isLoggedIn: () => boolean;
   /** Check server session by wallet address (passive check, no SIWS) */
   syncFromWallet: (address: string | null) => Promise<void>;
+  /**
+   * New SIWS flow — sync from a SiwsSession returned by the stellar-appkit
+   * SDK's verify() callback. The session contains { address, network, expiry, metadata }
+   * where metadata has { username, displayName, avatarUrl, bio, isCustomUsername }.
+   */
+  syncFromSiwsSession: (session: {
+    address: string;
+    network: string;
+    expiry: number;
+    metadata?: Record<string, unknown>;
+  } | null) => void;
   /** Full login flow: SIWS sign → verify on server → create session. Returns needsProfile flag. */
   loginWithSiws: (siwsResult: {
     message: string;
@@ -162,6 +173,51 @@ export const useProfileStore = create<ProfileState>()(
         }
 
         // After session sync, also check GitHub status
+        get().syncGithubStatus();
+      },
+
+      // New SIWS flow — called when the stellar-appkit SDK fires
+      // `siwsSessionChange`. The session is set by the SDK after verify()
+      // returns a valid SiwsSession, or cleared on disconnect/expiry.
+      syncFromSiwsSession: (session) => {
+        if (!session) {
+          // Session cleared — user signed out or session expired
+          set({
+            profile: null,
+            walletConnected: false,
+            walletAddress: null,
+            sessionChecked: true,
+            githubConnected: false,
+            githubUsername: null,
+          });
+          return;
+        }
+
+        const address = session.address;
+        const meta = (session.metadata ?? {}) as {
+          username?: string;
+          displayName?: string | null;
+          avatarUrl?: string | null;
+          bio?: string | null;
+          isCustomUsername?: boolean;
+        };
+
+        set({
+          walletConnected: true,
+          walletAddress: address,
+          sessionChecked: true,
+          accentColor: colorFromAddress(address),
+          profile: {
+            address,
+            username: meta.username ?? "",
+            avatarUrl: meta.avatarUrl ?? undefined,
+            bio: meta.bio ?? undefined,
+            createdAt: Date.now(),
+            isCustomUsername: meta.isCustomUsername ?? false,
+          },
+        });
+
+        // Sync GitHub status in the background
         get().syncGithubStatus();
       },
 

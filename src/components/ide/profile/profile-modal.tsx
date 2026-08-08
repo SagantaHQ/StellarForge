@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import {
   X,
   Wallet,
@@ -12,7 +12,6 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { useStellarWallet } from "@/lib/wallet/use-stellar-wallet";
 import { AvatarUploader } from "./avatar-uploader";
 
 /**
@@ -45,12 +44,6 @@ interface ProfileModalProps {
   walletConnected?: boolean;
 }
 
-const WALLETS = [
-  { id: "freighter", name: "Freighter", description: "Browser extension", color: "#4F8C8C" },
-  { id: "albedo", name: "Albedo", description: "No-install wallet", color: "#7B96B3" },
-  { id: "xbull", name: "xBull", description: "Browser extension", color: "#C9A66B" },
-];
-
 export function ProfileModal({ open, onClose, onComplete, existingProfile, walletAddress, walletConnected }: ProfileModalProps) {
   const [step, setStep] = useState<Step>("wallet");
   const [address, setAddress] = useState<string>("");
@@ -63,10 +56,6 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile, walle
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Wallet hook — used only for the "connect wallet" picker step (when the
-  // wallet isn't already connected). SIWS signing happens in ide-shell.tsx.
-  const wallet = useStellarWallet();
 
   // When opening with an existing profile, pre-fill and skip to profile step
   useEffect(() => {
@@ -89,25 +78,6 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile, walle
       setStep("profile");
     }
   }, [open, walletConnected, walletAddress, existingProfile]);
-
-  // Listen for wallet connect events from the saganta-appkit-modal
-  useEffect(() => {
-    if (!open) return;
-    function handleConnectEvent(event: Event) {
-      const detail = (event as CustomEvent).detail;
-      if (detail?.address) {
-        setAddress(detail.address);
-        setStep("profile");
-      }
-    }
-    // Also check if wallet already connected
-    if (wallet.address && !address) {
-      setAddress(wallet.address);
-      setStep("profile");
-    }
-    window.addEventListener("sc-connect", handleConnectEvent as EventListener);
-    return () => window.removeEventListener("sc-connect", handleConnectEvent as EventListener);
-  }, [open, wallet.address, address]);
 
   // Reset on close
   useEffect(() => {
@@ -159,20 +129,6 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile, walle
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
   }, [username, step, existingProfile]);
-
-  const handleConnectWallet = useCallback(async (walletId: string) => {
-    setConnecting(true);
-    setWalletError(null);
-    try {
-      const addr = await wallet.connect(walletId);
-      setAddress(addr);
-      setStep("profile");
-    } catch (err) {
-      setWalletError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setConnecting(false);
-    }
-  }, [wallet]);
 
   if (!open) return null;
 
@@ -255,56 +211,29 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile, walle
                 Your wallet address is your identity.
               </p>
               <Button
-                onClick={async () => {
+                onClick={() => {
                   setConnecting(true);
                   try {
-                    const modal = document.querySelector<HTMLElement & { open: () => void }>("saganta-appkit-modal");
-                    modal?.open?.();
+                    // Open the <StellarAppKitModal> via the global handle.
+                    // The modal handles wallet picking + SIWS automatically.
+                    const handle = (window as unknown as { __walletModal?: { open: () => void } }).__walletModal;
+                    handle?.open();
                   } catch (err) {
                     setWalletError(err instanceof Error ? err.message : String(err));
                   } finally {
                     setConnecting(false);
                   }
                 }}
-                disabled={connecting || wallet.connecting}
+                disabled={connecting}
                 className="w-full gap-2 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)]"
               >
-                {connecting || wallet.connecting ? (
+                {connecting ? (
                   <Loader2 size={14} strokeWidth={1.75} className="animate-spin" />
                 ) : (
                   <Wallet size={14} strokeWidth={1.75} />
                 )}
-                {connecting || wallet.connecting ? "Opening wallet…" : "Open wallet picker"}
+                {connecting ? "Opening wallet…" : "Open wallet picker"}
               </Button>
-
-              {/* Direct connect buttons as fallback */}
-              <div className="relative py-2">
-                <div className="absolute inset-0 flex items-center">
-                  <span className="w-full border-t border-[var(--border-subtle)]" />
-                </div>
-                <div className="relative flex justify-center text-[10px] uppercase tracking-wide">
-                  <span className="bg-[var(--surface-panel)] px-2 text-[var(--text-muted)]">or connect directly</span>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                {WALLETS.map((w) => (
-                  <button
-                    key={w.id}
-                    onClick={() => handleConnectWallet(w.id)}
-                    disabled={connecting || wallet.connecting}
-                    className="flex w-full items-center gap-3 rounded-md border border-[var(--border-subtle)] bg-[var(--surface-sunken)] p-2.5 text-left transition-colors hover:border-[var(--accent)] disabled:opacity-50"
-                  >
-                    <div className="flex h-8 w-8 items-center justify-center rounded-md" style={{ backgroundColor: w.color }}>
-                      <Wallet size={14} strokeWidth={1.75} className="text-white" />
-                    </div>
-                    <div className="flex-1">
-                      <div className="text-[12px] font-medium text-[var(--text-primary)]">{w.name}</div>
-                      <div className="text-[10px] text-[var(--text-muted)]">{w.description}</div>
-                    </div>
-                  </button>
-                ))}
-              </div>
 
               {walletError && (
                 <div className="rounded-md border border-[var(--status-error)] bg-[color-mix(in_srgb,var(--status-error)_10%,transparent)] p-2.5 flex items-start gap-2">

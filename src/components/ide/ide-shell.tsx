@@ -77,8 +77,6 @@ export function IdeShell() {
   const profile = useProfileStore((s) => s.profile);
   const setProfile = useProfileStore((s) => s.setProfile);
   const clearProfile = useProfileStore((s) => s.clearProfile);
-  const setWalletConnected = useProfileStore((s) => s.setWalletConnected);
-  const syncFromWallet = useProfileStore((s) => s.syncFromWallet);
   const buildStatus = useBuildStore((s) => s.status);
   const buildSilent = useBuildStore((s) => s.silent);
   const startBuild = useBuildStore((s) => s.startBuild);
@@ -158,88 +156,17 @@ export function IdeShell() {
     }
   }, [profile?.address, projectsSyncFromServer]);
 
-  // §11 — Listen for wallet connect/disconnect events.
-  // When a wallet connects, we MUST do SIWS (Sign-In With Stellar):
-  //   1. Wallet signs a message proving ownership
-  //   2. Server verifies the signature → creates a session
-  //   3. Check if the user has a profile → open profile modal if not
-  useEffect(() => {
-    function handleConnect(event: Event) {
-      const detail = (event as CustomEvent).detail;
-      if (detail?.address) {
-        // Wallet connected — set flag + store the address
-        setWalletConnected(true, detail.address);
-
-        // Step 1: Try SIWS login (sign message → verify → create session)
-        // We need the appkit instance to sign the SIWS message
-        async function doSiwsLogin() {
-          try {
-            // Get the appkit instance from the modal
-            const modal = document.querySelector<HTMLElement & { client: unknown }>("saganta-appkit-modal");
-            const appkit = modal?.client as {
-              signIn: (opts: { statement: string; nonce: string }) => Promise<{
-                message: string;
-                signedMessage: string;
-                signerAddress: string;
-                signedData?: string;
-              }>;
-            } | null;
-
-            if (!appkit) {
-              // Appkit not mounted yet — fall back to passive session check
-              syncFromWallet(detail.address);
-              return;
-            }
-
-            // Fetch nonce from server
-            const nonceRes = await fetch("/api/auth/nonce");
-            if (!nonceRes.ok) {
-              syncFromWallet(detail.address);
-              return;
-            }
-            const { nonce } = await nonceRes.json();
-
-            // Sign the SIWS message
-            const statement = `Sign in to Soroban.Build`;
-            const siwsResult = await appkit.signIn({ statement, nonce });
-
-            // Verify on server + create session
-            const loginResult = await useProfileStore.getState().loginWithSiws({
-              message: siwsResult.message,
-              signedMessage: siwsResult.signedMessage,
-              signerAddress: siwsResult.signerAddress,
-              nonce,
-              signedData: siwsResult.signedData,
-            });
-
-            // If login succeeded but user has no profile → open profile modal
-            if (loginResult.loggedIn && loginResult.needsProfile) {
-              setProfileOpen(true);
-            }
-          } catch (err) {
-            // SIWS failed (user rejected, network error, etc.)
-            // Fall back to passive session check — if the user already has
-            // a session from a previous login, they can still use the IDE
-            console.error("[SIWS] Login failed, falling back to passive check:", err);
-            syncFromWallet(detail.address);
-          }
-        }
-
-        doSiwsLogin();
-      }
-    }
-    function handleDisconnect() {
-      // Wallet disconnected — clear everything
-      setWalletConnected(false);
-      clearProfile();
-    }
-    window.addEventListener("sc-connect", handleConnect as EventListener);
-    window.addEventListener("sc-disconnect", handleDisconnect as EventListener);
-    return () => {
-      window.removeEventListener("sc-connect", handleConnect as EventListener);
-      window.removeEventListener("sc-disconnect", handleDisconnect as EventListener);
-    };
-  }, [syncFromWallet, clearProfile, setWalletConnected]);
+  // §11 — Wallet connect/disconnect + SIWS is now fully handled by the
+  // stellar-appkit SDK + the <SiwsSessionBridge> mounted in layout.tsx.
+  // The SDK's built-in SIWS flow:
+  //   1. Wallet connects (modal fires `connect` event)
+  //   2. SDK calls siws.session() → check existing session
+  //   3. SDK calls siws.nonce() → fetch server nonce
+  //   4. SDK calls appkit.signIn() → wallet signs
+  //   5. SDK calls siws.verify() → server verifies + returns SiwsSession
+  //   6. SDK fires `siwsSessionChange` → SiwsSessionBridge syncs profile-store
+  //
+  // No manual event listeners needed here.
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -322,24 +249,15 @@ export function IdeShell() {
           }
           setShareOpen(true);
         }}
-        onConnectWallet={async () => {
-          // Try to open the saganta-appkit-modal if already mounted
-          const modal = document.querySelector<HTMLElement & { open: () => void }>("saganta-appkit-modal");
-          if (modal?.open) {
-            modal.open();
-          } else {
-            // Modal not mounted yet — dispatch event to lazy-load it
-            // The WalletMount component will compile stellar-appkit and open the modal
-            window.dispatchEvent(new CustomEvent("soroban-connect-click"));
-          }
+        onConnectWallet={() => {
+          // Open the <StellarAppKitModal> via the global handle.
+          // The modal is mounted in layout.tsx and auto-triggers SIWS.
+          const handle = (window as unknown as { __walletModal?: { open: () => void } }).__walletModal;
+          handle?.open();
         }}
-        onOpenWalletModal={async () => {
-          const modal = document.querySelector<HTMLElement & { open: () => void }>("saganta-appkit-modal");
-          if (modal?.open) {
-            modal.open();
-          } else {
-            window.dispatchEvent(new CustomEvent("soroban-connect-click"));
-          }
+        onOpenWalletModal={() => {
+          const handle = (window as unknown as { __walletModal?: { open: () => void } }).__walletModal;
+          handle?.open();
         }}
         onOpenProfile={() => setProfileOpen(true)}
         onOpenSettings={() => setSettingsOpen(true)}

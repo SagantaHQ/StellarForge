@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, lazy, Suspense } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Wallet,
   Play,
@@ -28,6 +28,7 @@ import type { UserProfile } from "@/stores/profile-store";
 import { useProfileStore } from "@/stores/profile-store";
 import { useCollabStore } from "@/stores/collab-store";
 import { useProjectsStore, type ProjectMeta } from "@/stores/projects-store";
+import { useWalletModal } from "@/lib/wallet/wallet-modal-host";
 import Avatar from "boring-avatars";
 
 interface TopBarProps {
@@ -89,6 +90,7 @@ export function TopBar({
   const collabConnected = useCollabStore((s) => s.connected);
   const onlineUsers = useCollabStore((s) => s.users);
   const walletConnected = useProfileStore((s) => s.walletConnected);
+  const walletModal = useWalletModal();
   const projects = useProjectsStore((s) => s.projects);
   const activeProjectId = useProjectsStore((s) => s.activeProjectId);
   const projectsBusy = useProjectsStore((s) => s.busy);
@@ -351,7 +353,7 @@ export function TopBar({
 
                   {/* Menu items */}
                   <button
-                    onClick={() => { setAvatarMenuOpen(false); onOpenWalletModal(); }}
+                    onClick={() => { setAvatarMenuOpen(false); walletModal.open(); }}
                     className="flex w-full items-center gap-2.5 px-3 py-2 text-[12px] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] transition-colors"
                   >
                     <Wallet size={14} strokeWidth={1.75} className="text-[var(--text-muted)]" />
@@ -392,10 +394,9 @@ export function TopBar({
             size="sm"
             variant="ghost"
             onClick={() => {
-              // Dispatch event to lazy-load the wallet mount, which will
-              // open the saganta-appkit-modal after compilation
-              window.dispatchEvent(new CustomEvent("soroban-connect-click"));
-              // Also call the parent handler (opens modal if already mounted)
+              // Open the <StellarAppKitModal> — mounted globally in layout.tsx.
+              // The modal auto-triggers SIWS after wallet connect.
+              walletModal.open();
               onConnectWallet();
             }}
             className="h-8 gap-1.5 px-2.5 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
@@ -404,43 +405,10 @@ export function TopBar({
             <span className="hidden md:inline">Connect</span>
           </Button>
         )}
-
-        {/* Mount the saganta-appkit-modal with the client from the provider */}
-        <AppKitModalMount />
       </div>
     </header>
   );
 }
-
-/**
- * Lazy-mounts the <saganta-appkit-modal> ONLY when the user clicks Connect.
- * This prevents Turbopack from compiling the heavy @saganta/stellar-appkit
- * package during initial page load, which causes OOM in the 4GB sandbox.
- */
-function AppKitModalMount() {
-  const [shouldMount, setShouldMount] = useState(false);
-
-  // Listen for the first "connect" click to lazy-load the wallet
-  useEffect(() => {
-    function handleConnectClick() {
-      setShouldMount(true);
-    }
-    // Custom event from the Connect button
-    window.addEventListener("soroban-connect-click", handleConnectClick);
-    return () => window.removeEventListener("soroban-connect-click", handleConnectClick);
-  }, []);
-
-  if (!shouldMount) return null;
-
-  // Dynamically import the wallet mount component — only compiled when clicked
-  return (
-    <Suspense fallback={null}>
-      <LazyWalletMount />
-    </Suspense>
-  );
-}
-
-const LazyWalletMount = lazy(() => import("./wallet-mount").then((m) => ({ default: m.WalletMount })));
 
 /**
  * Project switcher dropdown menu.

@@ -6,6 +6,7 @@ import {
   useAppKit,
 } from "@saganta/stellar-appkit-ui-web/react";
 import type { StellarAppKitModalHandle } from "@saganta/stellar-appkit-ui-web/react";
+import type { StellarAppKit } from "@saganta/stellar-appkit";
 // IMPORTANT: this side-effect import registers the <stellar-appkit-modal>
 // custom element. Must be imported once at the app entry.
 import "@saganta/stellar-appkit-ui-web";
@@ -22,15 +23,17 @@ import "@saganta/stellar-appkit-ui-web";
 
 export function WalletModalHost() {
   const ref = useRef<StellarAppKitModalHandle>(null);
+  const appkit = useAppKit();
 
-  // Expose the modal handle on window so other components can open it
-  // without using context (e.g. from the TopBar's Connect button).
-  // We use a useEffect to set this after mount so the ref is populated.
+  // Expose the modal handle AND the appkit client on window so other
+  // components can open the modal + call signOut()/disconnect() without
+  // being inside the StellarAppKitProvider tree.
   useEffect(() => {
     if (typeof window !== "undefined") {
       (window as unknown as { __walletModal?: StellarAppKitModalHandle | null }).__walletModal = ref.current;
+      (window as unknown as { __appkit?: StellarAppKit | null }).__appkit = appkit;
     }
-  }, []);
+  }, [appkit]);
 
   return (
     <StellarAppKitModal
@@ -83,3 +86,30 @@ export function useWalletModal() {
 export function useAppKitClient() {
   return useAppKit();
 }
+
+/**
+ * Sign out + disconnect the wallet from anywhere in the app.
+ *
+ * Calls appkit.signOut() which:
+ *   1. Clears the SIWS session (local + persisted)
+ *   2. Calls our siws.signout() callback → POST /api/siws/logout (server)
+ *   3. Disconnects the active wallet
+ *   4. Fires siwsSessionChange(null) → SiwsSessionBridge clears profile-store
+ *
+ * Returns true if the call succeeded, false otherwise.
+ */
+export async function walletSignOut(): Promise<boolean> {
+  try {
+    const appkit = (window as unknown as { __appkit?: StellarAppKit | null }).__appkit;
+    if (!appkit) {
+      // Appkit not mounted yet — fall back to clearing local state only
+      return false;
+    }
+    await appkit.signOut();
+    return true;
+  } catch (err) {
+    console.error("[wallet] signOut failed:", err);
+    return false;
+  }
+}
+

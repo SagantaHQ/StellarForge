@@ -32,6 +32,7 @@ import { useProfileStore } from "@/stores/profile-store";
 import { useBuildStore } from "@/stores/build-store";
 import { useProjectsStore, type ProjectMeta } from "@/stores/projects-store";
 import { useAutocompleteStore } from "@/stores/autocomplete-store";
+import { walletSignOut } from "@/lib/wallet/wallet-modal-host";
 import type { Template } from "@/lib/templates/registry";
 import { flattenFiles } from "@/lib/soroban/sample-project";
 import { cn } from "@/lib/utils";
@@ -261,8 +262,20 @@ export function IdeShell() {
         }}
         onOpenProfile={() => setProfileOpen(true)}
         onOpenSettings={() => setSettingsOpen(true)}
-        onLogout={() => {
-          clearProfile();
+        onLogout={async () => {
+          // Sign out via the stellar-appkit SDK — this:
+          //   1. Clears the SIWS session (local + persisted)
+          //   2. Calls POST /api/siws/logout (server-side session)
+          //   3. Disconnects the wallet
+          //   4. Fires siwsSessionChange(null) → SiwsSessionBridge clears
+          //      the profile-store automatically
+          //
+          // If the SDK isn't mounted yet (edge case), fall back to
+          // clearProfile() so the UI at least reflects the signed-out state.
+          const ok = await walletSignOut();
+          if (!ok) {
+            clearProfile();
+          }
         }}
         onNewProject={() => {
           if (!useProfileStore.getState().isLoggedIn()) {

@@ -319,8 +319,11 @@ export const useProfileStore = create<ProfileState>()(
       partialize: (s) => ({
         profile: s.profile,
         accentColor: s.accentColor,
-        // Don't persist walletConnected — always start as false on page load.
-        // The wallet's auto-restore will fire sc-connect which sets it true.
+        // Persist walletConnected + walletAddress so the UI shows the avatar
+        // immediately on page load (before the SDK finishes async restore).
+        // The SiwsSessionBridge will confirm or correct this shortly after.
+        walletConnected: s.walletConnected,
+        walletAddress: s.walletAddress,
       }),
     }
   )

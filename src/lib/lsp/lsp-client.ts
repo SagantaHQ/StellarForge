@@ -193,10 +193,10 @@ export function createLspClient(opts: LspClientOptions): LspClient {
 
     // Create the MonacoLanguageClient
     const clientOptions: MonacoLanguageClientOptions["clientOptions"] = {
+      // documentSelector must match the language id used on Monaco models.
+      // We use "rust" (not "soroban") so rust-analyzer matches the documents.
       documentSelector: [
         { scheme: "file", language: "rust" },
-        { scheme: "file", language: "soroban" },
-        { scheme: "file", language: "toml" },
       ],
       // Don't restart automatically — we handle reconnection at a higher level
       connectionOptions: {

@@ -34,7 +34,10 @@ function monacoLanguage(lang: string): string {
   switch (lang) {
     case "rust":
     case "soroban":
-      return "soroban";
+      // Use "rust" (not "soroban") so rust-analyzer LSP matches the document.
+      // The Soroban Monarch tokenizer is still applied via registerSorobanLanguage()
+      // which sets the tokenizer on the "rust" language id.
+      return "rust";
     case "typescript":
     case "tsx":
       return "typescript";

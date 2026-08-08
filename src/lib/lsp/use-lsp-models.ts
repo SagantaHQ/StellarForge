@@ -87,7 +87,9 @@ function mapLanguage(lang: string): string {
   switch (lang) {
     case "rust":
     case "soroban":
-      return "soroban"; // our custom language with Soroban tokenizer
+      // Use "rust" (not "soroban") so rust-analyzer LSP matches the document.
+      // The Soroban tokenizer is applied to "rust" via registerSorobanLanguage().
+      return "rust";
     case "typescript":
     case "tsx":
       return "typescript";

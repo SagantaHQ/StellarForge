@@ -85,7 +85,7 @@ crate-type = ["cdylib"]
 [dependencies]
 soroban-sdk = "27.0.5"
 
-[dev_dependencies]
+[dev-dependencies]
 soroban-sdk = { version = "27.0.5", features = ["testutils"] }
 
 [profile.release]

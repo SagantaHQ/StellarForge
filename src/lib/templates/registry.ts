@@ -50,7 +50,7 @@ crate-type = ["cdylib"]
 [dependencies]
 soroban-sdk = "${sdkV}"
 
-[dev_dependencies]
+[dev-dependencies]
 soroban-sdk = { version = "${sdkV}", features = ["testutils"] }
 
 [profile.release]

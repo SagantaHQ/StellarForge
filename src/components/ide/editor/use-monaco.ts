@@ -47,13 +47,18 @@ export function useMonacoTheme() {
  * we provide tokenizer rules + keywords + snippets for a great editing feel.
  */
 export function registerSorobanLanguage(monaco: typeof Monaco) {
-  // Soroban extends Rust — register a separate language id so we can layer
-  // custom keyword highlighting, snippets, and hover docs without fighting
-  // the built-in Rust tokenizer.
-  monaco.languages.register({ id: "soroban", extensions: [".rs"], aliases: ["Soroban Rust"] });
+  // We use the standard "rust" language id (not a custom "soroban" id) so
+  // rust-analyzer LSP matches the document and provides completions.
+  // We override the Monarch tokenizer + language config to add Soroban-specific
+  // keywords (contract, contractimpl, etc.) on top of the Rust syntax.
+  //
+  // NOTE: Monaco may not have a built-in "rust" language registered in all
+  // setups, so we register it first (idempotent — register is a no-op if
+  // the language already exists).
+  monaco.languages.register({ id: "rust", extensions: [".rs"], aliases: ["Rust", "soroban"] });
 
-  // Reuse Monaco's Rust tokenizer if present, otherwise define a simple one.
-  monaco.languages.setMonarchTokensProvider("soroban", {
+  // Apply the Soroban-enhanced Monarch tokenizer to the "rust" language.
+  monaco.languages.setMonarchTokensProvider("rust", {
     defaultToken: "",
     tokenPostfix: "",
     keywords: [
@@ -162,7 +167,7 @@ export function registerSorobanLanguage(monaco: typeof Monaco) {
   });
 
   // Language configuration — brackets, autoclosing, etc.
-  monaco.languages.setLanguageConfiguration("soroban", {
+  monaco.languages.setLanguageConfiguration("rust", {
     comments: { lineComment: "//", blockComment: ["/*", "*/"] },
     brackets: [
       ["{", "}"],
@@ -205,7 +210,7 @@ export function registerSorobanLanguage(monaco: typeof Monaco) {
   });
 
   // Snippets for common Soroban patterns
-  monaco.languages.registerCompletionItemProvider("soroban", {
+  monaco.languages.registerCompletionItemProvider("rust", {
     provideCompletionItems: (model, position) => {
       const word = model.getWordUntilPosition(position);
       const range = {
@@ -292,7 +297,7 @@ export function registerSorobanLanguage(monaco: typeof Monaco) {
   });
 
   // Hover docs for soroban-sdk types
-  monaco.languages.registerHoverProvider("soroban", {
+  monaco.languages.registerHoverProvider("rust", {
     provideHover: (model, position) => {
       const word = model.getWordAtPosition(position);
       if (!word) return null;
@@ -359,7 +364,7 @@ export function useAutocompleteProvider() {
       };
 
       // Register new provider with current items
-      const provider = monaco.languages.registerCompletionItemProvider("soroban", {
+      const provider = monaco.languages.registerCompletionItemProvider("rust", {
         triggerCharacters: [".", ":", "u", "p", "f", "s", "e", "m", "c", "t"],
         provideCompletionItems: (model, position) => {
           const word = model.getWordUntilPosition(position);

@@ -1,15 +1,19 @@
 /**
  * Cargo.toml parser + editor utilities.
  *
- * Simple regex-based parser for the [dependencies] and [dev_dependencies]
+ * Simple regex-based parser for the [dependencies] and [dev-dependencies]
  * sections of a Cargo.toml file. Not a full TOML parser — just enough to
  * list, add, and remove dependencies from Soroban contract projects.
+ *
+ * Note: `dev_dependencies` (underscore) is deprecated in the 2024 edition;
+ * `dev-dependencies` (hyphen) is the canonical form. Both are accepted on
+ * parse for backwards compat, but we always emit the hyphen form.
  */
 
 export interface CargoDependency {
   name: string;
   version: string;
-  /** Whether this is a dev dependency ([dev_dependencies]) or regular ([dependencies]) */
+  /** Whether this is a dev dependency ([dev-dependencies]) or regular ([dependencies]) */
   dev: boolean;
   /** Full line from the original file (for removal) */
   rawLine: string;
@@ -23,18 +27,18 @@ export function parseDependencies(cargoTomlContent: string): CargoDependency[] {
   const deps: CargoDependency[] = [];
   const lines = cargoTomlContent.split("\n");
 
-  let currentSection: "dependencies" | "dev_dependencies" | null = null;
+  let currentSection: "dependencies" | "dev-dependencies" | null = null;
 
   for (const line of lines) {
     const trimmed = line.trim();
 
-    // Detect section headers
+    // Detect section headers (accept both hyphen and underscore forms)
     if (trimmed === "[dependencies]") {
       currentSection = "dependencies";
       continue;
     }
-    if (trimmed === "[dev_dependencies]") {
-      currentSection = "dev_dependencies";
+    if (trimmed === "[dev-dependencies]" || trimmed === "[dev_dependencies]") {
+      currentSection = "dev-dependencies";
       continue;
     }
     // Any other section header → stop parsing deps
@@ -56,7 +60,7 @@ export function parseDependencies(cargoTomlContent: string): CargoDependency[] {
       deps.push({
         name: match[1],
         version: match[2],
-        dev: currentSection === "dev_dependencies",
+        dev: currentSection === "dev-dependencies",
         rawLine: line,
       });
     }
@@ -76,7 +80,8 @@ export function addDependency(
   version: string,
   dev: boolean = false
 ): string {
-  const section = dev ? "[dev_dependencies]" : "[dependencies]";
+  // Always emit the canonical hyphen form ([dev-dependencies], not [dev_dependencies])
+  const section = dev ? "[dev-dependencies]" : "[dependencies]";
   const lines = cargoTomlContent.split("\n");
 
   // Check if the dependency already exists (in either section)

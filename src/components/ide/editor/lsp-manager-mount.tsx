@@ -2,12 +2,14 @@
 
 import { useEffect, useState } from "react";
 import type * as Monaco from "monaco-editor";
+import { useLspManager } from "@/lib/lsp/use-lsp-manager";
 
 /**
  * Mounts the LSP manager inside the IDE shell.
  *
- * This component MUST be loaded via next/dynamic with ssr:false to prevent
- * the monaco-languageclient CSS imports from breaking SSR.
+ * This component MUST be loaded via next/dynamic with ssr:false (done in
+ * ide-shell.tsx) to prevent the monaco-languageclient CSS imports from
+ * breaking SSR.
  *
  * It:
  *   1. Dynamically imports Monaco (client-side only)
@@ -38,43 +40,21 @@ export function LspManagerMount() {
     };
   }, []);
 
-  // Dynamically import + use the LSP manager hook
-  // We use a wrapper component to call the hook conditionally
-  return monaco ? <LspManagerInner monaco={monaco} /> : null;
+  // Once Monaco is loaded, render the inner component that calls useLspManager.
+  // We need a child component so the hook is always called unconditionally
+  // (React hooks rules — can't call them after an early return).
+  if (!monaco) return null;
+
+  return <LspManagerActive monaco={monaco} />;
 }
 
-/** Inner component that calls the useLspManager hook (only rendered client-side). */
-function LspManagerInner({ monaco }: { monaco: typeof Monaco }) {
-  const [status, setStatus] = useState<string>("disconnected");
-  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const { useLspManager } = await import("@/lib/lsp/use-lsp-manager");
-        if (cancelled) return;
-        // useLspManager is a hook — we can't call it here directly.
-        // Instead, we'll use the window-based status polling approach.
-        // The actual hook is called by the dynamically imported module.
-      } catch (err) {
-        console.error("[lsp] failed to load LSP manager:", err);
-      }
-    })();
-
-    // Poll window.__lspStatus for the status bar
-    const interval = setInterval(() => {
-      const s = (window as unknown as { __lspStatus?: string }).__lspStatus;
-      const w = (window as unknown as { __lspWorkspace?: string }).__lspWorkspace;
-      if (s && s !== status) setStatus(s);
-      if (w !== workspaceId) setWorkspaceId(w ?? null);
-    }, 1000);
-
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [status, workspaceId]);
+/**
+ * Active LSP manager — calls useLspManager(monaco) unconditionally.
+ * This must be a separate component so the hook is always called in the
+ * same order on every render (React hooks rules).
+ */
+function LspManagerActive({ monaco }: { monaco: typeof Monaco }) {
+  const { status, workspaceId } = useLspManager(monaco);
 
   // Expose status on window for the status bar
   useEffect(() => {

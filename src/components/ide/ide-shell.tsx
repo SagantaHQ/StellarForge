@@ -131,17 +131,16 @@ export function IdeShell() {
   }, [activeProject?.id, projectsHydrated, startBuild]);
 
   // Build autocomplete artifacts after a successful build (or project load)
-  // This refreshes the completion DB with the latest functions, types, and
-  // dependency APIs. Also runs on project switch.
+  // Also triggers when the file tree changes (e.g. after package add/remove)
   useEffect(() => {
-    if (activeProject && projectsHydrated && buildStatus === "success") {
-      // Small delay to ensure file system is settled
+    if (activeProject && projectsHydrated) {
+      // Build immediately on project load (no build needed — we parse source)
       const timer = setTimeout(() => {
         buildAutocomplete(tree);
-      }, 500);
+      }, 300);
       return () => clearTimeout(timer);
     }
-  }, [buildStatus, activeProject?.id, projectsHydrated, buildAutocomplete, tree]);
+  }, [activeProject?.id, projectsHydrated, buildAutocomplete, tree]);
 
   // When the user logs in, pull their server-side projects and merge into the
   // local list. Also push any local-only projects to the server.

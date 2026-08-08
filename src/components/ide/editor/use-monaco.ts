@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react";
 import type * as Monaco from "monaco-editor";
 import { useThemeStore } from "@/stores/theme-store";
 import { buildMonacoTheme } from "@/lib/themes/mappers";
-import { useAutocompleteStore, type AutocompleteArtifacts } from "@/stores/autocomplete-store";
+import { useAutocompleteStore, type CompletionItem } from "@/stores/autocomplete-store";
 
 // Monaco must be loaded client-side only via dynamic import in the consumer.
 // This hook sets up: theme registration, Rust/Soroban language config, dispose.
@@ -324,17 +324,13 @@ export function registerSorobanLanguage(monaco: typeof Monaco) {
 
 /**
  * Hook that registers a dynamic autocomplete provider using build artifacts.
- * Fetches artifacts from the autocomplete store and provides:
- *   - User's contract functions, structs, enums, etc.
- *   - Dependency API items (soroban-sdk, OZ crates, etc.)
- *   - Auto-import suggestions (use crate::Item)
+ * Uses items from the autocomplete store (parsed from source + built-in SDK).
  */
 export function useAutocompleteProvider() {
-  const artifacts = useAutocompleteStore((s) => s.artifacts);
-  const buildAutocomplete = useAutocompleteStore((s) => s.build);
+  const items = useAutocompleteStore((s) => s.items);
+  const ready = useAutocompleteStore((s) => s.ready);
   const providerRef = useRef<{ dispose: () => void } | null>(null);
 
-  // Register/update the completion provider whenever artifacts change
   useEffect(() => {
     let disposed = false;
 
@@ -349,9 +345,22 @@ export function useAutocompleteProvider() {
         providerRef.current = null;
       }
 
-      // Register new provider with current artifacts
+      // Map our CompletionItem kind to Monaco's CompletionItemKind
+      const kindMap: Record<string, number> = {
+        function: monaco.languages.CompletionItemKind.Function,
+        struct: monaco.languages.CompletionItemKind.Struct,
+        enum: monaco.languages.CompletionItemKind.Enum,
+        trait: monaco.languages.CompletionItemKind.Interface,
+        constant: monaco.languages.CompletionItemKind.Constant,
+        typeAlias: monaco.languages.CompletionItemKind.TypeParameter,
+        module: monaco.languages.CompletionItemKind.Module,
+        keyword: monaco.languages.CompletionItemKind.Keyword,
+        snippet: monaco.languages.CompletionItemKind.Snippet,
+      };
+
+      // Register new provider with current items
       const provider = monaco.languages.registerCompletionItemProvider("soroban", {
-        triggerCharacters: [".", ":", "::"],
+        triggerCharacters: [".", ":", "u", "p", "f", "s", "e", "m", "c", "t"],
         provideCompletionItems: (model, position) => {
           const word = model.getWordUntilPosition(position);
           const range = {
@@ -361,9 +370,7 @@ export function useAutocompleteProvider() {
             endColumn: word.endColumn,
           };
 
-          const suggestions: Monaco.languages.CompletionItem[] = [];
-
-          // Check if user is typing after `::` (module path) — show import suggestions
+          // Check context — is the user typing after `::` or `use `?
           const lineUntilPosition = model.getValueInRange({
             startLineNumber: position.lineNumber,
             startColumn: 1,
@@ -372,96 +379,26 @@ export function useAutocompleteProvider() {
           });
 
           const isAfterDoubleColon = lineUntilPosition.endsWith("::");
+          const isAfterUse = lineUntilPosition.trim().startsWith("use ");
 
-          if (artifacts) {
-            // Functions
-            for (const fn of artifacts.functions) {
-              suggestions.push({
-                label: fn.label,
-                kind: monaco.languages.CompletionItemKind.Function,
-                detail: fn.detail,
-                documentation: fn.documentation ? { value: fn.documentation } : undefined,
-                insertText: fn.insertText || fn.label,
-                insertTextRules: fn.insertTextRules === "InsertAsSnippet"
-                  ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
-                  : undefined,
-                range,
-              });
-            }
+          const suggestions: Monaco.languages.CompletionItem[] = [];
 
-            // Structs
-            for (const s of artifacts.structs) {
-              suggestions.push({
-                label: s.label,
-                kind: monaco.languages.CompletionItemKind.Struct,
-                detail: s.detail,
-                documentation: s.documentation ? { value: s.documentation } : undefined,
-                insertText: s.label,
-                range,
-              });
-            }
+          for (const item of items) {
+            // Skip module items unless we're after :: or use
+            if (item.kind === "module" && !isAfterDoubleColon && !isAfterUse) continue;
 
-            // Enums
-            for (const e of artifacts.enums) {
-              suggestions.push({
-                label: e.label,
-                kind: monaco.languages.CompletionItemKind.Enum,
-                detail: e.detail,
-                documentation: e.documentation ? { value: e.documentation } : undefined,
-                insertText: e.label,
-                range,
-              });
-            }
-
-            // Traits
-            for (const t of artifacts.traits) {
-              suggestions.push({
-                label: t.label,
-                kind: monaco.languages.CompletionItemKind.Interface,
-                detail: t.detail,
-                documentation: t.documentation ? { value: t.documentation } : undefined,
-                insertText: t.label,
-                range,
-              });
-            }
-
-            // Constants
-            for (const c of artifacts.constants) {
-              suggestions.push({
-                label: c.label,
-                kind: monaco.languages.CompletionItemKind.Constant,
-                detail: c.detail,
-                documentation: c.documentation ? { value: c.documentation } : undefined,
-                insertText: c.label,
-                range,
-              });
-            }
-
-            // Type aliases
-            for (const ta of artifacts.typeAliases) {
-              suggestions.push({
-                label: ta.label,
-                kind: monaco.languages.CompletionItemKind.TypeParameter,
-                detail: ta.detail,
-                documentation: ta.documentation ? { value: ta.documentation } : undefined,
-                insertText: ta.label,
-                range,
-              });
-            }
-
-            // Import suggestions (after `::` or when typing `use`)
-            if (isAfterDoubleColon || lineUntilPosition.trim().startsWith("use ")) {
-              for (const imp of artifacts.imports) {
-                suggestions.push({
-                  label: imp.path,
-                  kind: monaco.languages.CompletionItemKind.Module,
-                  detail: `use ${imp.path}::*`,
-                  documentation: `Import all items from \`${imp.name}\` crate`,
-                  insertText: imp.path,
-                  range,
-                });
-              }
-            }
+            suggestions.push({
+              label: item.label,
+              kind: kindMap[item.kind] ?? monaco.languages.CompletionItemKind.Text,
+              detail: item.detail,
+              documentation: item.documentation ? { value: item.documentation } : undefined,
+              insertText: item.insertText || item.label,
+              insertTextRules: item.insertTextRules === "InsertAsSnippet"
+                ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
+                : undefined,
+              range,
+              sortText: item.kind === "snippet" ? "0" : item.kind === "function" ? "1" : "2",
+            });
           }
 
           return { suggestions };
@@ -478,5 +415,5 @@ export function useAutocompleteProvider() {
         providerRef.current = null;
       }
     };
-  }, [artifacts]);
+  }, [items, ready]);
 }

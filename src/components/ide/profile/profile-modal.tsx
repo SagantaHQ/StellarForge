@@ -8,7 +8,7 @@ import {
   AlertCircle,
   Loader2,
   User,
-  ShieldCheck,
+  Save,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -16,21 +16,20 @@ import { useStellarWallet } from "@/lib/wallet/use-stellar-wallet";
 import { AvatarUploader } from "./avatar-uploader";
 
 /**
- * §11 — Profile modal using @saganta/stellar-appkit/react hooks.
+ * §11 — Profile modal.
  *
- * The wallet connection is handled by the <StellarAppKitProvider> at the
- * app root. This modal uses:
- * - useAppKit() — get the client instance
- * - useConnect() — connect/disconnect wallets
- * - useSession() — reactive session (address, connected state)
- * - useSignIn() — SIWS signing (wallet signs message proving ownership)
+ * Wallet signing (SIWS) is performed ONCE at login — see ide-shell.tsx
+ * `doSiwsLogin()`. The server creates the User + auto-generates a Profile.
+ *
+ * This modal is for editing the profile (username, bio, avatar). It posts
+ * directly to /api/profile with the wallet address — no additional signing
+ * needed because ownership was already proven during login.
  *
  * Flow:
- *   1. User clicks Connect → opens <saganta-appkit-modal> (handled by TopBar)
- *   2. sc-connect event fires → this modal captures address → shows profile form
- *   3. User enters username → availability checked against Postgres
- *   4. User clicks "Sign & save profile" → useSignIn() signs SIWS message
- *   5. Server verifies signature + saves profile
+ *   1. User opens the profile modal (e.g. by clicking the avatar)
+ *   2. Username/bio/avatar are pre-filled from the existing profile
+ *   3. User edits → clicks "Save profile" → POST /api/profile
+ *   4. Server upserts the Profile (with username-lock enforcement)
  */
 
 type Step = "wallet" | "profile" | "done";
@@ -61,11 +60,12 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile, walle
   const [bio, setBio] = useState("");
   const [avatarUrl, setAvatarUrl] = useState<string | undefined>(undefined);
   const [asyncUsernameStatus, setAsyncUsernameStatus] = useState<"checking" | "available" | "taken">("checking");
-  const [signing, setSigning] = useState(false);
-  const [signError, setSignError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Wallet hook — creates StellarAppKit instance, mounts modal, provides connect/signIn
+  // Wallet hook — used only for the "connect wallet" picker step (when the
+  // wallet isn't already connected). SIWS signing happens in ide-shell.tsx.
   const wallet = useStellarWallet();
 
   // When opening with an existing profile, pre-fill and skip to profile step
@@ -125,8 +125,8 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile, walle
           setAvatarUrl(undefined);
           setAsyncUsernameStatus("checking");
         }
-        setSigning(false);
-        setSignError(null);
+        setSaving(false);
+        setSaveError(null);
       }, 200);
     }
   }, [open, existingProfile]);
@@ -178,53 +178,43 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile, walle
 
   async function handleSaveProfile() {
     if (usernameStatus !== "available") return;
-    setSigning(true);
-    setSignError(null);
+    if (!address) return;
+    setSaving(true);
+    setSaveError(null);
 
     try {
-      // 1. Fetch nonce from server
-      const nonceRes = await fetch("/api/auth/nonce");
-      if (!nonceRes.ok) throw new Error("Failed to fetch nonce");
-      const { nonce } = await nonceRes.json();
-
-      // 2. Sign SIWS message using the wallet hook
-      const siwsResult = await wallet.signInWithStellar(
-        address,
-        `Setting username "${username}" on Soroban.Build`
-      );
-
-      // 3. Send to server for verification + save
-      const res = await fetch("/api/auth/verify-siws", {
+      // Wallet ownership was already proven during login (SIWS at sc-connect).
+      // We just upsert the profile by wallet address — no additional signing.
+      const res = await fetch("/api/profile", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          message: siwsResult.message,
-          signedMessage: siwsResult.signedMessage,
-          signerAddress: siwsResult.signerAddress,
-          signedData: siwsResult.signedData,
-          nonce,
+          walletAddress: address,
           username,
           bio: bio.trim() || undefined,
+          avatarUrl: avatarUrl || undefined,
         }),
       });
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: res.statusText }));
-        const msg = err.reason ? `${err.error}: ${err.reason}` : err.error ?? `Verification failed (${res.status})`;
+        const msg = err.field === "username"
+          ? `${err.error}`
+          : err.error ?? `Save failed (${res.status})`;
         throw new Error(msg);
       }
 
       onComplete({
-        address: siwsResult.signerAddress,
+        address,
         username,
         avatarUrl,
         bio: bio.trim() || undefined,
       });
       setStep("done");
     } catch (err) {
-      setSignError(err instanceof Error ? err.message : String(err));
+      setSaveError(err instanceof Error ? err.message : String(err));
     } finally {
-      setSigning(false);
+      setSaving(false);
     }
   }
 
@@ -418,35 +408,34 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile, walle
                 />
               </div>
 
-              {signing && (
+              {saving && (
                 <div className="rounded-md border border-[var(--accent)] bg-[var(--accent-subtle)] p-2.5 flex items-center gap-2">
                   <Loader2 size={14} strokeWidth={1.75} className="animate-spin text-[var(--accent)]" />
-                  <span className="text-[11px] text-[var(--text-secondary)]">Sign the message in your wallet to verify ownership…</span>
+                  <span className="text-[11px] text-[var(--text-secondary)]">Saving your profile…</span>
                 </div>
               )}
 
-              {signError && (
+              {saveError && (
                 <div className="rounded-md border border-[var(--status-error)] bg-[color-mix(in_srgb,var(--status-error)_10%,transparent)] p-2.5 flex items-start gap-2">
                   <AlertCircle size={14} strokeWidth={1.75} className="text-[var(--status-error)] mt-0.5 shrink-0" />
                   <div className="text-[11px] text-[var(--status-error)]">
-                    <div className="font-medium">Signature verification failed</div>
-                    <div className="mt-0.5 opacity-90">{signError}</div>
+                    <div className="font-medium">Could not save profile</div>
+                    <div className="mt-0.5 opacity-90">{saveError}</div>
                   </div>
                 </div>
               )}
 
               <Button
                 onClick={handleSaveProfile}
-                disabled={usernameStatus !== "available" || signing}
+                disabled={usernameStatus !== "available" || saving}
                 className="w-full gap-2 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)] disabled:opacity-50"
               >
-                {signing ? <Loader2 size={14} strokeWidth={1.75} className="animate-spin" /> : <ShieldCheck size={14} strokeWidth={1.75} />}
-                {signing ? "Signing…" : "Sign & save profile"}
+                {saving ? <Loader2 size={14} strokeWidth={1.75} className="animate-spin" /> : <Save size={14} strokeWidth={1.75} />}
+                {saving ? "Saving…" : "Save profile"}
               </Button>
 
               <p className="text-[10px] text-[var(--text-muted)] text-center">
-                Your wallet will sign a message proving you own this address.
-                The signature is verified server-side before saving.
+                Your wallet was verified when you signed in. No additional signature needed.
               </p>
             </div>
           )}

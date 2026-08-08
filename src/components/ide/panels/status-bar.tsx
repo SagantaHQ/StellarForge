@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import {
   GitBranch,
   Check,
@@ -9,6 +10,7 @@ import {
   Cloud,
   CloudOff,
   Users,
+  Loader2,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -62,6 +64,8 @@ export function StatusBar({
           <AlertCircle size={11} strokeWidth={1.75} className="ml-1" />
           <span>{errors + warnings}</span>
         </button>
+
+        <LspStatusIndicator />
       </div>
 
       {/* Right side — toolchain, network, position */}
@@ -103,6 +107,48 @@ function SyncIndicator({ status }: { status: "synced" | "syncing" | "offline" })
     <button className="flex items-center gap-1 hover:bg-[var(--accent-hover)] rounded px-1 py-0.5 transition-colors">
       <Icon size={11} strokeWidth={1.75} className={cn(status === "syncing" && "animate-pulse")} />
       <span>{label}</span>
+    </button>
+  );
+}
+
+/**
+ * LSP status indicator — shows the rust-analyzer connection state.
+ * Reads from window.__lspStatus (set by LspManagerMount).
+ */
+function LspStatusIndicator() {
+  const [status, setStatus] = useState<string>("disconnected");
+
+  useEffect(() => {
+    const update = () => {
+      const s = (window as unknown as { __lspStatus?: string }).__lspStatus;
+      setStatus(s || "disconnected");
+    };
+    update();
+    const interval = setInterval(update, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const config: Record<string, { label: string; spinning?: boolean; color?: string }> = {
+    disconnected: { label: "rust-analyzer: off" },
+    connecting: { label: "Connecting…", spinning: true },
+    initializing: { label: "Initializing…", spinning: true },
+    ready: { label: "rust-analyzer", color: "var(--status-success)" },
+    error: { label: "LSP error", color: "var(--status-error)" },
+    reconnecting: { label: "Reconnecting…", spinning: true },
+  };
+  const { label, spinning, color } = config[status] || config.disconnected;
+
+  return (
+    <button
+      className="flex items-center gap-1 hover:bg-[var(--accent-hover)] rounded px-1 py-0.5 transition-colors"
+      title={`Rust Language Server: ${status}`}
+    >
+      {spinning ? (
+        <Loader2 size={11} strokeWidth={1.75} className="animate-spin" />
+      ) : (
+        <Wifi size={11} strokeWidth={1.75} style={color ? { color } : undefined} />
+      )}
+      <span style={color ? { color } : undefined}>{label}</span>
     </button>
   );
 }

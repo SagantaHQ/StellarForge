@@ -20,6 +20,7 @@ import { CommandPalette } from "./panels/command-palette";
 import { SettingsDialog } from "./panels/settings-dialog";
 import { NewProjectModal } from "./templates/new-project-modal";
 import { ProfileModal } from "./profile/profile-modal";
+import { LspManagerMount } from "./editor/lsp-manager-mount";
 import { ShareDialog } from "./collab/share-dialog";
 import { DeleteProjectModal } from "./projects/delete-project-modal";
 import { ImportProjectModal } from "./projects/import-project-modal";
@@ -541,6 +542,10 @@ export function IdeShell() {
           });
         }}
       />
+
+      {/* LSP manager — connects Monaco to rust-analyzer via WebSocket.
+          Provides real Rust autocomplete, diagnostics, hover, go-to-def, etc. */}
+      <LspManagerMount />
     </div>
   );
 }

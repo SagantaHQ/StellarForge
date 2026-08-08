@@ -1,0 +1,16 @@
+{
+  "name": "soroban-build-lsp-server",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "bun --hot index.ts",
+    "start": "bun index.ts"
+  },
+  "dependencies": {
+    "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.10",
+    "@types/bun": "latest"
+  }
+}

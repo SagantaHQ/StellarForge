@@ -21,6 +21,27 @@
       "error_file": "/home/z/my-project/.zscripts/bm2-error.log",
       "merge_logs": true,
       "time": true
+    },
+    {
+      "name": "soroban-build-lsp",
+      "script": "node_modules/.bin/bun",
+      "args": ["index.ts"],
+      "cwd": "/home/z/my-project/mini-services/lsp-server",
+      "env": {
+        "NODE_ENV": "development",
+        "HOME": "/home/z",
+        "LSP_PORT": "3099"
+      },
+      "autorestart": true,
+      "maxRestarts": 20,
+      "minUptime": 2000,
+      "restartDelay": 1000,
+      "maxMemoryRestart": "1G",
+      "watch": false,
+      "out_file": "/home/z/my-project/.zscripts/lsp-out.log",
+      "error_file": "/home/z/my-project/.zscripts/lsp-error.log",
+      "merge_logs": true,
+      "time": true
     }
   ]
 }

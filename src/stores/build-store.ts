@@ -84,6 +84,10 @@ export const useBuildStore = create<BuildState>((set, get) => ({
           status: "failed",
           error: err.error ?? `HTTP ${res.status}`,
           finishedAt: Date.now(),
+          // Surface CLI-not-installed detail if provided
+          lines: err.detail
+            ? [{ type: "stderr" as const, text: err.detail, ts: Date.now() }]
+            : [],
         });
         return;
       }
@@ -244,8 +248,8 @@ async function pollStatus(
     }
   }
 
-  // Initial delay before first poll — gives the server time to set up
-  // the build job and start spawning the build process
-  const initialTimer = setTimeout(() => doPoll(), 1000);
+  // Initial delay before first poll — short so the first "Build started"
+  // line appears quickly. The server pushes initial log lines immediately.
+  const initialTimer = setTimeout(() => doPoll(), 250);
   set(() => ({ _pollTimer: initialTimer }));
 }

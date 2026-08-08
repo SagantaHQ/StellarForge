@@ -3,9 +3,14 @@ import { NextRequest, NextResponse } from "next/server";
 /**
  * §3 / §7 — Build API (start).
  *
- * Starts a `cargo build --target wasm32v1-none --release` (or
- * `soroban contract build`) in the background and returns a build ID.
- * The client polls /api/build/status?id=<buildId> to get output lines.
+ * Spawns `stellar contract build` (or `cargo build`) in a pseudo-TTY so
+ * stdout/stderr are line-buffered (cargo block-buffers when piped, which
+ * otherwise means zero output until the process exits). The client polls
+ * /api/build/status?id=<buildId> for accumulated output lines.
+ *
+ * If the stellar CLI is not installed, returns HTTP 503 with a clear error
+ * so the client can surface it immediately (instead of silently polling a
+ * non-existent job and showing "building" forever).
  */
 
 export const runtime = "nodejs";
@@ -37,6 +42,25 @@ const g = globalThis as unknown as { __buildJobs?: Map<string, BuildJob> };
 if (!g.__buildJobs) g.__buildJobs = new Map();
 const buildJobs = g.__buildJobs;
 
+/**
+ * Resolve the absolute path of a binary on the system PATH.
+ * Returns null if not found.
+ */
+async function resolveBinary(name: string): Promise<string | null> {
+  const { existsSync } = await import("fs");
+  const home = process.env.HOME ?? "/home/z";
+  const candidates = [
+    `${home}/.cargo/bin/${name}`,
+    `/usr/local/bin/${name}`,
+    `/usr/bin/${name}`,
+    `/bin/${name}`,
+  ];
+  for (const c of candidates) {
+    if (existsSync(c)) return c;
+  }
+  return null;
+}
+
 export async function POST(req: NextRequest) {
   let body: {
     projectId: string;
@@ -62,17 +86,55 @@ export async function POST(req: NextRequest) {
 
   const home = process.env.HOME ?? "/home/z";
   const cargoBin = `${home}/.cargo/bin`;
-  const env = {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
     PATH: `${cargoBin}:${process.env.PATH ?? ""}`,
     CARGO_HOME: `${home}/.cargo`,
     RUSTUP_HOME: `${home}/.rustup`,
+    // Force cargo to emit progress lines even though stdout is piped
+    CARGO_TERM_COLOR: "never",
+    CARGO_TERM_PROGRESS_WHEN: "always",
+    // Force rustc to emit colorless output (we colorize in the UI)
+    RUSTC_BOOTSTRAP: "1",
+    // Disable incremental compilation to reduce disk usage in /tmp
+    CARGO_INCREMENTAL: "0",
   };
+
+  // Determine the build command:
+  // - "stellar" (default): `stellar contract build` — the canonical Soroban build
+  // - "cargo": `cargo build` — compiles dependencies without producing a wasm
+  //   Useful for checking that Cargo.toml changes compile correctly
+  const useCargo = body.command === "cargo";
+  const buildCommand = useCargo ? "cargo" : "stellar";
+  const args = useCargo ? ["build"] : ["contract", "build"];
+
+  // Verify the CLI is installed — return HTTP 503 so the client can show
+  // the error immediately instead of polling a non-existent build job.
+  const cliPath = await resolveBinary(buildCommand);
+  if (!cliPath) {
+    return NextResponse.json(
+      {
+        error: `${buildCommand} CLI not installed on the server`,
+        detail:
+          useCargo
+            ? `Run: cargo install`
+            : `Run: cargo install stellar-cli`,
+        cli: buildCommand,
+        searched: [
+          `${home}/.cargo/bin/${buildCommand}`,
+          `/usr/local/bin/${buildCommand}`,
+          `/usr/bin/${buildCommand}`,
+        ],
+      },
+      { status: 503 }
+    );
+  }
 
   // Set up workspace
   let workspaceDir: string;
   try {
     workspaceDir = path.join(BUILDS_DIR, body.projectId);
+    await fs.rm(workspaceDir, { recursive: true, force: true });
     await fs.mkdir(workspaceDir, { recursive: true });
     for (const file of body.files) {
       const filePath = path.join(workspaceDir, file.path);
@@ -86,69 +148,96 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Determine the build command:
-  // - "stellar" (default): `stellar contract build` — the canonical Soroban build
-  // - "cargo": `cargo build` — compiles dependencies without producing a wasm
-  //   Useful for checking that Cargo.toml changes compile correctly
-  const useCargo = body.command === "cargo";
-  const buildCommand = useCargo ? "cargo" : "stellar";
-  const args = useCargo ? ["build"] : ["contract", "build"];
-
-  // Verify the CLI is installed
-  const { existsSync } = await import("fs");
-  const cliPath = `${cargoBin}/${buildCommand}`;
-  if (!existsSync(cliPath) && !existsSync(`/usr/bin/${buildCommand}`) && !existsSync(`/usr/local/bin/${buildCommand}`)) {
-    return NextResponse.json({
-      buildId: `error-${Date.now()}`,
-      status: "failed",
-      message: `${buildCommand} CLI not installed. Run: cargo install ${useCargo ? "" : "stellar-cli"}`.trim(),
-    });
-  }
-
   const buildId = `build-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const job: BuildJob = {
     id: buildId,
     projectId: body.projectId,
     status: "building",
-    lines: [],
+    lines: [
+      {
+        type: "stdout",
+        text: `$ ${buildCommand} ${args.join(" ")}   (cwd: ${workspaceDir})`,
+        ts: Date.now(),
+      },
+      {
+        type: "stdout",
+        text: `Using: ${cliPath}`,
+        ts: Date.now(),
+      },
+    ],
     startedAt: Date.now(),
   };
   buildJobs.set(buildId, job);
 
-  // Spawn the build
+  // Spawn the build inside a pseudo-TTY so cargo flushes output line-by-line.
+  //
+  // Background: cargo (and stellar-cli, which wraps cargo) detects whether
+  // stdout is a TTY. When piped (as we do here), it switches to block-buffered
+  // I/O and only flushes when the 4KB buffer fills or the process exits.
+  // For long-running compiles this means ZERO output appears until the very
+  // end — which is the "stuck on building with no logs" symptom.
+  //
+  // `script -qec '<command>' /dev/null` allocates a pseudo-TTY, so cargo
+  // thinks it's talking to a real terminal and flushes each line as it's
+  // written. The `-q` flag suppresses the "Script started" / "Script done"
+  // boilerplate, and `-e` makes script exit with the child's exit code.
   try {
-    const child = spawn(buildCommand, args, {
+    const shellCommand = `${buildCommand} ${args.map((a) => `'${a}'`).join(" ")}`;
+    const child = spawn("script", ["-qec", shellCommand, "/dev/null"], {
       cwd: workspaceDir,
       env,
       stdio: ["ignore", "pipe", "pipe"],
     });
 
-    child.stdout?.on("data", (chunk: Buffer) => {
-      const text = chunk.toString();
-      const lines = text.split("\n").filter((l) => l.length > 0);
+    // Buffer for incomplete lines (PTY output may not be newline-terminated)
+    let stdoutBuf = "";
+    let stderrBuf = "";
+
+    function flushBuffer(buf: string, type: "stdout" | "stderr"): string {
+      const lines = buf.split("\n");
+      // Last element is the incomplete remainder
+      const remainder = lines.pop() ?? "";
       for (const line of lines) {
-        job.lines.push({ type: "stdout", text: line, ts: Date.now() });
+        if (line.length > 0) {
+          // Strip ANSI escape sequences (script passes through raw bytes,
+          // and even with CARGO_TERM_COLOR=never some ANSI may leak through)
+          const clean = line.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "").replace(/\r/g, "");
+          if (clean.length > 0) {
+            job.lines.push({ type, text: clean, ts: Date.now() });
+          }
+        }
       }
+      return remainder;
+    }
+
+    child.stdout?.on("data", (chunk: Buffer) => {
+      stdoutBuf += chunk.toString();
+      stdoutBuf = flushBuffer(stdoutBuf, "stdout");
     });
 
     child.stderr?.on("data", (chunk: Buffer) => {
-      const text = chunk.toString();
-      const lines = text.split("\n").filter((l) => l.length > 0);
-      for (const line of lines) {
-        job.lines.push({ type: "stderr", text: line, ts: Date.now() });
-      }
+      stderrBuf += chunk.toString();
+      stderrBuf = flushBuffer(stderrBuf, "stderr");
     });
 
     child.on("error", (err) => {
+      job.lines.push({ type: "stderr", text: `Failed to spawn build: ${err.message}`, ts: Date.now() });
       job.status = "failed";
       job.error = err.message;
       job.finishedAt = Date.now();
     });
 
     child.on("close", (code) => {
+      // Flush any remaining buffered content
+      if (stdoutBuf.length > 0) flushBuffer(stdoutBuf + "\n", "stdout");
+      if (stderrBuf.length > 0) flushBuffer(stderrBuf + "\n", "stderr");
+
       job.status = code === 0 ? "success" : "failed";
       if (code !== 0) {
         job.error = `Build failed with exit code ${code}`;
+        job.lines.push({ type: "stderr", text: job.error, ts: Date.now() });
+      } else {
+        job.lines.push({ type: "stdout", text: `Build succeeded (exit code 0)`, ts: Date.now() });
       }
       job.finishedAt = Date.now();
 
@@ -161,6 +250,11 @@ export async function POST(req: NextRequest) {
                 path: wasmPath.replace(workspaceDir + "/", ""),
                 sizeBytes: stat.size,
               };
+              job.lines.push({
+                type: "stdout",
+                text: `WASM: ${job.wasmInfo.path} (${(stat.size / 1024).toFixed(2)} KB)`,
+                ts: Date.now(),
+              });
             }
           })
           .catch(() => {});

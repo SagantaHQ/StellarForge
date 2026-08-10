@@ -96,19 +96,65 @@ export function useAppKitClient() {
  *   3. Disconnects the active wallet
  *   4. Fires siwsSessionChange(null) → SiwsSessionBridge clears profile-store
  *
+ * If appkit isn't available (e.g. WalletModalHost not mounted yet), falls
+ * back to manually clearing localStorage + calling the logout endpoint.
+ *
  * Returns true if the call succeeded, false otherwise.
  */
 export async function walletSignOut(): Promise<boolean> {
   try {
     const appkit = (window as unknown as { __appkit?: StellarAppKit | null }).__appkit;
-    if (!appkit) {
-      // Appkit not mounted yet — fall back to clearing local state only
-      return false;
+
+    if (appkit) {
+      // Best case — appkit is available, use its signOut() which handles
+      // everything (session cleanup, wallet disconnect, signout callback)
+      await appkit.signOut();
+      return true;
     }
-    await appkit.signOut();
+
+    // Fallback — appkit not available, manually clear everything
+    console.warn("[wallet] appkit not found on window, doing manual signout");
+
+    // 1. Try to get appkit from the <stellar-appkit-modal> DOM element
+    const modal = document.querySelector<HTMLElement & { client: StellarAppKit | null }>("stellar-appkit-modal");
+    if (modal?.client) {
+      await modal.client.signOut();
+      return true;
+    }
+
+    // 2. Manual cleanup — clear localStorage sessions
+    try {
+      localStorage.removeItem("saganta-appkit:siws-session");
+      localStorage.removeItem("saganta-connect:session");
+    } catch {}
+
+    // 3. Call the server logout endpoint
+    let address: string | undefined;
+    try {
+      const raw = localStorage.getItem("saganta-connect:session");
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        address = parsed?.address ?? parsed?.sessions?.[0]?.address;
+      }
+    } catch {}
+
+    try {
+      await fetch("/api/siws/logout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ address }),
+      });
+    } catch {}
+
+    console.log("[wallet] manual signout complete");
     return true;
   } catch (err) {
     console.error("[wallet] signOut failed:", err);
+    // Still try to clear localStorage
+    try {
+      localStorage.removeItem("saganta-appkit:siws-session");
+      localStorage.removeItem("saganta-connect:session");
+    } catch {}
     return false;
   }
 }

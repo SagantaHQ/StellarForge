@@ -302,10 +302,12 @@ export function IdeShell() {
           //   3. Disconnects the wallet
           //   4. Fires siwsSessionChange(null) → SiwsSessionBridge clears
           //      the profile-store automatically
-          const ok = await walletSignOut();
-          if (!ok) {
-            clearProfile();
-          }
+          await walletSignOut();
+
+          // ALWAYS clear the profile + SIWS session explicitly.
+          // This ensures the session is gone even if the SDK's signOut
+          // didn't fire siwsSessionChange (e.g. if appkit wasn't mounted).
+          clearProfile();
 
           // Clear ALL local state — projects, files, editor, build, etc.
           // The user sees an empty editor. When they re-login, projects

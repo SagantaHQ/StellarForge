@@ -328,13 +328,48 @@ export function registerSorobanLanguage(monaco: typeof Monaco) {
 }
 
 /**
- * Hook that registers a dynamic autocomplete provider using build artifacts.
- * Uses items from the autocomplete store (parsed from source + built-in SDK).
+ * Hook that registers a context-aware autocomplete provider.
+ *
+ * Three layers of completion:
+ *   1. Rustdoc symbols (soroban-sdk + std/core/alloc) — fetched once from
+ *      /api/autocomplete/rustdoc-index, cached in memory
+ *   2. Source-parsed symbols from the autocomplete store (user's own .rs files)
+ *   3. Built-in Soroban snippets + Rust keywords
+ *
+ * Context-aware:
+ *   - After `.` → method/member completion (functions from the symbol index)
+ *   - After `::` or `use ` → module + type completion
+ *   - Otherwise → all symbols + keywords + snippets
  */
 export function useAutocompleteProvider() {
   const items = useAutocompleteStore((s) => s.items);
   const ready = useAutocompleteStore((s) => s.ready);
   const providerRef = useRef<{ dispose: () => void } | null>(null);
+  const rustdocRef = useRef<{ sdk: unknown[]; std: unknown[] } | null>(null);
+
+  // Fetch rustdoc index once (cached in ref)
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/autocomplete/rustdoc-index");
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled) return;
+        const sdkSymbols = (data.sorobanSdk?.symbols ?? []) as unknown[];
+        const stdSymbols = (data.std?.all_symbols ?? []) as unknown[];
+        rustdocRef.current = { sdk: sdkSymbols, std: stdSymbols };
+        console.log(
+          `[autocomplete] loaded rustdoc index: ${sdkSymbols.length} SDK + ${stdSymbols.length} std symbols`
+        );
+      } catch (err) {
+        console.warn("[autocomplete] failed to load rustdoc index:", err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let disposed = false;
@@ -350,22 +385,24 @@ export function useAutocompleteProvider() {
         providerRef.current = null;
       }
 
-      // Map our CompletionItem kind to Monaco's CompletionItemKind
       const kindMap: Record<string, number> = {
         function: monaco.languages.CompletionItemKind.Function,
         struct: monaco.languages.CompletionItemKind.Struct,
         enum: monaco.languages.CompletionItemKind.Enum,
         trait: monaco.languages.CompletionItemKind.Interface,
         constant: monaco.languages.CompletionItemKind.Constant,
+        type_alias: monaco.languages.CompletionItemKind.TypeParameter,
         typeAlias: monaco.languages.CompletionItemKind.TypeParameter,
         module: monaco.languages.CompletionItemKind.Module,
         keyword: monaco.languages.CompletionItemKind.Keyword,
         snippet: monaco.languages.CompletionItemKind.Snippet,
+        static: monaco.languages.CompletionItemKind.Enum,
+        macro: monaco.languages.CompletionItemKind.Function,
       };
 
-      // Register new provider with current items
+      // Register the context-aware provider
       const provider = monaco.languages.registerCompletionItemProvider("rust", {
-        triggerCharacters: [".", ":", "u", "p", "f", "s", "e", "m", "c", "t"],
+        triggerCharacters: [".", ":", "u", "p", "f", "s", "e", "m", "c", "t", "v", "a", "b"],
         provideCompletionItems: (model, position) => {
           const word = model.getWordUntilPosition(position);
           const range = {
@@ -375,7 +412,7 @@ export function useAutocompleteProvider() {
             endColumn: word.endColumn,
           };
 
-          // Check context — is the user typing after `::` or `use `?
+          // Get the text before cursor on this line
           const lineUntilPosition = model.getValueInRange({
             startLineNumber: position.lineNumber,
             startColumn: 1,
@@ -383,27 +420,137 @@ export function useAutocompleteProvider() {
             endColumn: position.column,
           });
 
+          const trimmed = lineUntilPosition.trim();
+          const isAfterDot = lineUntilPosition.endsWith(".");
           const isAfterDoubleColon = lineUntilPosition.endsWith("::");
-          const isAfterUse = lineUntilPosition.trim().startsWith("use ");
+          const isAfterUse = trimmed.startsWith("use ") || trimmed === "use";
+          const isAfterLet = trimmed.startsWith("let ") || trimmed === "let";
+          const isAfterFn = /\bfn\s*$/.test(trimmed) || /\bfn\s+\w*\s*\($/.test(trimmed);
 
           const suggestions: Monaco.languages.CompletionItem[] = [];
+          const seenLabels = new Set<string>();
 
-          for (const item of items) {
-            // Skip module items unless we're after :: or use
-            if (item.kind === "module" && !isAfterDoubleColon && !isAfterUse) continue;
-
+          // Helper to add a suggestion (dedup by label)
+          const add = (
+            label: string,
+            kind: number,
+            detail: string | undefined,
+            docs: string | undefined,
+            insertText: string | undefined,
+            sortText: string
+          ) => {
+            if (seenLabels.has(label)) return;
+            seenLabels.add(label);
             suggestions.push({
-              label: item.label,
-              kind: kindMap[item.kind] ?? monaco.languages.CompletionItemKind.Text,
-              detail: item.detail,
-              documentation: item.documentation ? { value: item.documentation } : undefined,
-              insertText: item.insertText || item.label,
-              insertTextRules: item.insertTextRules === "InsertAsSnippet"
+              label,
+              kind,
+              detail,
+              documentation: docs ? { value: docs } : undefined,
+              insertText: insertText || label,
+              insertTextRules: insertText && /\$\{/.test(insertText)
                 ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
                 : undefined,
               range,
-              sortText: item.kind === "snippet" ? "0" : item.kind === "function" ? "1" : "2",
+              sortText,
             });
+          };
+
+          // ── Layer 1: Rustdoc symbols (soroban-sdk + std) ──────────
+          const rustdoc = rustdocRef.current;
+          if (rustdoc) {
+            // After `.` → show functions only (method completion)
+            if (isAfterDot) {
+              for (const sym of rustdoc.sdk) {
+                const s = sym as { name: string; kind: string; detail?: string; docs?: string };
+                if (s.kind === "function" || s.kind === "macro") {
+                  add(
+                    s.name,
+                    kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Function,
+                    s.detail,
+                    s.docs,
+                    undefined,
+                    "1"
+                  );
+                }
+              }
+            }
+            // After `::` or `use ` → show types + modules
+            else if (isAfterDoubleColon || isAfterUse) {
+              for (const sym of rustdoc.sdk) {
+                const s = sym as { name: string; kind: string; detail?: string; docs?: string };
+                add(
+                  s.name,
+                  kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Text,
+                  s.detail,
+                  s.docs,
+                  undefined,
+                  "1"
+                );
+              }
+              // Also add std types after `::`
+              if (isAfterDoubleColon) {
+                for (const sym of rustdoc.std) {
+                  const s = sym as { name: string; kind: string; detail?: string };
+                  add(
+                    s.name,
+                    kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Text,
+                    s.detail,
+                    undefined,
+                    undefined,
+                    "2"
+                  );
+                }
+              }
+            }
+            // Otherwise → show SDK types + std types
+            else {
+              for (const sym of rustdoc.sdk) {
+                const s = sym as { name: string; kind: string; detail?: string; docs?: string };
+                if (s.kind === "function" || s.kind === "macro") continue; // skip methods in global context
+                add(
+                  s.name,
+                  kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Text,
+                  s.detail,
+                  s.docs,
+                  undefined,
+                  "1"
+                );
+              }
+              // Add common std types (String, Vec, Option, Result, etc.)
+              const commonStdNames = new Set([
+                "String", "Vec", "Option", "Result", "Box", "Rc", "Arc",
+                "HashMap", "HashSet", "BTreeMap", "BTreeSet",
+                "str", "println", "print", "format", "vec",
+              ]);
+              for (const sym of rustdoc.std) {
+                const s = sym as { name: string; kind: string; detail?: string };
+                if (commonStdNames.has(s.name)) {
+                  add(
+                    s.name,
+                    kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Text,
+                    s.detail,
+                    undefined,
+                    undefined,
+                    "2"
+                  );
+                }
+              }
+            }
+          }
+
+          // ── Layer 2: Source-parsed symbols (from autocomplete store) ─
+          if (!isAfterDot) {
+            for (const item of items) {
+              if (item.kind === "module" && !isAfterDoubleColon && !isAfterUse) continue;
+              add(
+                item.label,
+                kindMap[item.kind] ?? monaco.languages.CompletionItemKind.Text,
+                item.detail,
+                item.documentation,
+                item.insertText || item.label,
+                item.kind === "snippet" ? "0" : item.kind === "function" ? "1" : "2"
+              );
+            }
           }
 
           return { suggestions };
@@ -421,4 +568,6 @@ export function useAutocompleteProvider() {
       }
     };
   }, [items, ready]);
+
+  return null;
 }

@@ -249,11 +249,6 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile, walle
 
           {step === "profile" && (
             <div className="space-y-3">
-              <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface-sunken)] p-2.5">
-                <div className="text-[10px] uppercase tracking-wide text-[var(--text-muted)] mb-0.5">Wallet address</div>
-                <div className="font-mono text-[11px] text-[var(--text-secondary)] truncate">{address}</div>
-              </div>
-
               {/* Avatar uploader with crop */}
               <div>
                 <label className="text-[11px] font-medium text-[var(--text-secondary)] mb-1.5 block">

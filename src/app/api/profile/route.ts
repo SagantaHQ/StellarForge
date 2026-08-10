@@ -64,7 +64,7 @@ export async function POST(req: NextRequest) {
     const usernameChanged = currentProfile && currentProfile.username !== username.toLowerCase();
     const alreadyCustom = currentProfile?.isCustomUsername ?? false;
 
-    // Reject username change if already custom (locked)
+    // Reject username change if already custom (locked) — enforced at server level
     if (alreadyCustom && usernameChanged) {
       return NextResponse.json(
         { error: "Username is locked and cannot be changed after being set", field: "username" },
@@ -72,17 +72,22 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // If the username hasn't changed but is already custom, don't update it
+    // (prevents accidental overwrites)
+    const updateData: Record<string, unknown> = {
+      displayName: displayName || null,
+      avatarUrl: avatarUrl || null,
+      bio: bio || null,
+    };
+    if (usernameChanged) {
+      updateData.username = username.toLowerCase();
+      updateData.isCustomUsername = true;
+    }
+
     // Upsert profile (create if doesn't exist, update if it does)
     const profile = await db.profile.upsert({
       where: { userId: user.id },
-      update: {
-        username: username.toLowerCase(),
-        displayName: displayName || null,
-        avatarUrl: avatarUrl || null,
-        bio: bio || null,
-        // Mark as custom (locked) if the username changed
-        ...(usernameChanged ? { isCustomUsername: true } : {}),
-      },
+      update: updateData,
       create: {
         userId: user.id,
         username: username.toLowerCase(),
@@ -93,17 +98,21 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // Record audit log
-    await db.auditLog.create({
-      data: {
-        projectId: "default",
-        userId: user.id,
-        action: "SHARE_GRANTED", // closest action for profile creation
-        targetType: "user",
-        targetId: user.id,
-        metadata: { username, action: "profile_created" },
-      },
-    });
+    // Record audit log (best-effort — don't fail if it errors)
+    try {
+      await db.auditLog.create({
+        data: {
+          projectId: "default",
+          userId: user.id,
+          action: "SHARE_GRANTED",
+          targetType: "user",
+          targetId: user.id,
+          metadata: { username, action: "profile_created" },
+        },
+      }).catch(() => {});
+    } catch {
+      // Audit log is best-effort — don't fail the profile save
+    }
 
     return NextResponse.json({ user, profile }, { status: 201 });
   } catch (err) {

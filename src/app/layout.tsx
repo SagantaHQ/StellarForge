@@ -4,8 +4,9 @@ import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
 import { ThemeProvider, themeInitScript } from "@/components/ide/theme-provider";
 import { AppKitProvider } from "@/lib/wallet/appkit-provider";
-import { WalletModalHost } from "@/lib/wallet/wallet-modal-host";
 import { SiwsSessionBridge } from "@/lib/wallet/siws-session-bridge";
+import { WalletModalHost } from "@/lib/wallet/wallet-modal-host";
+import { ClientOnly } from "@/components/ide/client-only";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -86,7 +87,9 @@ export default function RootLayout({
         <ThemeProvider>
           <AppKitProvider>
             {children}
-            <WalletModalHost />
+            <ClientOnly>
+              <WalletModalHost />
+            </ClientOnly>
             <SiwsSessionBridge />
           </AppKitProvider>
         </ThemeProvider>

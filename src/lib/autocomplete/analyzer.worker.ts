@@ -135,18 +135,46 @@ const KIND_MAP: Record<string, number> = {
 
 async function initParser() {
   if (parser) return;
-  // Load web-tree-sitter from CDN (avoids Node.js module bundling issues)
-  // @ts-ignore - CDN import
-  const mod = await import("https://esm.sh/web-tree-sitter@0.25.0");
-  Parser = mod.Parser || mod.default?.Parser || mod.default;
-  Language = mod.Language || mod.default?.Language || mod.default;
-  await Parser.init({
-    locateFile: () => "/tree-sitter/web-tree-sitter.wasm",
-  });
-  const Rust = await Language.load("/tree-sitter/tree-sitter-rust.wasm");
-  parser = new Parser();
-  parser.setLanguage(Rust);
-  console.log("[worker] tree-sitter Rust parser initialized");
+  // Load web-tree-sitter purely via WASM — no npm import (avoids Turbopack
+  // trying to bundle Node.js modules like fs/promises).
+  // The WASM file is served from /public/tree-sitter/.
+  //
+  // We use importScripts to load the CJS version of web-tree-sitter
+  // (which works in Web Workers) from the public directory.
+  try {
+    // Copy the CJS file to public/ so we can importScripts it
+    // Actually, let's use the approach of loading the WASM module directly
+    // via the Emscripten pattern.
+    //
+    // The web-tree-sitter.wasm is an Emscripten module. We need to load
+    // the JS glue code to use it. Let's fetch the CJS file and eval it.
+    const response = await fetch("/tree-sitter/web-tree-sitter.cjs");
+    const code = await response.text();
+    // eval the code in the worker scope (this is safe — it's our own file)
+    const fn = new Function("self", code + "\n; return { Parser: self.Parser, Language: self.Language };");
+    const mod = fn(self);
+    Parser = mod.Parser;
+    Language = mod.Language;
+
+    if (!Parser) {
+      throw new Error("Parser not found after loading web-tree-sitter");
+    }
+
+    await Parser.init({
+      locateFile: () => "/tree-sitter/web-tree-sitter.wasm",
+    });
+
+    const rustResponse = await fetch("/tree-sitter/tree-sitter-rust.wasm");
+    const rustBytes = new Uint8Array(await rustResponse.arrayBuffer());
+    const Rust = await Language.load(rustBytes);
+
+    parser = new Parser();
+    parser.setLanguage(Rust);
+    console.log("[worker] tree-sitter Rust parser initialized");
+  } catch (err) {
+    console.error("[worker] failed to init tree-sitter:", err);
+    throw err;
+  }
 }
 
 // ── Load SDK symbols ──────────────────────────────────────────────────

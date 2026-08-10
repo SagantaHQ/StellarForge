@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import path from "path";
 
 const nextConfig: NextConfig = {
   output: "standalone",
@@ -18,9 +19,26 @@ const nextConfig: NextConfig = {
     "vscode-languageclient",
     "vscode-ws-jsonrpc",
   ],
-  // Proxy /lsp and /workspace requests to the LSP gateway server
-  // (mini-services/lsp-server, runs on port 3099 in dev).
-  // In production, set LSP_GATEWAY_URL to your deployed gateway.
+  webpack: (config, { isServer }) => {
+    const stubPath = path.resolve(__dirname, "src/stubs/empty.ts");
+    
+    // Alias all Trezor packages to an empty stub — we don't use Trezor
+    // wallets, and their ESM exports are broken with webpack.
+    // This prevents "Module not found" errors during compilation.
+    config.resolve = config.resolve || {};
+    config.resolve.alias = {
+      ...(config.resolve.alias || {}),
+      "@trezor/connect-web": stubPath,
+      "@trezor/connect-plugin-stellar": stubPath,
+      "@trezor/utils": stubPath,
+      "@trezor/transport": stubPath,
+      "@trezor/transport-webusb": stubPath,
+      "@trezor/transport-webhid": stubPath,
+      "@trezor/hw-app-str": stubPath,
+    };
+    
+    return config;
+  },
   async rewrites() {
     const lspUrl = process.env.LSP_GATEWAY_URL || "http://localhost:3099";
     return [

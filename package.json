@@ -69,6 +69,8 @@
     "@stellar/stellar-sdk": "^16.2.0",
     "@tanstack/react-query": "^5.82.0",
     "@tanstack/react-table": "^8.21.3",
+    "@trezor/connect-plugin-stellar": "^9.2.6",
+    "@trezor/connect-web": "^9.7.3",
     "boring-avatars": "^2.0.4",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

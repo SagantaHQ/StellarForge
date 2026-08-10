@@ -138,6 +138,52 @@ export function MonacoEditor({
       },
     });
 
+    // Ctrl+S / Cmd+S — save file to cloud immediately (override default)
+    editor.addAction({
+      id: "soroban.saveToCloud",
+      label: "Save to Cloud",
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS],
+      run: (ed) => {
+        const model = ed.getModel();
+        if (!model) return;
+
+        // Mark the active file as not dirty (saved)
+        import("@/stores/editor-tabs-store").then(({ useEditorTabsStore }) => {
+          const activeTab = useEditorTabsStore.getState().activeTabPath;
+          if (activeTab) {
+            useEditorTabsStore.getState().markDirty(activeTab, false);
+          }
+        });
+
+        // Force immediate sync to server (bypass debounce)
+        import("@/stores/profile-store").then(({ useProfileStore }) => {
+          if (!useProfileStore.getState().isLoggedIn()) return;
+
+          import("@/stores/projects-store").then(({ useProjectsStore }) => {
+            const activeProject = useProjectsStore.getState().getActiveProject();
+            if (!activeProject?.serverProjectId) return;
+
+            import("@/lib/soroban/sample-project").then(({ flattenFiles }) => {
+              import("@/stores/file-system-store").then(({ useFileSystemStore }) => {
+                const tree = useFileSystemStore.getState().tree;
+                const files = flattenFiles(tree).map((f) => ({
+                  path: f.path,
+                  content: f.content,
+                }));
+                fetch(`/api/projects/${activeProject.serverProjectId}`, {
+                  method: "PATCH",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ files }),
+                })
+                  .then(() => console.log("[save] files synced to cloud"))
+                  .catch((err) => console.warn("[save] failed to sync:", err));
+              });
+            });
+          });
+        });
+      },
+    });
+
     // §6.10 — Click on glyph margin → focus that thread
     editor.onMouseDown((e) => {
       const target = e.target;

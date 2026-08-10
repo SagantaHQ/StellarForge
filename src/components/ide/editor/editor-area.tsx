@@ -250,6 +250,7 @@ export function EditorArea({ fontSize = 13 }: EditorAreaProps) {
               value={activeFile.content}
               fontSize={fontSize}
               glyphMargin
+              readOnly={!useProfileStore((s) => s.isLoggedIn())}
               highlightedLines={highlightedLines}
               glyphDecorations={glyphDecorations}
               onAddComment={handleAddComment}

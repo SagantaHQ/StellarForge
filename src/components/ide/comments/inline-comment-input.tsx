@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { X, Send, AlertCircle } from "lucide-react";
+import { X, Send, AlertCircle, Lock } from "lucide-react";
 import {
   useCommentsStore,
   COMMENT_PRIORITY_COLORS,
   COMMENT_PRIORITY_LABELS,
   type CommentPriority,
 } from "@/stores/comments-store";
+import { useProfileStore } from "@/stores/profile-store";
 import { cn } from "@/lib/utils";
 
 const PRIORITIES: CommentPriority[] = ["urgent", "high", "normal", "low", "suggestion"];
@@ -33,6 +34,7 @@ export function InlineCommentInput({
   const [authorAvatarColor] = useState("#4F8C8C");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const addComment = useCommentsStore((s) => s.addComment);
+  const isLoggedIn = useProfileStore((s) => s.isLoggedIn());
 
   useEffect(() => {
     textareaRef.current?.focus();
@@ -40,6 +42,7 @@ export function InlineCommentInput({
 
   function handleSubmit() {
     if (!body.trim()) return;
+    if (!isLoggedIn) return; // only logged-in users can comment
     addComment({
       filePath,
       lineNumber,
@@ -112,20 +115,33 @@ export function InlineCommentInput({
       </div>
 
       {/* Body input */}
-      <textarea
-        ref={textareaRef}
-        value={body}
-        onChange={(e) => setBody(e.target.value)}
-        onKeyDown={handleKeyDown}
-        placeholder="Write a comment… (⌘+Enter to post, Esc to cancel)"
-        rows={2}
-        className="w-full resize-none rounded border border-[var(--border-subtle)] bg-[var(--surface-sunken)] px-2 py-1.5 text-[13px] text-[var(--text-primary)] outline-none focus:border-[var(--accent)] placeholder:text-[var(--text-muted)]"
-      />
+      {!isLoggedIn ? (
+        <div className="rounded border border-[var(--border-subtle)] bg-[var(--surface-sunken)] px-3 py-3 text-center">
+          <Lock size={14} strokeWidth={1.75} className="mx-auto mb-1.5 text-[var(--text-muted)]" />
+          <p className="text-[11px] text-[var(--text-muted)]">
+            Connect your wallet to add comments
+          </p>
+        </div>
+      ) : (
+        <textarea
+          ref={textareaRef}
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder="Write a comment… (⌘+Enter to post, Esc to cancel)"
+          rows={2}
+          className="w-full resize-none rounded border border-[var(--border-subtle)] bg-[var(--surface-sunken)] px-2 py-1.5 text-[13px] text-[var(--text-primary)] outline-none focus:border-[var(--accent)] placeholder:text-[var(--text-muted)]"
+        />
+      )}
 
       {/* Footer */}
       <div className="mt-2 flex items-center justify-between">
         <span className="text-[10px] text-[var(--text-muted)]">
-          Posting as <span style={{ color: authorAvatarColor }}>{authorName}</span>
+          {isLoggedIn ? (
+            <>Posting as <span style={{ color: authorAvatarColor }}>{authorName}</span></>
+          ) : (
+            <span className="text-[var(--status-warning)]">Login required</span>
+          )}
         </span>
         <div className="flex items-center gap-1.5">
           <button
@@ -136,10 +152,10 @@ export function InlineCommentInput({
           </button>
           <button
             onClick={handleSubmit}
-            disabled={!body.trim()}
+            disabled={!body.trim() || !isLoggedIn}
             className={cn(
               "flex items-center gap-1.5 rounded px-2.5 py-1 text-[11px] font-medium transition-colors",
-              body.trim()
+              body.trim() && isLoggedIn
                 ? "bg-[var(--accent)] text-[var(--accent-contrast)] hover:bg-[var(--accent-hover)]"
                 : "bg-[var(--surface-sunken)] text-[var(--text-muted)] cursor-not-allowed"
             )}

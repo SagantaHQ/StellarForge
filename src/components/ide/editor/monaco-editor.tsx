@@ -5,7 +5,7 @@ import Editor, { type OnMount, type BeforeMount } from "@monaco-editor/react";
 import type * as Monaco from "monaco-editor";
 import { useThemeStore } from "@/stores/theme-store";
 import { buildMonacoTheme } from "@/lib/themes/mappers";
-import { registerSorobanLanguage, registerAutocompleteProvider } from "./use-monaco";
+import { registerSorobanLanguage, registerTreeSitterProvider } from "./use-monaco";
 import { useAttributionStore } from "@/stores/attribution-store";
 import { lintSorobanSecurity, lintResultsToMarkers } from "@/lib/soroban/security-linter";
 
@@ -120,7 +120,7 @@ export function MonacoEditor({
     if (autocompleteProviderRef.current) {
       autocompleteProviderRef.current.dispose();
     }
-    autocompleteProviderRef.current = registerAutocompleteProvider(monaco);
+    autocompleteProviderRef.current = registerTreeSitterProvider(monaco);
 
     // §6.1 — Add "Add Comment" to the editor context menu
     editor.addAction({

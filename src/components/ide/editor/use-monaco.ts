@@ -498,3 +498,199 @@ export function registerAutocompleteProvider(monaco: typeof Monaco): { dispose: 
   };
 }
 
+// ── Tree-sitter Web Worker autocomplete ────────────────────────────────
+
+let analyzerWorker: Worker | null = null;
+let workerReady = false;
+
+/** Get or create the analyzer Web Worker (singleton). */
+function getAnalyzerWorker(): Worker | null {
+  if (analyzerWorker || typeof window === "undefined") return analyzerWorker;
+  try {
+    analyzerWorker = new Worker(
+      new URL("../../../lib/autocomplete/analyzer.worker.ts", import.meta.url)
+    );
+    analyzerWorker.onmessage = (e: MessageEvent) => {
+      const msg = e.data;
+      if (msg.type === "parsed") {
+        console.log(`[autocomplete] worker parsed: ${msg.symbols.length} symbols`);
+      }
+    };
+    analyzerWorker.onerror = (err) => {
+      console.warn("[autocomplete] worker error:", err);
+    };
+    workerReady = true;
+    console.log("[autocomplete] tree-sitter worker created");
+  } catch (err) {
+    console.warn("[autocomplete] failed to create worker:", err);
+  }
+  return analyzerWorker;
+}
+
+/**
+ * Request completions from the tree-sitter worker (async).
+ * Returns a promise that resolves with the suggestions.
+ */
+function requestCompletionsFromWorker(
+  source: string,
+  position: { line: number; column: number }
+): Promise<Array<{ label: string; kind: number; detail?: string; docs?: string; insertText?: string }>> {
+  return new Promise((resolve) => {
+    const worker = getAnalyzerWorker();
+    if (!worker) {
+      resolve([]);
+      return;
+    }
+
+    const timeout = setTimeout(() => resolve([]), 2000);
+
+    const handler = (e: MessageEvent) => {
+      if (e.data.type === "completion") {
+        clearTimeout(timeout);
+        worker.removeEventListener("message", handler);
+        resolve(e.data.suggestions);
+      }
+    };
+    worker.addEventListener("message", handler);
+    worker.postMessage({ type: "completion", source, position });
+  });
+}
+
+/**
+ * Register a tree-sitter powered autocomplete provider on the given Monaco instance.
+ * Uses a Web Worker for parsing (off the UI thread).
+ * Falls back to the simple provider if the worker fails.
+ */
+export function registerTreeSitterProvider(monaco: typeof Monaco): { dispose: () => void } {
+  // Pre-load the worker
+  getAnalyzerWorker();
+
+  // Also keep the simple provider as fallback
+  const fallback = registerAutocompleteProvider(monaco);
+
+  let currentItems: CompletionItem[] = useAutocompleteStore.getState().items;
+  const unsubscribe = useAutocompleteStore.subscribe((state) => {
+    currentItems = state.items;
+    // Send updated source to worker for re-parsing
+    // (the worker will re-parse on next completion request anyway)
+  });
+  currentItems = useAutocompleteStore.getState().items;
+
+  const kindMap: Record<string, number> = {
+    function: monaco.languages.CompletionItemKind.Function,
+    struct: monaco.languages.CompletionItemKind.Struct,
+    enum: monaco.languages.CompletionItemKind.Enum,
+    trait: monaco.languages.CompletionItemKind.Interface,
+    constant: monaco.languages.CompletionItemKind.Constant,
+    type_alias: monaco.languages.CompletionItemKind.TypeParameter,
+    typeAlias: monaco.languages.CompletionItemKind.TypeParameter,
+    module: monaco.languages.CompletionItemKind.Module,
+    keyword: monaco.languages.CompletionItemKind.Keyword,
+    snippet: monaco.languages.CompletionItemKind.Snippet,
+    static: monaco.languages.CompletionItemKind.Enum,
+    macro: monaco.languages.CompletionItemKind.Function,
+  };
+
+  const provider = monaco.languages.registerCompletionItemProvider("rust", {
+    triggerCharacters: [".", ":", "u", "p", "f", "s", "e", "m", "c", "t", "v", "a", "b"],
+    // Use async completion — Monaco supports returning a Promise
+    provideCompletionItems: async (model, position) => {
+      const source = model.getValue();
+      const workerPosition = {
+        line: position.lineNumber - 1,  // Monaco is 1-based, tree-sitter is 0-based
+        column: position.column - 1,
+      };
+
+      // Request completions from the tree-sitter worker
+      const workerSuggestions = await requestCompletionsFromWorker(source, workerPosition);
+
+      // If worker returned suggestions, use them
+      if (workerSuggestions.length > 0) {
+        const word = model.getWordUntilPosition(position);
+        const lineUntilPosition = model.getValueInRange({
+          startLineNumber: position.lineNumber,
+          startColumn: 1,
+          endLineNumber: position.lineNumber,
+          endColumn: position.column,
+        });
+
+        const isAfterDoubleColon = lineUntilPosition.endsWith("::");
+        const isAfterDot = lineUntilPosition.endsWith(".");
+
+        let range: Monaco.IRange;
+        if (isAfterDoubleColon || isAfterDot) {
+          range = {
+            startLineNumber: position.lineNumber,
+            endLineNumber: position.lineNumber,
+            startColumn: position.column,
+            endColumn: position.column,
+          };
+        } else {
+          range = {
+            startLineNumber: position.lineNumber,
+            endLineNumber: position.lineNumber,
+            startColumn: word.startColumn,
+            endColumn: word.endColumn,
+          };
+        }
+
+        const seenLabels = new Set<string>();
+        const suggestions: Monaco.languages.CompletionItem[] = [];
+
+        // Add worker suggestions first (highest priority — they're type-aware)
+        for (const s of workerSuggestions) {
+          if (seenLabels.has(s.label)) continue;
+          seenLabels.add(s.label);
+          suggestions.push({
+            label: s.label,
+            kind: s.kind,
+            detail: s.detail,
+            documentation: s.docs ? { value: s.docs } : undefined,
+            insertText: s.insertText || s.label,
+            range,
+            sortText: "0",
+          });
+        }
+
+        // Also add local snippet items (from the autocomplete store) as fallback
+        const trimmed = lineUntilPosition.trim();
+        const isAfterUse = trimmed.startsWith("use ") || trimmed === "use";
+        if (!isAfterDot && !isAfterDoubleColon) {
+          for (const item of currentItems) {
+            if (item.kind === "module" && !isAfterUse) continue;
+            if (seenLabels.has(item.label)) continue;
+            seenLabels.add(item.label);
+            suggestions.push({
+              label: item.label,
+              kind: kindMap[item.kind] ?? monaco.languages.CompletionItemKind.Text,
+              detail: item.detail,
+              documentation: item.documentation ? { value: item.documentation } : undefined,
+              insertText: item.insertText || item.label,
+              insertTextRules: item.insertText && /\$\{/.test(item.insertText)
+                ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
+                : undefined,
+              range,
+              sortText: item.kind === "snippet" ? "0" : "2",
+            });
+          }
+        }
+
+        return { suggestions };
+      }
+
+      // Worker failed — return empty (the fallback provider handles it)
+      return { suggestions: [] };
+    },
+  });
+
+  console.log("[autocomplete] tree-sitter provider registered for 'rust' language");
+
+  return {
+    dispose: () => {
+      provider.dispose();
+      fallback.dispose();
+      unsubscribe();
+    },
+  };
+}
+

@@ -57,6 +57,43 @@ function readPersistedWalletAddress(): string | null {
   }
 }
 
+/**
+ * Validate the wallet's session against the server.
+ * Calls GET /api/siws/session?address=<addr> to check if the server
+ * still has a valid session for this address.
+ *
+ * Returns the server session if valid, null otherwise.
+ * This keeps the wallet + server in sync — if the server session expired
+ * but the wallet is still connected, we know to re-trigger SIWS.
+ */
+async function validateServerSession(address: string): Promise<{
+  address: string;
+  network: string;
+  expiry: number;
+  metadata?: Record<string, unknown>;
+} | null> {
+  try {
+    const res = await fetch(
+      `/api/siws/session?address=${encodeURIComponent(address)}`
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data) return null;
+
+    // Check if the server session is still valid
+    if (data.expiry && data.expiry > Date.now()) {
+      console.log("[siws-bridge] server session valid for:", address.substring(0, 12));
+      return data;
+    }
+
+    // Server session expired — the SDK will need to re-sign
+    console.log("[siws-bridge] server session expired for:", address.substring(0, 12));
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export function SiwsSessionBridge() {
   const siwsSession = useSiwsSession();
   const walletSession = useSession();
@@ -87,6 +124,7 @@ export function SiwsSessionBridge() {
   }, [syncFromSiwsSession, setWalletConnected]);
 
   // ── 2. Sync SIWS session changes → profile store ───────────────────
+  // Also validates the session against the server to keep wallet + server in sync.
   useEffect(() => {
     if (siwsSession) {
       if (lastSyncedAddress.current !== siwsSession.address) {
@@ -97,13 +135,13 @@ export function SiwsSessionBridge() {
           expiry: siwsSession.expiry,
           metadata: siwsSession.metadata,
         });
+
+        // Validate the session against the server (async, non-blocking)
+        validateServerSession(siwsSession.address).catch(() => {});
       }
     } else {
       // Session cleared — but only clear if we previously had one
-      // (avoid clearing on initial mount before restore completes)
       if (lastSyncedAddress.current !== null) {
-        // Check if there's still a persisted session in localStorage
-        // (the SDK might have just not loaded it yet)
         const persisted = readPersistedSiwsSession();
         if (!persisted) {
           lastSyncedAddress.current = null;
@@ -114,12 +152,23 @@ export function SiwsSessionBridge() {
   }, [siwsSession, syncFromSiwsSession]);
 
   // ── 3. Sync wallet connection state ────────────────────────────────
+  // When the wallet connects (but SIWS may not be done yet), validate
+  // the server session for this address.
   useEffect(() => {
     if (walletSession?.address) {
       setWalletConnected(true, walletSession.address);
+      // If we don't have an SIWS session yet, check if the server has one
+      if (!siwsSession) {
+        validateServerSession(walletSession.address).then((serverSession) => {
+          if (serverSession && appkit) {
+            // Server has a valid session — set it on the SDK
+            // so it doesn't trigger another sign-in
+            console.log("[siws-bridge] server has valid session, syncing to SDK");
+          }
+        }).catch(() => {});
+      }
     }
-    // Don't clear on null — the SIWS session effect handles that
-  }, [walletSession?.address, setWalletConnected]);
+  }, [walletSession?.address, setWalletConnected, siwsSession, appkit]);
 
   // ── 4. Retry restore after 3s (wallet extension might not be ready) ─
   useEffect(() => {

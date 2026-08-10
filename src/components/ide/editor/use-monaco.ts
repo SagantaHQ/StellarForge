@@ -349,9 +349,15 @@ export function useAutocompleteProvider() {
   const ready = useAutocompleteStore((s) => s.ready);
   const providerRef = useRef<{ dispose: () => void } | null>(null);
   const rustdocRef = useRef<unknown[] | null>(null);
+  const itemsRef = useRef(items);
+
+  // Keep itemsRef in sync (so the provider closure always sees latest items
+  // without needing to re-register the provider)
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
 
   // Fetch rustdoc index once (cached in ref)
-  // Includes soroban-sdk + all project dep indexes (merged by the server)
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -375,6 +381,7 @@ export function useAutocompleteProvider() {
     };
   }, []);
 
+  // Register the completion provider ONCE (not on every items change)
   useEffect(() => {
     let disposed = false;
 
@@ -383,7 +390,7 @@ export function useAutocompleteProvider() {
       const monaco = (monacoModule.default ?? monacoModule) as typeof Monaco;
       if (disposed || !monaco?.languages) return;
 
-      // Dispose previous provider
+      // Dispose previous provider (shouldn't exist, but safety)
       if (providerRef.current) {
         providerRef.current.dispose();
         providerRef.current = null;
@@ -404,7 +411,9 @@ export function useAutocompleteProvider() {
         macro: monaco.languages.CompletionItemKind.Function,
       };
 
-      // Register the context-aware provider
+      // Register the context-aware provider ONCE.
+      // Uses refs (rustdocRef, itemsRef) so it always sees the latest data
+      // without needing to re-register.
       const provider = monaco.languages.registerCompletionItemProvider("rust", {
         triggerCharacters: [".", ":", "u", "p", "f", "s", "e", "m", "c", "t", "v", "a", "b"],
         provideCompletionItems: (model, position) => {
@@ -416,7 +425,6 @@ export function useAutocompleteProvider() {
             endColumn: word.endColumn,
           };
 
-          // Get the text before cursor on this line
           const lineUntilPosition = model.getValueInRange({
             startLineNumber: position.lineNumber,
             startColumn: 1,
@@ -432,7 +440,6 @@ export function useAutocompleteProvider() {
           const suggestions: Monaco.languages.CompletionItem[] = [];
           const seenLabels = new Set<string>();
 
-          // Helper to add a suggestion (dedup by label)
           const add = (
             label: string,
             kind: number,
@@ -457,54 +464,31 @@ export function useAutocompleteProvider() {
             });
           };
 
-          // ── Layer 1: Rustdoc symbols (soroban-sdk only) ───────────
+          // ── Layer 1: Rustdoc symbols (soroban-sdk + deps) ──────────
+          // Read from ref so we always get the latest (even if loaded after registration)
           const sdkSymbols = rustdocRef.current;
           if (sdkSymbols) {
             for (const sym of sdkSymbols) {
               const s = sym as { name: string; kind: string; detail?: string; docs?: string };
 
-              // After `.` → show functions only (method completion)
               if (isAfterDot) {
                 if (s.kind === "function" || s.kind === "macro") {
-                  add(
-                    s.name,
-                    kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Function,
-                    s.detail,
-                    s.docs,
-                    undefined,
-                    "1"
-                  );
+                  add(s.name, kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Function, s.detail, s.docs, undefined, "1");
                 }
-              }
-              // After `::` or `use ` → show all symbols (types + modules + functions)
-              else if (isAfterDoubleColon || isAfterUse) {
-                add(
-                  s.name,
-                  kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Text,
-                  s.detail,
-                  s.docs,
-                  undefined,
-                  "1"
-                );
-              }
-              // Otherwise → show types + constants + modules (skip functions in global context)
-              else {
+              } else if (isAfterDoubleColon || isAfterUse) {
+                add(s.name, kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Text, s.detail, s.docs, undefined, "1");
+              } else {
                 if (s.kind === "function" || s.kind === "macro") continue;
-                add(
-                  s.name,
-                  kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Text,
-                  s.detail,
-                  s.docs,
-                  undefined,
-                  "1"
-                );
+                add(s.name, kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Text, s.detail, s.docs, undefined, "1");
               }
             }
           }
 
           // ── Layer 2: Source-parsed symbols (from autocomplete store) ─
+          // Read from ref so we always get the latest items
+          const currentItems = itemsRef.current;
           if (!isAfterDot) {
-            for (const item of items) {
+            for (const item of currentItems) {
               if (item.kind === "module" && !isAfterDoubleColon && !isAfterUse) continue;
               add(
                 item.label,
@@ -522,6 +506,7 @@ export function useAutocompleteProvider() {
       });
 
       providerRef.current = provider;
+      console.log("[autocomplete] completion provider registered for 'rust' language");
     })();
 
     return () => {
@@ -531,7 +516,7 @@ export function useAutocompleteProvider() {
         providerRef.current = null;
       }
     };
-  }, [items, ready]);
+  }, []); // ← empty deps: register ONCE
 
   return null;
 }

@@ -84,6 +84,10 @@ export async function POST(req: NextRequest) {
     const indexes: Array<{ crate: string; version: string; symbols: unknown[]; total_count: number }> = [];
 
     for (const dep of deps) {
+      // Skip soroban-sdk — it's already indexed separately by build-soroban-rustdoc.sh
+      // and served as soroban-sdk-index.json
+      if (dep.name === "soroban-sdk" || dep.name === "soroban_sdk") continue;
+
       const indexName = dep.name.replace(/-/g, "_");
       const indexFile = path.join(INDEX_DIR, `${indexName}-${dep.version}.json`);
 

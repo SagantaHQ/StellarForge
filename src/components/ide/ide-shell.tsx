@@ -313,21 +313,26 @@ export function IdeShell() {
           // The user sees an empty editor. When they re-login, projects
           // reload from the server.
           try {
-            // 1. Clear file system store (in-memory tree + IDB cache)
-            const { fileClearAll } = await import("@/lib/storage/idb");
-            await fileClearAll();
+            // 1. Clear ALL IndexedDB stores (files, projects, meta, comments, tabs)
+            const { fileClearAll, projectClearAll } = await import("@/lib/storage/idb");
+            await fileClearAll();       // clear IDB "files" store
+            await projectClearAll();    // clear IDB "projects" store ← THIS WAS MISSING
+
+            // 2. Clear file system store (in-memory tree)
             useFileSystemStore.getState().replaceTree([]);
 
-            // 2. Close all editor tabs
+            // 3. Close all editor tabs
             useEditorTabsStore.getState().closeAllTabs();
 
-            // 3. Clear projects store (remove all projects, set active=null)
+            // 4. Clear projects store (in-memory + zustand persist)
+            //    Use the store's own setState so the persist middleware
+            //    writes the empty array to localStorage too.
             useProjectsStore.setState({
               projects: [],
               activeProjectId: null,
             });
 
-            // 4. Reset build store
+            // 5. Reset build store
             useBuildStore.getState().reset();
 
             // 5. Clear collab store (leave session if connected)

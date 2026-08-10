@@ -330,22 +330,25 @@ export function registerSorobanLanguage(monaco: typeof Monaco) {
 /**
  * Hook that registers a context-aware autocomplete provider.
  *
+ * Soroban contracts use #![no_std], so we only index soroban_sdk (which
+ * provides its own String, Vec, Map, etc.). No std/core/alloc needed.
+ *
  * Three layers of completion:
- *   1. Rustdoc symbols (soroban-sdk + std/core/alloc) — fetched once from
- *      /api/autocomplete/rustdoc-index, cached in memory
+ *   1. Rustdoc symbols (soroban-sdk only) — fetched once from
+ *      /api/autocomplete/rustdoc-index, cached in memory (~12 KB gzipped)
  *   2. Source-parsed symbols from the autocomplete store (user's own .rs files)
  *   3. Built-in Soroban snippets + Rust keywords
  *
  * Context-aware:
- *   - After `.` → method/member completion (functions from the symbol index)
+ *   - After `.` → method/member completion (functions from the SDK)
  *   - After `::` or `use ` → module + type completion
- *   - Otherwise → all symbols + keywords + snippets
+ *   - Otherwise → all SDK symbols + keywords + snippets
  */
 export function useAutocompleteProvider() {
   const items = useAutocompleteStore((s) => s.items);
   const ready = useAutocompleteStore((s) => s.ready);
   const providerRef = useRef<{ dispose: () => void } | null>(null);
-  const rustdocRef = useRef<{ sdk: unknown[]; std: unknown[] } | null>(null);
+  const rustdocRef = useRef<unknown[] | null>(null);
 
   // Fetch rustdoc index once (cached in ref)
   useEffect(() => {
@@ -356,11 +359,10 @@ export function useAutocompleteProvider() {
         if (!res.ok) return;
         const data = await res.json();
         if (cancelled) return;
-        const sdkSymbols = (data.sorobanSdk?.symbols ?? []) as unknown[];
-        const stdSymbols = (data.std?.all_symbols ?? []) as unknown[];
-        rustdocRef.current = { sdk: sdkSymbols, std: stdSymbols };
+        const symbols = data.symbols ?? [];
+        rustdocRef.current = symbols;
         console.log(
-          `[autocomplete] loaded rustdoc index: ${sdkSymbols.length} SDK + ${stdSymbols.length} std symbols`
+          `[autocomplete] loaded soroban-sdk rustdoc index: ${symbols.length} symbols`
         );
       } catch (err) {
         console.warn("[autocomplete] failed to load rustdoc index:", err);
@@ -424,8 +426,6 @@ export function useAutocompleteProvider() {
           const isAfterDot = lineUntilPosition.endsWith(".");
           const isAfterDoubleColon = lineUntilPosition.endsWith("::");
           const isAfterUse = trimmed.startsWith("use ") || trimmed === "use";
-          const isAfterLet = trimmed.startsWith("let ") || trimmed === "let";
-          const isAfterFn = /\bfn\s*$/.test(trimmed) || /\bfn\s+\w*\s*\($/.test(trimmed);
 
           const suggestions: Monaco.languages.CompletionItem[] = [];
           const seenLabels = new Set<string>();
@@ -455,13 +455,14 @@ export function useAutocompleteProvider() {
             });
           };
 
-          // ── Layer 1: Rustdoc symbols (soroban-sdk + std) ──────────
-          const rustdoc = rustdocRef.current;
-          if (rustdoc) {
-            // After `.` → show functions only (method completion)
-            if (isAfterDot) {
-              for (const sym of rustdoc.sdk) {
-                const s = sym as { name: string; kind: string; detail?: string; docs?: string };
+          // ── Layer 1: Rustdoc symbols (soroban-sdk only) ───────────
+          const sdkSymbols = rustdocRef.current;
+          if (sdkSymbols) {
+            for (const sym of sdkSymbols) {
+              const s = sym as { name: string; kind: string; detail?: string; docs?: string };
+
+              // After `.` → show functions only (method completion)
+              if (isAfterDot) {
                 if (s.kind === "function" || s.kind === "macro") {
                   add(
                     s.name,
@@ -473,11 +474,8 @@ export function useAutocompleteProvider() {
                   );
                 }
               }
-            }
-            // After `::` or `use ` → show types + modules
-            else if (isAfterDoubleColon || isAfterUse) {
-              for (const sym of rustdoc.sdk) {
-                const s = sym as { name: string; kind: string; detail?: string; docs?: string };
+              // After `::` or `use ` → show all symbols (types + modules + functions)
+              else if (isAfterDoubleColon || isAfterUse) {
                 add(
                   s.name,
                   kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Text,
@@ -487,26 +485,9 @@ export function useAutocompleteProvider() {
                   "1"
                 );
               }
-              // Also add std types after `::`
-              if (isAfterDoubleColon) {
-                for (const sym of rustdoc.std) {
-                  const s = sym as { name: string; kind: string; detail?: string };
-                  add(
-                    s.name,
-                    kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Text,
-                    s.detail,
-                    undefined,
-                    undefined,
-                    "2"
-                  );
-                }
-              }
-            }
-            // Otherwise → show SDK types + std types
-            else {
-              for (const sym of rustdoc.sdk) {
-                const s = sym as { name: string; kind: string; detail?: string; docs?: string };
-                if (s.kind === "function" || s.kind === "macro") continue; // skip methods in global context
+              // Otherwise → show types + constants + modules (skip functions in global context)
+              else {
+                if (s.kind === "function" || s.kind === "macro") continue;
                 add(
                   s.name,
                   kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Text,
@@ -515,25 +496,6 @@ export function useAutocompleteProvider() {
                   undefined,
                   "1"
                 );
-              }
-              // Add common std types (String, Vec, Option, Result, etc.)
-              const commonStdNames = new Set([
-                "String", "Vec", "Option", "Result", "Box", "Rc", "Arc",
-                "HashMap", "HashSet", "BTreeMap", "BTreeSet",
-                "str", "println", "print", "format", "vec",
-              ]);
-              for (const sym of rustdoc.std) {
-                const s = sym as { name: string; kind: string; detail?: string };
-                if (commonStdNames.has(s.name)) {
-                  add(
-                    s.name,
-                    kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Text,
-                    s.detail,
-                    undefined,
-                    undefined,
-                    "2"
-                  );
-                }
               }
             }
           }

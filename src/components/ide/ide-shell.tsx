@@ -39,6 +39,7 @@ import { useEditorTabsStore } from "@/stores/editor-tabs-store";
 import { useProfileStore } from "@/stores/profile-store";
 import { useBuildStore } from "@/stores/build-store";
 import { useProjectsStore, type ProjectMeta } from "@/stores/projects-store";
+import { useCollabStore } from "@/stores/collab-store";
 import { useAutocompleteStore } from "@/stores/autocomplete-store";
 import { walletSignOut } from "@/lib/wallet/wallet-modal-host";
 import type { Template } from "@/lib/templates/registry";
@@ -147,19 +148,28 @@ export function IdeShell() {
 
   // When the user logs in, pull their server-side projects and merge into the
   // local list. Also push any local-only projects to the server.
+  // This fires on initial login AND on re-login after signout (because
+  // profile?.address goes from null → address).
   useEffect(() => {
-    if (profile?.address) {
+    if (profile?.address && useProfileStore.getState().siwsValidated) {
       // Look up the user's server id via the session endpoint
       fetch(`/api/auth/session?address=${encodeURIComponent(profile.address)}`)
         .then((r) => r.ok ? r.json() : null)
         .then((data) => {
           if (data?.loggedIn && data?.user?.id) {
-            projectsSyncFromServer(data.user.id);
+            projectsSyncFromServer(data.user.id).then(() => {
+              // After syncing projects from server, re-hydrate the file
+              // system store from IDB (in case a project was active before)
+              hydrate();
+              // Also re-hydrate projects from IDB (merged with server data)
+              projectsHydrate();
+            });
           }
         })
         .catch(() => {});
     }
-  }, [profile?.address, projectsSyncFromServer]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile?.address, useProfileStore.getState().siwsValidated]);
 
   // §11 — Wallet connect/disconnect + SIWS is now fully handled by the
   // stellar-appkit SDK + the <SiwsSessionBridge> mounted in layout.tsx.
@@ -273,12 +283,61 @@ export function IdeShell() {
           //   3. Disconnects the wallet
           //   4. Fires siwsSessionChange(null) → SiwsSessionBridge clears
           //      the profile-store automatically
-          //
-          // If the SDK isn't mounted yet (edge case), fall back to
-          // clearProfile() so the UI at least reflects the signed-out state.
           const ok = await walletSignOut();
           if (!ok) {
             clearProfile();
+          }
+
+          // Clear ALL local state — projects, files, editor, build, etc.
+          // The user sees an empty editor. When they re-login, projects
+          // reload from the server.
+          try {
+            // 1. Clear file system store (in-memory tree + IDB cache)
+            const { fileClearAll } = await import("@/lib/storage/idb");
+            await fileClearAll();
+            useFileSystemStore.getState().replaceTree([]);
+
+            // 2. Close all editor tabs
+            useEditorTabsStore.getState().closeAllTabs();
+
+            // 3. Clear projects store (remove all projects, set active=null)
+            useProjectsStore.setState({
+              projects: [],
+              activeProjectId: null,
+            });
+
+            // 4. Reset build store
+            useBuildStore.getState().reset();
+
+            // 5. Clear collab store (leave session if connected)
+            if (useCollabStore.getState().connected) {
+              useCollabStore.getState().leaveSession();
+            }
+
+            // 6. Clear comments store
+            const { useCommentsStore } = await import("@/stores/comments-store");
+            useCommentsStore.setState({
+              comments: [],
+              activeFilePath: null,
+              addingAt: null,
+              focusedCommentId: null,
+            });
+
+            // 7. Clear deploy store
+            const { useDeployStore } = await import("@/stores/deploy-store");
+            useDeployStore.getState().reset();
+
+            // 8. Clear autocomplete store
+            const { useAutocompleteStore } = await import("@/stores/autocomplete-store");
+            useAutocompleteStore.getState().clear();
+
+            // 9. Clear attribution store
+            const { useAttributionStore } = await import("@/stores/attribution-store");
+            useAttributionStore.setState({ attributions: {} });
+
+            console.log("[signout] all local state cleared");
+          } catch (err) {
+            console.warn("[signout] failed to clear some state:", err);
           }
         }}
         onNewProject={() => {

@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState, useMemo, useRef } from "react";
-import dynamic from "next/dynamic";
 import { Search, Rocket } from "lucide-react";
 import {
   PanelGroup,
@@ -21,12 +20,14 @@ import { CommandPalette } from "./panels/command-palette";
 import { SettingsDialog } from "./panels/settings-dialog";
 import { NewProjectModal } from "./templates/new-project-modal";
 import { ProfileModal } from "./profile/profile-modal";
-// LSP manager — loaded with ssr:false to prevent monaco-languageclient
-// CSS imports from breaking SSR (Unknown file extension ".css" error)
-const LspManagerMount = dynamic(
-  () => import("./editor/lsp-manager-mount").then((m) => m.LspManagerMount),
-  { ssr: false, loading: () => null }
-);
+// LSP manager — temporarily disabled to reduce memory pressure on 4GB sandbox.
+// The monaco-editor + monaco-languageclient import adds ~200MB to the client
+// bundle, which causes OOM-restart loops (502 errors on all chunks).
+// TODO: Re-enable with a lighter-weight autocomplete approach.
+// const LspManagerMount = dynamic(
+//   () => import("./editor/lsp-manager-mount").then((m) => m.LspManagerMount),
+//   { ssr: false, loading: () => null }
+// );
 import { ShareDialog } from "./collab/share-dialog";
 import { DeleteProjectModal } from "./projects/delete-project-modal";
 import { ImportProjectModal } from "./projects/import-project-modal";
@@ -549,9 +550,9 @@ export function IdeShell() {
         }}
       />
 
-      {/* LSP manager — connects Monaco to rust-analyzer via WebSocket.
-          Provides real Rust autocomplete, diagnostics, hover, go-to-def, etc. */}
-      <LspManagerMount />
+      {/* LSP manager — temporarily disabled to reduce memory pressure.
+          TODO: Re-enable with lighter-weight autocomplete. */}
+      {/* <LspManagerMount /> */}
     </div>
   );
 }

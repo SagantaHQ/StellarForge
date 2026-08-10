@@ -6,7 +6,6 @@ import type * as Monaco from "monaco-editor";
 import { useThemeStore } from "@/stores/theme-store";
 import { buildMonacoTheme } from "@/lib/themes/mappers";
 import { registerSorobanLanguage } from "./use-monaco";
-import { useLspModels } from "@/lib/lsp/use-lsp-models";
 import { useAttributionStore } from "@/stores/attribution-store";
 import { lintSorobanSecurity, lintResultsToMarkers } from "@/lib/soroban/security-linter";
 
@@ -73,9 +72,8 @@ export function MonacoEditor({
 }: MonacoEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // LSP-managed models — creates Monaco models with file:// URIs so the
-  // LSP client (rust-analyzer) can identify and sync them.
-  const { getModelUri } = useLspModels(path, language, value);
+  // LSP disabled — use the file path directly as the model URI.
+  // TODO: Re-enable LSP with a lighter-weight approach.
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof Monaco | null>(null);
   const decorationsRef = useRef<string[]>([]);
@@ -384,7 +382,7 @@ export function MonacoEditor({
   return (
     <div ref={containerRef} className="h-full w-full overflow-hidden bg-[var(--mono-bg)]">
       <Editor
-        path={getModelUri()}
+        path={path}
         language={monacoLanguage(language)}
         value={value}
         onChange={(v) => onChange?.(v ?? "")}

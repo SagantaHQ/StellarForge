@@ -142,13 +142,9 @@ async function initParser() {
   // We use importScripts to load the CJS version of web-tree-sitter
   // (which works in Web Workers) from the public directory.
   try {
-    // Copy the CJS file to public/ so we can importScripts it
-    // Actually, let's use the approach of loading the WASM module directly
-    // via the Emscripten pattern.
-    //
-    // The web-tree-sitter.wasm is an Emscripten module. We need to load
-    // the JS glue code to use it. Let's fetch the CJS file and eval it.
-    const response = await fetch("/tree-sitter/web-tree-sitter.cjs");
+    // Web Workers need absolute URLs for fetch — relative paths don't resolve
+    const baseUrl = self.location.origin;
+    const response = await fetch(`${baseUrl}/tree-sitter/web-tree-sitter.cjs`);
     const code = await response.text();
     // eval the code in the worker scope (this is safe — it's our own file)
     const fn = new Function("self", code + "\n; return { Parser: self.Parser, Language: self.Language };");
@@ -161,10 +157,10 @@ async function initParser() {
     }
 
     await Parser.init({
-      locateFile: () => "/tree-sitter/web-tree-sitter.wasm",
+      locateFile: () => `${baseUrl}/tree-sitter/web-tree-sitter.wasm`,
     });
 
-    const rustResponse = await fetch("/tree-sitter/tree-sitter-rust.wasm");
+    const rustResponse = await fetch(`${baseUrl}/tree-sitter/tree-sitter-rust.wasm`);
     const rustBytes = new Uint8Array(await rustResponse.arrayBuffer());
     const Rust = await Language.load(rustBytes);
 

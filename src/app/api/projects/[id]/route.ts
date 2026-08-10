@@ -143,10 +143,10 @@ export async function PATCH(
 
     // Replace files if provided
     if (Array.isArray(files)) {
-      // Soft-delete existing files
-      await db.file.updateMany({
-        where: { projectId: id, deletedAt: null },
-        data: { deletedAt: new Date() },
+      // Hard-delete ALL existing files for this project (avoids unique
+      // constraint violation on (projectId, path) when re-creating)
+      await db.file.deleteMany({
+        where: { projectId: id },
       });
       // Create new files
       if (files.length > 0) {
@@ -155,7 +155,7 @@ export async function PATCH(
             projectId: id,
             path: f.path,
             content: f.content,
-            language: f.language,
+            language: f.language ?? "plaintext",
             gitStatus: null,
           })),
         });

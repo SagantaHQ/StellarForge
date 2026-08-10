@@ -5,7 +5,7 @@ import Editor, { type OnMount, type BeforeMount } from "@monaco-editor/react";
 import type * as Monaco from "monaco-editor";
 import { useThemeStore } from "@/stores/theme-store";
 import { buildMonacoTheme } from "@/lib/themes/mappers";
-import { registerSorobanLanguage } from "./use-monaco";
+import { registerSorobanLanguage, useAutocompleteProvider } from "./use-monaco";
 import { useAttributionStore } from "@/stores/attribution-store";
 import { lintSorobanSecurity, lintResultsToMarkers } from "@/lib/soroban/security-linter";
 
@@ -72,8 +72,11 @@ export function MonacoEditor({
 }: MonacoEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // LSP disabled — use the file path directly as the model URI.
-  // TODO: Re-enable LSP with a lighter-weight approach.
+  // Lightweight autocomplete — uses Monaco's built-in completion provider
+  // (no heavy monaco-languageclient package). Provides Soroban snippets,
+  // Rust keywords, soroban-sdk types, and source-parsed completions.
+  useAutocompleteProvider();
+
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof Monaco | null>(null);
   const decorationsRef = useRef<string[]>([]);

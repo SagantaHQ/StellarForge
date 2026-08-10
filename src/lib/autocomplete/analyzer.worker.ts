@@ -142,15 +142,21 @@ async function initParser() {
   // We use importScripts to load the CJS version of web-tree-sitter
   // (which works in Web Workers) from the public directory.
   try {
-    // Web Workers need absolute URLs for fetch — relative paths don't resolve
+    // Web Workers need absolute URLs for fetch
     const baseUrl = self.location.origin;
     const response = await fetch(`${baseUrl}/tree-sitter/web-tree-sitter.cjs`);
     const code = await response.text();
-    // eval the code in the worker scope (this is safe — it's our own file)
-    const fn = new Function("self", code + "\n; return { Parser: self.Parser, Language: self.Language };");
-    const mod = fn(self);
-    Parser = mod.Parser;
-    Language = mod.Language;
+    // The CJS file uses `module.exports` — provide a `module` shim
+    // since Web Workers don't have CommonJS globals.
+    const fn = new Function("self", "module",
+      "var exports = module.exports;\n" +
+      code +
+      "\n; return module.exports || { Parser: self.Parser, Language: self.Language };"
+    );
+    const fakeModule = { exports: {} };
+    const mod = fn(self, fakeModule);
+    Parser = mod?.Parser || (self as any).Parser;
+    Language = mod?.Language || (self as any).Language;
 
     if (!Parser) {
       throw new Error("Parser not found after loading web-tree-sitter");

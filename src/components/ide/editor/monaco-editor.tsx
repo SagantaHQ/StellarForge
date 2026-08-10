@@ -5,7 +5,7 @@ import Editor, { type OnMount, type BeforeMount } from "@monaco-editor/react";
 import type * as Monaco from "monaco-editor";
 import { useThemeStore } from "@/stores/theme-store";
 import { buildMonacoTheme } from "@/lib/themes/mappers";
-import { registerSorobanLanguage, useAutocompleteProvider } from "./use-monaco";
+import { registerSorobanLanguage, registerAutocompleteProvider } from "./use-monaco";
 import { useAttributionStore } from "@/stores/attribution-store";
 import { lintSorobanSecurity, lintResultsToMarkers } from "@/lib/soroban/security-linter";
 
@@ -72,10 +72,12 @@ export function MonacoEditor({
 }: MonacoEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Lightweight autocomplete — uses Monaco's built-in completion provider
-  // (no heavy monaco-languageclient package). Provides Soroban snippets,
-  // Rust keywords, soroban-sdk types, and source-parsed completions.
-  useAutocompleteProvider();
+  // Autocomplete provider ref — registered on mount using the SAME Monaco
+  // instance as the editor (from onMount callback). This is critical:
+  // @monaco-editor/react loads Monaco from CDN, while import("monaco-editor")
+  // loads from node_modules — they're different instances and don't share
+  // language providers. So we MUST use the Monaco from onMount.
+  const autocompleteProviderRef = useRef<{ dispose: () => void } | null>(null);
 
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof Monaco | null>(null);
@@ -111,6 +113,14 @@ export function MonacoEditor({
     if (model) {
       monaco.editor.setModelLanguage(model, monacoLanguage(language));
     }
+
+    // Register the autocomplete provider using THIS Monaco instance.
+    // Must use the same instance the editor uses (from onMount), not a
+    // separate import("monaco-editor") — those are different instances.
+    if (autocompleteProviderRef.current) {
+      autocompleteProviderRef.current.dispose();
+    }
+    autocompleteProviderRef.current = registerAutocompleteProvider(monaco);
 
     // §6.1 — Add "Add Comment" to the editor context menu
     editor.addAction({
@@ -381,6 +391,16 @@ export function MonacoEditor({
 
     return () => clearTimeout(timer);
   }, [value, language]);
+
+  // Cleanup: dispose the autocomplete provider on unmount
+  useEffect(() => {
+    return () => {
+      if (autocompleteProviderRef.current) {
+        autocompleteProviderRef.current.dispose();
+        autocompleteProviderRef.current = null;
+      }
+    };
+  }, []);
 
   return (
     <div ref={containerRef} className="h-full w-full overflow-hidden bg-[var(--mono-bg)]">

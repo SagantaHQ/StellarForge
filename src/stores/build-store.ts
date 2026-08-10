@@ -222,6 +222,13 @@ async function pollStatus(
           _buildId: undefined,
           _pollTimer: undefined,
         }));
+
+        // On successful build, trigger dep index generation for autocomplete.
+        // This generates rustdoc symbol indexes for all Cargo.toml deps,
+        // cached per package@version. Runs in the background — doesn't block.
+        if (data.status === "success") {
+          triggerDepIndexBuild().catch(() => {});
+        }
         return;
       }
 
@@ -252,4 +259,39 @@ async function pollStatus(
   // line appears quickly. The server pushes initial log lines immediately.
   const initialTimer = setTimeout(() => doPoll(), 250);
   set(() => ({ _pollTimer: initialTimer }));
+}
+
+/**
+ * Trigger rustdoc symbol index generation for all Cargo.toml dependencies.
+ * Called after a successful build. Runs in the background — doesn't block.
+ * Indexes are cached per package@version, so this only generates new ones
+ * for deps that haven't been indexed before.
+ */
+async function triggerDepIndexBuild(): Promise<void> {
+  try {
+    const { useFileSystemStore } = await import("@/stores/file-system-store");
+    const { flattenFiles } = await import("@/lib/soroban/sample-project");
+
+    const tree = useFileSystemStore.getState().tree;
+    const files = flattenFiles(tree);
+    const cargoFile = files.find((f) => f.path === "Cargo.toml" || f.path.endsWith("/Cargo.toml"));
+
+    if (!cargoFile) return;
+
+    const res = await fetch("/api/autocomplete/build-deps", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cargoToml: cargoFile.content }),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      console.log(
+        `[autocomplete] dep indexes: ${data.indexes?.length ?? 0} crates, ` +
+        `${data.indexes?.reduce((acc: number, i: { total_count: number }) => acc + (i.total_count || 0), 0) ?? 0} total symbols`
+      );
+    }
+  } catch (err) {
+    console.warn("[autocomplete] failed to build dep indexes:", err);
+  }
 }

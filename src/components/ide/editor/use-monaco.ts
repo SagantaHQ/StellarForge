@@ -351,18 +351,20 @@ export function useAutocompleteProvider() {
   const rustdocRef = useRef<unknown[] | null>(null);
 
   // Fetch rustdoc index once (cached in ref)
+  // Includes soroban-sdk + all project dep indexes (merged by the server)
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch("/api/autocomplete/rustdoc-index");
+        const res = await fetch("/api/autocomplete/rustdoc-index?deps=true");
         if (!res.ok) return;
         const data = await res.json();
         if (cancelled) return;
         const symbols = data.symbols ?? [];
         rustdocRef.current = symbols;
         console.log(
-          `[autocomplete] loaded soroban-sdk rustdoc index: ${symbols.length} symbols`
+          `[autocomplete] loaded rustdoc index: ${symbols.length} symbols`,
+          data.crates ? `(${data.crates.map((c: { name: string }) => c.name).join(", ")})` : ""
         );
       } catch (err) {
         console.warn("[autocomplete] failed to load rustdoc index:", err);

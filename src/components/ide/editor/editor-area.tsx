@@ -65,6 +65,7 @@ export function EditorArea({ fontSize = 13 }: EditorAreaProps) {
   // Attribution integration (§5.2)
   const recordEdit = useAttributionStore((s) => s.recordEdit);
   const profile = useProfileStore((s) => s.profile);
+  const isLoggedIn = useProfileStore((s) => s.isLoggedIn());
 
   // Comments integration
   const comments = useCommentsStore((s) => s.comments);
@@ -250,7 +251,7 @@ export function EditorArea({ fontSize = 13 }: EditorAreaProps) {
               value={activeFile.content}
               fontSize={fontSize}
               glyphMargin
-              readOnly={!useProfileStore((s) => s.isLoggedIn())}
+              readOnly={!isLoggedIn}
               highlightedLines={highlightedLines}
               glyphDecorations={glyphDecorations}
               onAddComment={handleAddComment}

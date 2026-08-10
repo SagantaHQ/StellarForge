@@ -2,46 +2,69 @@
   "apps": [
     {
       "name": "soroban-build-dev",
-      "script": "node_modules/.bin/next",
-      "args": ["dev", "-p", "3000"],
+      "script": "node_modules/next/dist/bin/next",
+      "args": [
+        "dev",
+        "-p",
+        "3000",
+        "--webpack"
+      ],
       "cwd": "/home/z/my-project",
+      "interpreter": "node",
       "env": {
         "NODE_ENV": "development",
         "NODE_OPTIONS": "--max-old-space-size=2048",
+        "HOME": "/home/z",
+        "PATH": "/home/z/.cargo/bin:/home/z/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         "DATABASE_URL": "postgresql://neondb_owner:npg_7AZB1JGmEbsD@ep-fragrant-water-ayoazbf2-pooler.c-5.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require",
         "DIRECT_DATABASE_URL": "postgresql://neondb_owner:npg_7AZB1JGmEbsD@ep-fragrant-water-ayoazbf2-pooler.c-5.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
       },
       "autorestart": true,
-      "maxRestarts": 20,
-      "minUptime": 2000,
-      "restartDelay": 1000,
+      "maxRestarts": 50,
+      "minUptime": 5000,
+      "restartDelay": 5000,
       "maxMemoryRestart": "3G",
+      "killTimeout": 10000,
       "watch": false,
       "out_file": "/home/z/my-project/.zscripts/bm2-out.log",
       "error_file": "/home/z/my-project/.zscripts/bm2-error.log",
       "merge_logs": true,
-      "time": true
+      "time": true,
+      "logDateFormat": "YYYY-MM-DD HH:mm:ss",
+      "logMaxSize": "10M",
+      "logRetain": 3
     },
     {
       "name": "soroban-build-lsp",
-      "script": "node_modules/.bin/bun",
-      "args": ["index.ts"],
+      "script": "index.ts",
       "cwd": "/home/z/my-project/mini-services/lsp-server",
+      "interpreter": "/usr/local/bin/bun",
       "env": {
         "NODE_ENV": "development",
         "HOME": "/home/z",
-        "LSP_PORT": "3099"
+        "LSP_PORT": "3099",
+        "CARGO_HOME": "/home/z/.cargo",
+        "RUSTUP_HOME": "/home/z/.rustup",
+        "PATH": "/home/z/.cargo/bin:/home/z/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
       },
       "autorestart": true,
-      "maxRestarts": 20,
+      "maxRestarts": 50,
       "minUptime": 2000,
-      "restartDelay": 1000,
+      "restartDelay": 3000,
       "maxMemoryRestart": "1G",
+      "killTimeout": 5000,
       "watch": false,
       "out_file": "/home/z/my-project/.zscripts/lsp-out.log",
       "error_file": "/home/z/my-project/.zscripts/lsp-error.log",
       "merge_logs": true,
-      "time": true
+      "time": true,
+      "logDateFormat": "YYYY-MM-DD HH:mm:ss",
+      "logMaxSize": "10M",
+      "logRetain": 3,
+      "healthCheckUrl": "http://localhost:3099/health",
+      "healthCheckInterval": 30000,
+      "healthCheckTimeout": 5000,
+      "healthCheckMaxFails": 3
     }
   ]
 }

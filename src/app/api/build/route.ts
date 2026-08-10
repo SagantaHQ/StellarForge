@@ -91,10 +91,13 @@ export async function POST(req: NextRequest) {
     PATH: `${cargoBin}:${process.env.PATH ?? ""}`,
     CARGO_HOME: `${home}/.cargo`,
     RUSTUP_HOME: `${home}/.rustup`,
-    // Force cargo to emit progress lines even though stdout is piped
+    // Force cargo to emit colorless output (we colorize in the UI)
     CARGO_TERM_COLOR: "never",
-    CARGO_TERM_PROGRESS_WHEN: "always",
-    // Force rustc to emit colorless output (we colorize in the UI)
+    // Disable progress bar — it requires a terminal width and causes
+    // "always progress requires a width key" error when piped.
+    // The build output (Compiling X, Finished, etc.) still streams fine.
+    CARGO_TERM_PROGRESS_WHEN: "never",
+    // Force rustc to emit colorless output
     RUSTC_BOOTSTRAP: "1",
     // Disable incremental compilation to reduce disk usage in /tmp
     CARGO_INCREMENTAL: "0",

@@ -37,6 +37,9 @@ interface ProfileState {
   githubConnected: boolean;
   githubUsername: string | null;
 
+  /** Whether the SIWS session has been validated against the server */
+  siwsValidated: boolean;
+
   setProfile: (p: UserProfile) => void;
   clearProfile: () => void;
   setWalletConnected: (connected: boolean, address?: string | null) => void;
@@ -88,6 +91,7 @@ export const useProfileStore = create<ProfileState>()(
       walletConnected: false, // starts false — wallet not connected on fresh page load
       walletAddress: null,
       sessionChecked: false,
+      siwsValidated: false, // starts false — validated when SIWS session confirmed
       accentColor: "#4F8C8C",
       githubConnected: false,
       githubUsername: null,
@@ -106,6 +110,7 @@ export const useProfileStore = create<ProfileState>()(
           walletConnected: false,
           walletAddress: null,
           sessionChecked: true,
+          siwsValidated: false,
           accentColor: "#4F8C8C",
           githubConnected: false,
           githubUsername: null,
@@ -131,7 +136,10 @@ export const useProfileStore = create<ProfileState>()(
         }),
 
       // BOTH conditions must be true: wallet connected AND server profile exists
-      isLoggedIn: () => get().walletConnected && !!get().profile && get().sessionChecked,
+      // AND SIWS session has been validated against the server.
+      // This prevents showing "logged in" when the wallet isn't actually connected
+      // (e.g. persisted profile but wallet extension disconnected).
+      isLoggedIn: () => get().walletConnected && !!get().profile && get().sessionChecked && get().siwsValidated,
 
       syncFromWallet: async (address: string | null) => {
         if (!address) {
@@ -187,6 +195,7 @@ export const useProfileStore = create<ProfileState>()(
             walletConnected: false,
             walletAddress: null,
             sessionChecked: true,
+            siwsValidated: false,
             githubConnected: false,
             githubUsername: null,
           });
@@ -206,6 +215,7 @@ export const useProfileStore = create<ProfileState>()(
           walletConnected: true,
           walletAddress: address,
           sessionChecked: true,
+          siwsValidated: true, // SIWS session confirmed → validated
           accentColor: colorFromAddress(address),
           profile: {
             address,

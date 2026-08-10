@@ -122,20 +122,16 @@ export function IdeShell() {
   // built for this project yet), trigger a stellar contract build so the user
   // sees compile results immediately. Only runs ONCE per project switch —
   // uses a ref to track the last-built project ID to prevent loops.
-  const lastBuiltProjectRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (activeProject && projectsHydrated && lastBuiltProjectRef.current !== activeProject.id) {
-      lastBuiltProjectRef.current = activeProject.id;
-      // Small delay to let the file system store settle after project switch
-      const timer = setTimeout(() => {
-        // Only build if the build status is idle (not already building)
-        if (useBuildStore.getState().status === "idle") {
-          startBuild({ silent: true }); // auto-build is silent — no loading spinner
-        }
-      }, 1000);
-      return () => clearTimeout(timer);
-    }
-  }, [activeProject?.id, projectsHydrated, startBuild]);
+  // Auto-build: only when the user MANUALLY clicks Build, NOT on project load.
+  // Previously this auto-built on every project switch, which:
+  //   1. Wasted time (cargo recompiles everything even if nothing changed)
+  //   2. Caused OOM on the 4GB sandbox
+  //   3. Was unnecessary — the user can click Build when they want to compile
+  //
+  // The build store persists the last build status, so if a project was already
+  // built, the user sees the previous build output without recompiling.
+  // Cargo's own caching handles incremental builds — if Cargo.toml hasn't
+  // changed, `stellar contract build` is fast (just links the existing .rlib).
 
   // Build autocomplete artifacts after a successful build (or project load)
   // Also triggers when the file tree changes (e.g. after package add/remove)

@@ -133,13 +133,17 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Set up workspace
+  // Set up workspace — preserve the target/ directory (cargo build cache)
+  // so incremental builds are fast. Only overwrite source files.
   let workspaceDir: string;
   try {
     workspaceDir = path.join(BUILDS_DIR, body.projectId);
-    await fs.rm(workspaceDir, { recursive: true, force: true });
+    // DON'T delete the workspace — that would wipe target/ (cargo cache).
+    // Just ensure the dir exists + overwrite source files.
     await fs.mkdir(workspaceDir, { recursive: true });
     for (const file of body.files) {
+      // Skip files under target/ — those are cargo's build artifacts
+      if (file.path.startsWith("target/") || file.path.startsWith("target\\")) continue;
       const filePath = path.join(workspaceDir, file.path);
       await fs.mkdir(path.dirname(filePath), { recursive: true });
       await fs.writeFile(filePath, file.content, "utf-8");

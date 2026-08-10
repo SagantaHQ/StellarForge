@@ -383,7 +383,7 @@ export function TopBar({
                     className="flex w-full items-center gap-2.5 px-3 py-2 text-[12px] text-[var(--status-error)] hover:bg-[color-mix(in_srgb,var(--status-error)_8%,transparent)] transition-colors"
                   >
                     <LogOut size={14} strokeWidth={1.75} />
-                    <span>Disconnect</span>
+                    <span>Sign Out</span>
                   </button>
                 </div>
               </>

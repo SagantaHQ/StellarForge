@@ -586,6 +586,10 @@ async function loadFilesIntoFileSystem(
  */
 async function syncActiveProjectToServer() {
   try {
+    // Only sync if the user is logged in
+    const { useProfileStore } = await import("@/stores/profile-store");
+    if (!useProfileStore.getState().isLoggedIn()) return;
+
     const state = useProjectsStore.getState();
     const activeId = state.activeProjectId;
     if (!activeId) return;

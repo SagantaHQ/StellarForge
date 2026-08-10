@@ -147,17 +147,21 @@ export function MonacoEditor({
         const model = ed.getModel();
         if (!model) return;
 
-        // Mark the active file as not dirty (saved)
-        import("@/stores/editor-tabs-store").then(({ useEditorTabsStore }) => {
-          const activeTab = useEditorTabsStore.getState().activeTabPath;
-          if (activeTab) {
-            useEditorTabsStore.getState().markDirty(activeTab, false);
-          }
-        });
-
-        // Force immediate sync to server (bypass debounce)
+        // Check if logged in — if not, show a login prompt
         import("@/stores/profile-store").then(({ useProfileStore }) => {
-          if (!useProfileStore.getState().isLoggedIn()) return;
+          if (!useProfileStore.getState().isLoggedIn()) {
+            // Dispatch a custom event to open the profile modal
+            window.dispatchEvent(new CustomEvent("soroban-open-login"));
+            return;
+          }
+
+          // Logged in — mark file as saved + sync to cloud
+          import("@/stores/editor-tabs-store").then(({ useEditorTabsStore }) => {
+            const activeTab = useEditorTabsStore.getState().activeTabPath;
+            if (activeTab) {
+              useEditorTabsStore.getState().markDirty(activeTab, false);
+            }
+          });
 
           import("@/stores/projects-store").then(({ useProjectsStore }) => {
             const activeProject = useProjectsStore.getState().getActiveProject();

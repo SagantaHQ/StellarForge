@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, lazy, Suspense } from "react";
 import {
   Wallet,
   Play,
@@ -29,7 +29,8 @@ import { useProfileStore } from "@/stores/profile-store";
 import { useCollabStore } from "@/stores/collab-store";
 import { useProjectsStore, type ProjectMeta } from "@/stores/projects-store";
 import { useWalletModal } from "@/lib/wallet/wallet-modal-host";
-import Avatar from "boring-avatars";
+// Lazy-load boring-avatars (uses Math.random → causes hydration mismatch if SSR'd)
+const Avatar = lazy(() => import("boring-avatars"));
 
 interface TopBarProps {
   projectName: string;
@@ -314,12 +315,14 @@ export function TopBar({
                   className="h-6 w-6 rounded-full object-cover"
                 />
               ) : (
-                <Avatar
-                  size={24}
-                  name={profile.address}
-                  variant="marble"
-                  colors={["#4F8C8C", "#131418", "#6E7178", "#C5794B", "#7B96B3"]}
-                />
+                <Suspense fallback={<div className="h-6 w-6 rounded-full bg-[var(--surface-raised)]" />}>
+                  <Avatar
+                    size={24}
+                    name={profile.address}
+                    variant="marble"
+                    colors={["#4F8C8C", "#131418", "#6E7178", "#C5794B", "#7B96B3"]}
+                  />
+                </Suspense>
               )}
               <span className="hidden md:inline max-w-[80px] truncate">{profile.username}</span>
               <ChevronDown size={10} strokeWidth={2} className="text-[var(--text-muted)]" />
@@ -335,12 +338,14 @@ export function TopBar({
                       {profile.avatarUrl ? (
                         <img src={profile.avatarUrl} alt={profile.username} className="h-8 w-8 rounded-full object-cover" />
                       ) : (
-                        <Avatar
-                          size={32}
-                          name={profile.address}
-                          variant="marble"
-                          colors={["#4F8C8C", "#131418", "#6E7178", "#C5794B", "#7B96B3"]}
-                        />
+                        <Suspense fallback={<div className="h-8 w-8 rounded-full bg-[var(--surface-raised)]" />}>
+                          <Avatar
+                            size={32}
+                            name={profile.address}
+                            variant="marble"
+                            colors={["#4F8C8C", "#131418", "#6E7178", "#C5794B", "#7B96B3"]}
+                          />
+                        </Suspense>
                       )}
                       <div className="min-w-0">
                         <div className="text-[12px] font-medium text-[var(--text-primary)] truncate">{profile.username}</div>

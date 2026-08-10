@@ -117,6 +117,14 @@ export function IdeShell() {
     projectsHydrate();
     // Expose profile store on window for cross-store access (avoids circular imports)
     (window as unknown as { __profileStore: unknown }).__profileStore = useProfileStore.getState();
+
+    // Listen for Ctrl+S login prompts (dispatched from the editor when
+    // a non-logged-in user tries to save)
+    function handleOpenLogin() {
+      setProfileOpen(true);
+    }
+    window.addEventListener("soroban-open-login", handleOpenLogin);
+    return () => window.removeEventListener("soroban-open-login", handleOpenLogin);
   }, [hydrate, projectsHydrate]);
 
   // Auto-build on project load: when a project becomes active (and we haven't

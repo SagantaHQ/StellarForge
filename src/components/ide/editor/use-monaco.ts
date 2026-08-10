@@ -391,14 +391,6 @@ export function registerAutocompleteProvider(monaco: typeof Monaco): { dispose: 
   const provider = monaco.languages.registerCompletionItemProvider("rust", {
     triggerCharacters: [".", ":", "u", "p", "f", "s", "e", "m", "c", "t", "v", "a", "b"],
     provideCompletionItems: (model, position) => {
-      const word = model.getWordUntilPosition(position);
-      const range = {
-        startLineNumber: position.lineNumber,
-        endLineNumber: position.lineNumber,
-        startColumn: word.startColumn,
-        endColumn: word.endColumn,
-      };
-
       const lineUntilPosition = model.getValueInRange({
         startLineNumber: position.lineNumber,
         startColumn: 1,
@@ -410,6 +402,40 @@ export function registerAutocompleteProvider(monaco: typeof Monaco): { dispose: 
       const isAfterDot = lineUntilPosition.endsWith(".");
       const isAfterDoubleColon = lineUntilPosition.endsWith("::");
       const isAfterUse = trimmed.startsWith("use ") || trimmed === "use";
+
+      // When after `::` or `.`, the word at cursor is empty (Monaco doesn't
+      // treat : or . as word characters). Use the cursor position directly
+      // as the range so Monaco shows the completion widget.
+      let range: Monaco.IRange;
+      if (isAfterDoubleColon || isAfterDot) {
+        // Empty range at cursor position — Monaco will show all suggestions
+        // and filter as the user types
+        range = {
+          startLineNumber: position.lineNumber,
+          endLineNumber: position.lineNumber,
+          startColumn: position.column,
+          endColumn: position.column,
+        };
+      } else {
+        const word = model.getWordUntilPosition(position);
+        range = {
+          startLineNumber: position.lineNumber,
+          endLineNumber: position.lineNumber,
+          startColumn: word.startColumn,
+          endColumn: word.endColumn,
+        };
+      }
+
+      // Detect the type before `::` for context-aware completion
+      // e.g. "String::" → typeName = "String"
+      let typeName: string | null = null;
+      if (isAfterDoubleColon) {
+        const beforeColons = lineUntilPosition.slice(0, -2);
+        const match = beforeColons.match(/([A-Za-z_][A-Za-z0-9_]*)\s*$/);
+        if (match) {
+          typeName = match[1];
+        }
+      }
 
       const suggestions: Monaco.languages.CompletionItem[] = [];
       const seenLabels = new Set<string>();
@@ -431,22 +457,29 @@ export function registerAutocompleteProvider(monaco: typeof Monaco): { dispose: 
         for (const sym of rustdocSymbols) {
           const s = sym as { name: string; kind: string; detail?: string; docs?: string };
           if (isAfterDot) {
+            // After `.` → show functions + macros (method completion)
             if (s.kind === "function" || s.kind === "macro") {
               add(s.name, kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Function, s.detail, s.docs, undefined, "1");
             }
-          } else if (isAfterDoubleColon || isAfterUse) {
+          } else if (isAfterDoubleColon) {
+            // After `Type::` → show ALL symbols (associated functions, constants, etc.)
+            // Don't filter by typeName — just show everything so the user can pick
+            add(s.name, kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Text, s.detail, s.docs, undefined, "1");
+          } else if (isAfterUse) {
+            // After `use ` → show modules + types
             add(s.name, kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Text, s.detail, s.docs, undefined, "1");
           } else {
+            // Normal context → show types + constants + modules (skip functions)
             if (s.kind === "function" || s.kind === "macro") continue;
             add(s.name, kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Text, s.detail, s.docs, undefined, "1");
           }
         }
       }
 
-      // Layer 2: Source-parsed symbols
-      if (!isAfterDot) {
+      // Layer 2: Source-parsed symbols (skip when after . or ::)
+      if (!isAfterDot && !isAfterDoubleColon) {
         for (const item of currentItems) {
-          if (item.kind === "module" && !isAfterDoubleColon && !isAfterUse) continue;
+          if (item.kind === "module" && !isAfterUse) continue;
           add(item.label, kindMap[item.kind] ?? monaco.languages.CompletionItemKind.Text, item.detail, item.documentation, item.insertText || item.label, item.kind === "snippet" ? "0" : item.kind === "function" ? "1" : "2");
         }
       }

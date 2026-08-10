@@ -123,16 +123,27 @@ export function IdeShell() {
   // built for this project yet), trigger a stellar contract build so the user
   // sees compile results immediately. Only runs ONCE per project switch —
   // uses a ref to track the last-built project ID to prevent loops.
-  // Auto-build: only when the user MANUALLY clicks Build, NOT on project load.
-  // Previously this auto-built on every project switch, which:
-  //   1. Wasted time (cargo recompiles everything even if nothing changed)
-  //   2. Caused OOM on the 4GB sandbox
-  //   3. Was unnecessary — the user can click Build when they want to compile
-  //
-  // The build store persists the last build status, so if a project was already
-  // built, the user sees the previous build output without recompiling.
-  // Cargo's own caching handles incremental builds — if Cargo.toml hasn't
-  // changed, `stellar contract build` is fast (just links the existing .rlib).
+  // Auto-build: when a project becomes active, auto-build it if:
+  //   1. It hasn't been built yet (build status is idle)
+  //   2. The user is logged in
+  //   3. We haven't already built this project in this session
+  // This handles new projects, reloaded projects, and restored projects.
+  // Cargo's caching makes subsequent builds fast (only recompiles changed files).
+  const lastBuiltProjectRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (activeProject && projectsHydrated && lastBuiltProjectRef.current !== activeProject.id) {
+      lastBuiltProjectRef.current = activeProject.id;
+      const timer = setTimeout(() => {
+        if (
+          useProfileStore.getState().isLoggedIn() &&
+          useBuildStore.getState().status === "idle"
+        ) {
+          startBuild({ silent: true });
+        }
+      }, 1500);
+      return () => clearTimeout(timer);
+    }
+  }, [activeProject?.id, projectsHydrated, startBuild]);
 
   // Build autocomplete artifacts after a successful build (or project load)
   // Also triggers when the file tree changes (e.g. after package add/remove)
@@ -335,6 +346,9 @@ export function IdeShell() {
             const { useAttributionStore } = await import("@/stores/attribution-store");
             useAttributionStore.setState({ attributions: {} });
 
+            // 10. Reset the last-built project ref so re-login triggers auto-build
+            lastBuiltProjectRef.current = null;
+
             console.log("[signout] all local state cleared");
           } catch (err) {
             console.warn("[signout] failed to clear some state:", err);
@@ -421,9 +435,27 @@ export function IdeShell() {
               </PanelGroup>
             ) : (
               <WelcomePage
-                onNewProject={() => setNewProjectOpen(true)}
-                onBrowseTemplates={() => setNewProjectOpen(true)}
-                onImportProject={() => setImportProjectOpen(true)}
+                onNewProject={() => {
+                  if (!useProfileStore.getState().isLoggedIn()) {
+                    setProfileOpen(true);
+                    return;
+                  }
+                  setNewProjectOpen(true);
+                }}
+                onBrowseTemplates={() => {
+                  if (!useProfileStore.getState().isLoggedIn()) {
+                    setProfileOpen(true);
+                    return;
+                  }
+                  setNewProjectOpen(true);
+                }}
+                onImportProject={() => {
+                  if (!useProfileStore.getState().isLoggedIn()) {
+                    setProfileOpen(true);
+                    return;
+                  }
+                  setImportProjectOpen(true);
+                }}
                 onOpenProject={(id) => {
                   projectsSwitch(id).catch(() => {});
                 }}

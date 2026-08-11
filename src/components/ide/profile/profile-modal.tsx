@@ -57,28 +57,47 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile, walle
   const [saveError, setSaveError] = useState<string | null>(null);
   const [showUsernameConfirm, setShowUsernameConfirm] = useState(false);
   const [usernameLocked, setUsernameLocked] = useState(false);
+  const [fetchingProfile, setFetchingProfile] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Sync usernameLocked with existingProfile on open
+  // When the modal opens, fetch FRESH user data from the DB
   useEffect(() => {
-    if (open) {
-      setUsernameLocked(!!existingProfile?.isCustomUsername);
-    }
-  }, [open, existingProfile]);
+    if (!open) return;
 
-  // When opening with an existing profile, pre-fill and skip to profile step
-  useEffect(() => {
-    if (open && existingProfile) {
-      setUsername(existingProfile.username || "");
-      setBio(existingProfile.bio || "");
-      setAvatarUrl(existingProfile.avatarUrl);
-      setAddress(existingProfile.address);
-      setStep("profile");
-      if (existingProfile.username) {
-        setAsyncUsernameStatus("available");
-      }
-    }
-  }, [open, existingProfile]);
+    const addr = existingProfile?.address || walletAddress;
+    if (!addr) return;
+
+    setFetchingProfile(true);
+
+    fetch(`/api/auth/session?address=${encodeURIComponent(addr)}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data?.loggedIn && data?.profile) {
+          setUsername(data.profile.username || "");
+          setBio(data.profile.bio || "");
+          setAvatarUrl(data.profile.avatarUrl || undefined);
+          setUsernameLocked(!!data.profile.isCustomUsername);
+          if (data.profile.username) {
+            setAsyncUsernameStatus("available");
+          }
+          setStep("profile");
+        }
+      })
+      .catch(() => {
+        // Fall back to existingProfile data
+        if (existingProfile) {
+          setUsername(existingProfile.username || "");
+          setBio(existingProfile.bio || "");
+          setAvatarUrl(existingProfile.avatarUrl);
+          setUsernameLocked(!!existingProfile.isCustomUsername);
+          setStep("profile");
+        }
+      })
+      .finally(() => {
+        setFetchingProfile(false);
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   // If wallet is already connected (but no profile yet), skip to profile step
   useEffect(() => {
@@ -253,6 +272,14 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile, walle
 
         {/* Body */}
         <div className="p-4">
+          {fetchingProfile && step === "profile" && (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 size={20} strokeWidth={1.75} className="animate-spin text-[var(--accent)]" />
+              <span className="ml-2 text-[12px] text-[var(--text-muted)]">Loading profile…</span>
+            </div>
+          )}
+          {!(fetchingProfile && step === "profile") && (
+            <>
           {step === "wallet" && (
             <div className="space-y-3">
               <p className="text-xs text-[var(--text-muted)] mb-3">
@@ -456,6 +483,8 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile, walle
                 Start building
               </Button>
             </div>
+          )}
+            </>
           )}
         </div>
       </div>

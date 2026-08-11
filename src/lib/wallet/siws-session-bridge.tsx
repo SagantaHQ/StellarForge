@@ -58,13 +58,15 @@ function readPersistedWalletAddress(): string | null {
 }
 
 /**
- * Validate the wallet's session against the server.
+ * Validate the wallet's session against the server AND fetch fresh user data.
  * Calls GET /api/siws/session?address=<addr> to check if the server
  * still has a valid session for this address.
  *
+ * If valid, also calls GET /api/auth/session?address=<addr> to fetch
+ * the latest profile data (username, avatar, bio, isCustomUsername)
+ * directly from the database — not from the cached SIWS session metadata.
+ *
  * Returns the server session if valid, null otherwise.
- * This keeps the wallet + server in sync — if the server session expired
- * but the wallet is still connected, we know to re-trigger SIWS.
  */
 async function validateServerSession(address: string): Promise<{
   address: string;
@@ -83,6 +85,36 @@ async function validateServerSession(address: string): Promise<{
     // Check if the server session is still valid
     if (data.expiry && data.expiry > Date.now()) {
       console.log("[siws-bridge] server session valid for:", address.substring(0, 12));
+
+      // Fetch FRESH user data from the DB (not cached SIWS metadata)
+      // This ensures the UI always shows the latest username, avatar, bio
+      try {
+        const profileRes = await fetch(
+          `/api/auth/session?address=${encodeURIComponent(address)}`
+        );
+        if (profileRes.ok) {
+          const profileData = await profileRes.json();
+          if (profileData?.loggedIn && profileData?.profile) {
+            // Return the session with FRESH metadata from the DB
+            return {
+              address,
+              network: data.network || "TESTNET",
+              expiry: data.expiry,
+              metadata: {
+                userId: profileData.user?.id,
+                username: profileData.profile.username,
+                displayName: profileData.profile.displayName,
+                avatarUrl: profileData.profile.avatarUrl,
+                bio: profileData.profile.bio,
+                isCustomUsername: profileData.profile.isCustomUsername ?? true,
+              },
+            };
+          }
+        }
+      } catch {
+        // Profile fetch failed — return the original session data
+      }
+
       return data;
     }
 
@@ -124,11 +156,14 @@ export function SiwsSessionBridge() {
   }, [syncFromSiwsSession, setWalletConnected]);
 
   // ── 2. Sync SIWS session changes → profile store ───────────────────
-  // Also validates the session against the server to keep wallet + server in sync.
+  // Also validates the session against the server and fetches FRESH user
+  // data from the DB on every reload.
   useEffect(() => {
     if (siwsSession) {
       if (lastSyncedAddress.current !== siwsSession.address) {
         lastSyncedAddress.current = siwsSession.address;
+
+        // Optimistically set from the SIWS session (instant)
         syncFromSiwsSession({
           address: siwsSession.address,
           network: siwsSession.network,
@@ -136,8 +171,14 @@ export function SiwsSessionBridge() {
           metadata: siwsSession.metadata,
         });
 
-        // Validate the session against the server (async, non-blocking)
-        validateServerSession(siwsSession.address).catch(() => {});
+        // Then validate + fetch FRESH data from the DB
+        // This overwrites the optimistic data with the latest DB state
+        validateServerSession(siwsSession.address).then((freshSession) => {
+          if (freshSession) {
+            // Re-sync with fresh DB data (updates username, avatar, bio, isCustomUsername)
+            syncFromSiwsSession(freshSession);
+          }
+        }).catch(() => {});
       }
     } else {
       // Session cleared — but only clear if we previously had one

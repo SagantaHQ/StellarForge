@@ -192,6 +192,22 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile, walle
         setUsernameLocked(true);
       }
 
+      // Re-fetch the profile from the server to get the updated isCustomUsername
+      try {
+        const sessionRes = await fetch(`/api/auth/session?address=${encodeURIComponent(address)}`);
+        if (sessionRes.ok) {
+          const sessionData = await sessionRes.json();
+          if (sessionData?.loggedIn && sessionData?.profile) {
+            // Update local state with server data
+            setUsername(sessionData.profile.username);
+            setBio(sessionData.profile.bio || "");
+            setAvatarUrl(sessionData.profile.avatarUrl || undefined);
+          }
+        }
+      } catch {
+        // Best-effort — the save already succeeded
+      }
+
       onComplete({
         address,
         username,

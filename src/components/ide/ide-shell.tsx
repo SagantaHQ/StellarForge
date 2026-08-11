@@ -648,7 +648,25 @@ export function IdeShell() {
             avatarUrl: p.avatarUrl,
             bio: p.bio,
             createdAt: Date.now(),
+            isCustomUsername: true, // mark as locked after save
           });
+
+          // Re-fetch the profile from the server to ensure sync
+          fetch(`/api/auth/session?address=${encodeURIComponent(p.address)}`)
+            .then(r => r.ok ? r.json() : null)
+            .then(data => {
+              if (data?.loggedIn && data?.profile) {
+                setProfile({
+                  address: p.address,
+                  username: data.profile.username,
+                  avatarUrl: data.profile.avatarUrl ?? undefined,
+                  bio: data.profile.bio ?? undefined,
+                  createdAt: Date.now(),
+                  isCustomUsername: data.profile.isCustomUsername ?? true,
+                });
+              }
+            })
+            .catch(() => {});
         }}
       />
 

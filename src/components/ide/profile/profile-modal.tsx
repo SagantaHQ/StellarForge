@@ -110,7 +110,13 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile, walle
   useEffect(() => {
     if (step !== "profile") return;
     if (!username || username.length < 3 || !/^[a-z0-9_]+$/i.test(username)) return;
-    if (existingProfile?.username) return; // locked, skip check
+    // Skip availability check only if the username is truly locked (custom)
+    if (existingProfile?.isCustomUsername) return;
+    // Also skip if the username hasn't changed from the current one
+    if (existingProfile?.username && existingProfile.username === username.toLowerCase()) {
+      setAsyncUsernameStatus("available");
+      return;
+    }
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(async () => {
       try {

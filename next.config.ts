@@ -35,17 +35,6 @@ const nextConfig: NextConfig = {
       "@trezor/transport-webhid": stubPath,
       "@trezor/hw-app-str": stubPath,
     };
-    // web-tree-sitter tries to import Node.js modules — stub them out
-    // for the browser (the worker uses the WASM version, not Node bindings)
-    if (!isServer) {
-      config.resolve.fallback = {
-        ...(config.resolve.fallback || {}),
-        "fs/promises": false,
-        "fs": false,
-        "module": false,
-        "path": false,
-      };
-    }
     return config;
   },
   // Turbopack config — used by default in Next.js 16 dev mode.

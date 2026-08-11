@@ -498,81 +498,285 @@ export function registerAutocompleteProvider(monaco: typeof Monaco): { dispose: 
   };
 }
 
-// ── Tree-sitter Web Worker autocomplete ────────────────────────────────
+// ── LSP WebSocket Client (lightweight — no monaco-languageclient) ─────
+//
+// Connects to the LSP gateway server (mini-services/lsp-server/) via
+// WebSocket. Speaks raw LSP/JSON-RPC protocol. The LSP server runs
+// rust-analyzer as a separate process, managed by bm2 — completely
+// independent of Next.js.
+//
+// This client is ~150 lines with ZERO npm dependencies (just WebSocket +
+// JSON). Compare: monaco-languageclient + vscode-languageclient +
+// vscode-ws-jsonrpc = ~200MB+ of bundle size + OOM issues.
 
-let analyzerWorker: Worker | null = null;
-let workerReady = false;
-
-/** Get or create the analyzer Web Worker (singleton). */
-function getAnalyzerWorker(): Worker | null {
-  if (analyzerWorker || typeof window === "undefined") return analyzerWorker;
-  try {
-    analyzerWorker = new Worker(
-      new URL("../../../lib/autocomplete/analyzer.worker.ts", import.meta.url)
-    );
-    analyzerWorker.onmessage = (e: MessageEvent) => {
-      const msg = e.data;
-      if (msg.type === "parsed") {
-        console.log(`[autocomplete] worker parsed: ${msg.symbols.length} symbols`);
-      }
-    };
-    analyzerWorker.onerror = (err) => {
-      console.warn("[autocomplete] worker error:", err);
-    };
-    workerReady = true;
-    console.log("[autocomplete] tree-sitter worker created");
-  } catch (err) {
-    console.warn("[autocomplete] failed to create worker:", err);
-  }
-  return analyzerWorker;
+interface LspCompletionItem {
+  label: string;
+  kind?: number;
+  detail?: string;
+  documentation?: string | { value: string };
+  insertText?: string;
+  insertTextFormat?: number;
+  sortText?: string;
 }
 
-/**
- * Request completions from the tree-sitter worker (async).
- * Returns a promise that resolves with the suggestions.
- */
-function requestCompletionsFromWorker(
-  source: string,
-  position: { line: number; column: number }
-): Promise<Array<{ label: string; kind: number; detail?: string; docs?: string; insertText?: string }>> {
-  return new Promise((resolve) => {
-    const worker = getAnalyzerWorker();
-    if (!worker) {
-      resolve([]);
+class LspClient {
+  private ws: WebSocket | null = null;
+  private msgId = 0;
+  private pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
+  private initialized = false;
+  private connecting = false;
+  private workspaceId: string;
+  private fileUri: string | null = null;
+  private fileVersion = 0;
+  private diagnosticsHandler: ((diags: Array<{ line: number; message: string; severity: number }>) => void) | null = null;
+
+  constructor(workspaceId: string) {
+    this.workspaceId = workspaceId;
+  }
+
+  onDiagnostics(handler: (diags: Array<{ line: number; message: string; severity: number }>) => void) {
+    this.diagnosticsHandler = handler;
+  }
+
+  async connect(): Promise<void> {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) return;
+    if (this.connecting) {
+      // Wait for ongoing connection
+      while (this.connecting) await new Promise(r => setTimeout(r, 100));
       return;
     }
 
-    const timeout = setTimeout(() => resolve([]), 2000);
+    this.connecting = true;
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const url = `${protocol}//${window.location.host}/lsp?workspace=${encodeURIComponent(this.workspaceId)}`;
 
-    const handler = (e: MessageEvent) => {
-      if (e.data.type === "completion") {
-        clearTimeout(timeout);
-        worker.removeEventListener("message", handler);
-        resolve(e.data.suggestions);
+    return new Promise((resolve, reject) => {
+      this.ws = new WebSocket(url);
+
+      this.ws.onopen = async () => {
+        console.log("[lsp] WebSocket connected");
+        // Set up message handler
+        this.ws!.onmessage = (event) => {
+          try {
+            const msg = JSON.parse(event.data);
+            this.handleMessage(msg);
+          } catch (err) {
+            console.warn("[lsp] failed to parse message:", err);
+          }
+        };
+
+        this.ws!.onerror = (err) => {
+          console.warn("[lsp] WebSocket error:", err);
+          this.connecting = false;
+        };
+
+        this.ws!.onclose = () => {
+          console.log("[lsp] WebSocket closed");
+          this.ws = null;
+          this.initialized = false;
+          this.connecting = false;
+          // Reject all pending requests
+          for (const [, p] of this.pending) {
+            p.reject(new Error("WebSocket closed"));
+          }
+          this.pending.clear();
+        };
+
+        // Initialize LSP
+        try {
+          await this.initialize();
+          this.connecting = false;
+          resolve();
+        } catch (err) {
+          this.connecting = false;
+          reject(err);
+        }
+      };
+
+      this.ws!.onerror = (err) => {
+        this.connecting = false;
+        reject(new Error(`WebSocket connection failed: ${err}`));
+      };
+    });
+  }
+
+  private async initialize(): Promise<void> {
+    const result = await this.sendRequest("initialize", {
+      processId: null,
+      clientInfo: { name: "soroban-build", version: "1.0" },
+      rootUri: `file:///tmp/soroban-builds/${this.workspaceId}`,
+      capabilities: {
+        textDocument: {
+          synchronization: { didOpen: true, didChange: true, didClose: true },
+          completion: {
+            completionItem: {
+              snippetSupport: true,
+              documentationFormat: ["markdown", "plaintext"],
+            },
+          },
+          hover: { contentFormat: ["markdown", "plaintext"] },
+        },
+      },
+      initializationOptions: {
+        cargo: { target: "wasm32v1-none", features: "all" },
+      },
+    });
+
+    // Send initialized notification
+    this.sendNotification("initialized", {});
+    this.initialized = true;
+    console.log("[lsp] initialized — rust-analyzer ready");
+  }
+
+  private handleMessage(msg: any) {
+    // Response to a request
+    if (msg.id !== undefined && this.pending.has(msg.id)) {
+      const p = this.pending.get(msg.id)!;
+      this.pending.delete(msg.id);
+      if (msg.error) {
+        p.reject(new Error(msg.error.message || "LSP error"));
+      } else {
+        p.resolve(msg.result);
       }
-    };
-    worker.addEventListener("message", handler);
-    worker.postMessage({ type: "completion", source, position });
-  });
+      return;
+    }
+
+    // Notification
+    if (msg.method === "textDocument/publishDiagnostics") {
+      const diags = (msg.params?.diagnostics || []).map((d: any) => ({
+        line: d.range?.start?.line ?? 0,
+        message: d.message || "",
+        severity: d.severity || 1,
+      }));
+      this.diagnosticsHandler?.(diags);
+    }
+  }
+
+  private sendRequest(method: string, params: any): Promise<any> {
+    return new Promise((resolve, reject) => {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        reject(new Error("WebSocket not connected"));
+        return;
+      }
+
+      const id = ++this.msgId;
+      this.pending.set(id, { resolve, reject });
+
+      const msg = JSON.stringify({ jsonrpc: "2.0", id, method, params });
+      this.ws.send(msg);
+
+      // Timeout after 10s
+      setTimeout(() => {
+        if (this.pending.has(id)) {
+          this.pending.delete(id);
+          reject(new Error(`LSP request timed out: ${method}`));
+        }
+      }, 10000);
+    });
+  }
+
+  private sendNotification(method: string, params: any) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    const msg = JSON.stringify({ jsonrpc: "2.0", method, params });
+    this.ws.send(msg);
+  }
+
+  async didOpen(uri: string, languageId: string, text: string) {
+    this.fileUri = uri;
+    this.fileVersion = 0;
+    this.sendNotification("textDocument/didOpen", {
+      textDocument: { uri, languageId, version: 0, text },
+    });
+  }
+
+  async didChange(text: string) {
+    if (!this.fileUri) return;
+    this.fileVersion++;
+    this.sendNotification("textDocument/didChange", {
+      textDocument: { uri: this.fileUri, version: this.fileVersion },
+      contentChanges: [{ text }],
+    });
+  }
+
+  async getCompletion(uri: string, line: number, character: number): Promise<LspCompletionItem[]> {
+    if (!this.initialized) {
+      await this.connect();
+    }
+
+    try {
+      const result = await this.sendRequest("textDocument/completion", {
+        textDocument: { uri },
+        position: { line, character },
+      });
+
+      if (Array.isArray(result)) return result;
+      if (result?.items) return result.items;
+      return [];
+    } catch (err) {
+      console.warn("[lsp] completion request failed:", err);
+      return [];
+    }
+  }
+
+  dispose() {
+    if (this.ws) {
+      this.ws.close();
+      this.ws = null;
+    }
+    this.pending.clear();
+    this.initialized = false;
+  }
 }
 
-/**
- * Register a tree-sitter powered autocomplete provider on the given Monaco instance.
- * Uses a Web Worker for parsing (off the UI thread).
- * Falls back to the simple provider if the worker fails.
- */
-export function registerTreeSitterProvider(monaco: typeof Monaco): { dispose: () => void } {
-  // Pre-load the worker
-  getAnalyzerWorker();
+// ── LSP-powered autocomplete provider ─────────────────────────────────
 
-  // Also keep the simple provider as fallback
+let lspClient: LspClient | null = null;
+let currentFileUri: string | null = null;
+
+// LSP CompletionItemKind → Monaco CompletionItemKind mapping
+const LSP_KIND_MAP: Record<number, number> = {
+  1: 14,   // Text → Text
+  2: 2,    // Method → Function
+  3: 2,    // Function → Function
+  4: 2,    // Constructor → Function
+  5: 5,    // Field → Field
+  6: 22,   // Variable → Struct (closest)
+  7: 6,    // Class → Class
+  8: 8,    // Interface → Interface
+  9: 9,    // Module → Module
+  10: 3,   // Property → Property
+  11: 13,  // Unit → Enum
+  12: 13,  // Value → Enum
+  13: 13,  // Enum → Enum
+  14: 4,   // Keyword → Keyword
+  15: 4,   // Snippet → Snippet
+  16: 0,   // Color
+  17: 19,  // File → File
+  18: 25,  // Reference → Reference
+  19: 22,  // Folder → Struct
+  20: 13,  // EnumMember → Enum
+  21: 21,  // Constant → Constant
+  22: 25,  // Struct → Struct
+  23: 13,  // Event → Enum
+  24: 25,  // Operator → Operator
+  25: 25,  // TypeParameter → TypeParameter
+};
+
+export function registerLspProvider(monaco: typeof Monaco, workspaceId: string): { dispose: () => void } {
+  // Create LSP client
+  lspClient = new LspClient(workspaceId);
+
+  // Connect in background (don't block)
+  lspClient.connect().catch(err => {
+    console.warn("[lsp] failed to connect:", err);
+  });
+
+  // Also keep the simple provider as fallback (snippets + SDK symbols)
   const fallback = registerAutocompleteProvider(monaco);
 
   let currentItems: CompletionItem[] = useAutocompleteStore.getState().items;
   const unsubscribe = useAutocompleteStore.subscribe((state) => {
     currentItems = state.items;
-    // Send updated source to worker for re-parsing
-    // (the worker will re-parse on next completion request anyway)
   });
   currentItems = useAutocompleteStore.getState().items;
 
@@ -592,104 +796,122 @@ export function registerTreeSitterProvider(monaco: typeof Monaco): { dispose: ()
   };
 
   const provider = monaco.languages.registerCompletionItemProvider("rust", {
-    triggerCharacters: [".", ":", "u", "p", "f", "s", "e", "m", "c", "t", "v", "a", "b"],
-    // Use async completion — Monaco supports returning a Promise
+    triggerCharacters: [".", ":", "a", "b", "c", "d", "e", "f", "g", "h", "i", "l", "m", "p", "r", "s", "t", "u", "v", "w"],
     provideCompletionItems: async (model, position) => {
       const source = model.getValue();
-      const workerPosition = {
-        line: position.lineNumber - 1,  // Monaco is 1-based, tree-sitter is 0-based
-        column: position.column - 1,
-      };
+      const uri = `file:///tmp/soroban-builds/${workspaceId}/${model.uri.path.split("/").pop() === "lib.rs" ? "src/lib.rs" : model.uri.path.replace("/", "")}`;
 
-      // Request completions from the tree-sitter worker
-      const workerSuggestions = await requestCompletionsFromWorker(source, workerPosition);
-
-      // If worker returned suggestions, use them
-      if (workerSuggestions.length > 0) {
-        const word = model.getWordUntilPosition(position);
-        const lineUntilPosition = model.getValueInRange({
-          startLineNumber: position.lineNumber,
-          startColumn: 1,
-          endLineNumber: position.lineNumber,
-          endColumn: position.column,
-        });
-
-        const isAfterDoubleColon = lineUntilPosition.endsWith("::");
-        const isAfterDot = lineUntilPosition.endsWith(".");
-
-        let range: Monaco.IRange;
-        if (isAfterDoubleColon || isAfterDot) {
-          range = {
-            startLineNumber: position.lineNumber,
-            endLineNumber: position.lineNumber,
-            startColumn: position.column,
-            endColumn: position.column,
-          };
+      // Sync document to LSP server
+      if (lspClient) {
+        if (currentFileUri !== uri) {
+          // File changed — send didOpen
+          currentFileUri = uri;
+          await lspClient.didOpen(uri, "rust", source).catch(() => {});
         } else {
-          range = {
+          // Same file — send didChange
+          await lspClient.didChange(source).catch(() => {});
+        }
+
+        // Request completion from rust-analyzer
+        const lspItems = await lspClient.getCompletion(
+          uri,
+          position.lineNumber - 1,  // LSP is 0-based
+          position.column - 1
+        );
+
+        if (lspItems.length > 0) {
+          const word = model.getWordUntilPosition(position);
+          const lineUntilPosition = model.getValueInRange({
             startLineNumber: position.lineNumber,
+            startColumn: 1,
             endLineNumber: position.lineNumber,
-            startColumn: word.startColumn,
-            endColumn: word.endColumn,
-          };
-        }
-
-        const seenLabels = new Set<string>();
-        const suggestions: Monaco.languages.CompletionItem[] = [];
-
-        // Add worker suggestions first (highest priority — they're type-aware)
-        for (const s of workerSuggestions) {
-          if (seenLabels.has(s.label)) continue;
-          seenLabels.add(s.label);
-          suggestions.push({
-            label: s.label,
-            kind: s.kind,
-            detail: s.detail,
-            documentation: s.docs ? { value: s.docs } : undefined,
-            insertText: s.insertText || s.label,
-            range,
-            sortText: "0",
+            endColumn: position.column,
           });
-        }
 
-        // Also add local snippet items (from the autocomplete store) as fallback
-        const trimmed = lineUntilPosition.trim();
-        const isAfterUse = trimmed.startsWith("use ") || trimmed === "use";
-        if (!isAfterDot && !isAfterDoubleColon) {
-          for (const item of currentItems) {
-            if (item.kind === "module" && !isAfterUse) continue;
-            if (seenLabels.has(item.label)) continue;
-            seenLabels.add(item.label);
+          const isAfterDoubleColon = lineUntilPosition.endsWith("::");
+          const isAfterDot = lineUntilPosition.endsWith(".");
+
+          let range: Monaco.IRange;
+          if (isAfterDoubleColon || isAfterDot) {
+            range = {
+              startLineNumber: position.lineNumber,
+              endLineNumber: position.lineNumber,
+              startColumn: position.column,
+              endColumn: position.column,
+            };
+          } else {
+            range = {
+              startLineNumber: position.lineNumber,
+              endLineNumber: position.lineNumber,
+              startColumn: word.startColumn,
+              endColumn: word.endColumn,
+            };
+          }
+
+          const suggestions: Monaco.languages.CompletionItem[] = [];
+
+          // Add LSP completions (from rust-analyzer — real type inference!)
+          for (const item of lspItems) {
+            const docs = typeof item.documentation === "string"
+              ? item.documentation
+              : item.documentation?.value;
+
             suggestions.push({
               label: item.label,
-              kind: kindMap[item.kind] ?? monaco.languages.CompletionItemKind.Text,
+              kind: LSP_KIND_MAP[item.kind ?? 1] ?? monaco.languages.CompletionItemKind.Text,
               detail: item.detail,
-              documentation: item.documentation ? { value: item.documentation } : undefined,
+              documentation: docs ? { value: docs } : undefined,
               insertText: item.insertText || item.label,
-              insertTextRules: item.insertText && /\$\{/.test(item.insertText)
+              insertTextRules: item.insertTextFormat === 2
                 ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
                 : undefined,
               range,
-              sortText: item.kind === "snippet" ? "0" : "2",
+              sortText: item.sortText || "0",
             });
           }
-        }
 
-        return { suggestions };
+          // Also add local snippets (from autocomplete store) as supplement
+          const trimmed = lineUntilPosition.trim();
+          const isAfterUse = trimmed.startsWith("use ") || trimmed === "use";
+          if (!isAfterDot && !isAfterDoubleColon) {
+            for (const item of currentItems) {
+              if (item.kind === "module" && !isAfterUse) continue;
+              if (suggestions.some(s => s.label === item.label)) continue;
+              suggestions.push({
+                label: item.label,
+                kind: kindMap[item.kind] ?? monaco.languages.CompletionItemKind.Text,
+                detail: item.detail,
+                documentation: item.documentation ? { value: item.documentation } : undefined,
+                insertText: item.insertText || item.label,
+                insertTextRules: item.insertText && /\$\{/.test(item.insertText)
+                  ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
+                  : undefined,
+                range,
+                sortText: item.kind === "snippet" ? "1" : "2",
+              });
+            }
+          }
+
+          return { suggestions };
+        }
       }
 
-      // Worker failed — return empty (the fallback provider handles it)
+      // LSP not available — return empty (fallback provider handles it)
       return { suggestions: [] };
     },
   });
 
-  console.log("[autocomplete] tree-sitter provider registered for 'rust' language");
+  console.log("[lsp] LSP provider registered for 'rust' language");
 
   return {
     dispose: () => {
       provider.dispose();
       fallback.dispose();
       unsubscribe();
+      if (lspClient) {
+        lspClient.dispose();
+        lspClient = null;
+      }
     },
   };
 }

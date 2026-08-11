@@ -235,6 +235,8 @@ function ThemeCard({
 function EditorSettings() {
   const editorFontSize = useThemeStore((s) => s.editorFontSize);
   const setEditorFontSize = useThemeStore((s) => s.setEditorFontSize);
+  const completionMode = useThemeStore((s) => s.completionMode);
+  const setCompletionMode = useThemeStore((s) => s.setCompletionMode);
   const [autosave, setAutosave] = useState(true);
   const [formatOnSave, setFormatOnSave] = useState(true);
   const [minimap, setMinimap] = useState(true);
@@ -257,6 +259,43 @@ function EditorSettings() {
               step={1}
               className="w-full"
             />
+          </div>
+
+          <div>
+            <label className="text-xs text-[var(--text-secondary)] mb-1.5 block">
+              Autocomplete mode
+            </label>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setCompletionMode("simple")}
+                className={`flex-1 rounded-md border px-3 py-2 text-xs transition-colors ${
+                  completionMode === "simple"
+                    ? "border-[var(--accent)] bg-[var(--accent-subtle)] text-[var(--accent)]"
+                    : "border-[var(--border-subtle)] text-[var(--text-secondary)] hover:border-[var(--accent)]"
+                }`}
+              >
+                <div className="font-medium">Simple (Local Index)</div>
+                <div className="text-[10px] text-[var(--text-muted)] mt-0.5">
+                  Lightweight, instant. Uses rustdoc JSON + source parsing.
+                </div>
+              </button>
+              <button
+                onClick={() => setCompletionMode("lsp")}
+                className={`flex-1 rounded-md border px-3 py-2 text-xs transition-colors ${
+                  completionMode === "lsp"
+                    ? "border-[var(--accent)] bg-[var(--accent-subtle)] text-[var(--accent)]"
+                    : "border-[var(--border-subtle)] text-[var(--text-secondary)] hover:border-[var(--accent)]"
+                }`}
+              >
+                <div className="font-medium">LSP (rust-analyzer)</div>
+                <div className="text-[10px] text-[var(--text-muted)] mt-0.5">
+                  Full type inference via WebSocket. Requires LSP server.
+                </div>
+              </button>
+            </div>
+            <p className="text-[10px] text-[var(--text-muted)] mt-1.5">
+              Changes take effect on next editor reload. LSP mode requires the rust-analyzer server to be running.
+            </p>
           </div>
 
           <SettingRow label="Auto-save" desc="Save files automatically when changed">

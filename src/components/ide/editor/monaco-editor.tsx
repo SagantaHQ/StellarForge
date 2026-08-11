@@ -5,7 +5,7 @@ import Editor, { type OnMount, type BeforeMount } from "@monaco-editor/react";
 import type * as Monaco from "monaco-editor";
 import { useThemeStore } from "@/stores/theme-store";
 import { buildMonacoTheme } from "@/lib/themes/mappers";
-import { registerSorobanLanguage, registerLspProvider } from "./use-monaco";
+import { registerSorobanLanguage, registerCompletionProvider } from "./use-monaco";
 import { useAttributionStore } from "@/stores/attribution-store";
 import { lintSorobanSecurity, lintResultsToMarkers } from "@/lib/soroban/security-linter";
 
@@ -114,15 +114,15 @@ export function MonacoEditor({
       monaco.editor.setModelLanguage(model, monacoLanguage(language));
     }
 
-    // Register LSP-powered autocomplete provider using THIS Monaco instance.
-    // Connects to the LSP gateway server (rust-analyzer) via WebSocket.
-    // The LSP server runs as a separate bm2-managed process — completely
-    // independent of Next.js. No heavy monaco-languageclient package.
+    // Register the completion provider using THIS Monaco instance.
+    // Mode is configurable in Settings: "simple" (default, local index)
+    // or "lsp" (rust-analyzer via WebSocket).
     if (autocompleteProviderRef.current) {
       autocompleteProviderRef.current.dispose();
     }
-    const workspaceId = "local-project"; // TODO: use actual project ID
-    autocompleteProviderRef.current = registerLspProvider(monaco, workspaceId);
+    const completionMode = useThemeStore.getState().completionMode || "simple";
+    const workspaceId = "local-project";
+    autocompleteProviderRef.current = registerCompletionProvider(monaco, workspaceId, completionMode);
 
     // §6.1 — Add "Add Comment" to the editor context menu
     editor.addAction({

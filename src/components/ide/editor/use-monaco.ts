@@ -916,3 +916,30 @@ export function registerLspProvider(monaco: typeof Monaco, workspaceId: string):
   };
 }
 
+// ── Unified completion provider (switches between simple + LSP) ───────
+
+/**
+ * Register the completion provider based on the user's settings.
+ *
+ * Modes:
+ *   - "simple" (default): uses the local rustdoc index + source-parsed
+ *     symbols. No server needed. Lightweight, instant.
+ *   - "lsp": connects to the rust-analyzer LSP server via WebSocket.
+ *     Real type inference, go-to-def, hover. Requires the LSP gateway
+ *     server to be running (bm2-managed, independent of Next.js).
+ *
+ * The mode is stored in the theme-store (persisted to localStorage)
+ * and can be toggled in Settings → Editor → Autocomplete Mode.
+ */
+export function registerCompletionProvider(
+  monaco: typeof Monaco,
+  workspaceId: string,
+  mode: "simple" | "lsp"
+): { dispose: () => void } {
+  if (mode === "lsp") {
+    console.log("[autocomplete] using LSP mode (rust-analyzer via WebSocket)");
+    return registerLspProvider(monaco, workspaceId);
+  }
+  console.log("[autocomplete] using simple mode (local index)");
+  return registerAutocompleteProvider(monaco);
+}

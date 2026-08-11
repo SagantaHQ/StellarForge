@@ -21,6 +21,8 @@ interface ThemeState {
   editorFontSize: number;
   /** Whether to use prefers-color-scheme on first visit (cleared after first explicit pick) */
   respectsSystemPreference: boolean;
+  /** Autocomplete mode: "simple" (local index) or "lsp" (rust-analyzer via WebSocket) */
+  completionMode: "simple" | "lsp";
 
   setTheme: (id: string) => void;
   toggleMode: () => void;
@@ -28,6 +30,7 @@ interface ThemeState {
   registerCustomTheme: (theme: ThemeDefinition) => void;
   removeCustomTheme: (id: string) => void;
   setEditorFontSize: (size: number) => void;
+  setCompletionMode: (mode: "simple" | "lsp") => void;
   getActiveTheme: () => ThemeDefinition;
   getAllThemes: () => ThemeDefinition[];
 }
@@ -38,7 +41,6 @@ function detectInitialMode(): "dark" | "light" {
 }
 
 function detectInitialThemeId(): string {
-  // Always default to Midnight — the user can switch in Settings
   return DEFAULT_DARK_THEME_ID;
 }
 
@@ -49,7 +51,8 @@ export const useThemeStore = create<ThemeState>()(
       preferredMode: detectInitialMode(),
       customThemes: [],
       editorFontSize: 13,
-      respectsSystemPreference: false, // midnight is the default, don't auto-switch
+      respectsSystemPreference: false,
+      completionMode: "simple", // default to simple (local index — no server needed)
 
       setTheme: (id) =>
         set({ themeId: id, respectsSystemPreference: false }),
@@ -82,6 +85,8 @@ export const useThemeStore = create<ThemeState>()(
 
       setEditorFontSize: (size) => set({ editorFontSize: size }),
 
+      setCompletionMode: (mode) => set({ completionMode: mode }),
+
       getActiveTheme: () => {
         const { themeId, customThemes } = get();
         return (
@@ -99,13 +104,13 @@ export const useThemeStore = create<ThemeState>()(
     {
       name: "soroban-build:theme",
       storage: createJSONStorage(() => localStorage),
-      // Only persist user-relevant fields, not the resolved theme
       partialize: (s) => ({
         themeId: s.themeId,
         preferredMode: s.preferredMode,
         customThemes: s.customThemes,
         editorFontSize: s.editorFontSize,
         respectsSystemPreference: s.respectsSystemPreference,
+        completionMode: s.completionMode,
       }),
     }
   )

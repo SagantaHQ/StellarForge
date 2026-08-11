@@ -37,7 +37,7 @@ const BUILDS_DIR = "/tmp/soroban-builds";
 const CARGO_HOME = `${HOME}/.cargo`;
 const RUSTUP_HOME = `${HOME}/.rustup`;
 const RUST_ANALYZER_BIN = `${CARGO_HOME}/bin/rust-analyzer`;
-const IDLE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+const IDLE_TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes (frees RAM quickly)
 
 // ── Types ─────────────────────────────────────────────────────────────
 interface LspSession {

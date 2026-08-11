@@ -55,7 +55,16 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile, walle
   const [asyncUsernameStatus, setAsyncUsernameStatus] = useState<"checking" | "available" | "taken">("checking");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [showUsernameConfirm, setShowUsernameConfirm] = useState(false);
+  const [usernameLocked, setUsernameLocked] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Sync usernameLocked with existingProfile on open
+  useEffect(() => {
+    if (open) {
+      setUsernameLocked(!!existingProfile?.isCustomUsername);
+    }
+  }, [open, existingProfile]);
 
   // When opening with an existing profile, pre-fill and skip to profile step
   useEffect(() => {
@@ -111,7 +120,7 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile, walle
     if (step !== "profile") return;
     if (!username || username.length < 3 || !/^[a-z0-9_]+$/i.test(username)) return;
     // Skip availability check only if the username is truly locked (custom)
-    if (existingProfile?.isCustomUsername) return;
+    if (usernameLocked) return;
     // Also skip if the username hasn't changed from the current one
     if (existingProfile?.username && existingProfile.username === username.toLowerCase()) {
       setAsyncUsernameStatus("available");
@@ -141,12 +150,21 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile, walle
   async function handleSaveProfile() {
     if (usernameStatus !== "available") return;
     if (!address) return;
+
+    // Check if the username is being changed (not just updating bio/avatar)
+    const isUsernameChange = !usernameLocked &&
+      (!existingProfile?.username || existingProfile.username !== username.toLowerCase());
+
+    // If the username is being changed, show confirmation popup first
+    if (isUsernameChange && !showUsernameConfirm) {
+      setShowUsernameConfirm(true);
+      return;
+    }
+
     setSaving(true);
     setSaveError(null);
 
     try {
-      // Wallet ownership was already proven during login (SIWS at sc-connect).
-      // We just upsert the profile by wallet address — no additional signing.
       const res = await fetch("/api/profile", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -160,7 +178,6 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile, walle
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: res.statusText }));
-        // If the server returned 502/503/etc, show a generic message
         if (res.status >= 500) {
           throw new Error("Server error — please try again");
         }
@@ -168,6 +185,11 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile, walle
           ? `${err.error}`
           : err.error ?? `Save failed (${res.status})`;
         throw new Error(msg);
+      }
+
+      // Lock the username in the UI after successful save
+      if (isUsernameChange) {
+        setUsernameLocked(true);
       }
 
       onComplete({
@@ -181,6 +203,7 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile, walle
       setSaveError(err instanceof Error ? err.message : String(err));
     } finally {
       setSaving(false);
+      setShowUsernameConfirm(false);
     }
   }
 
@@ -287,30 +310,29 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile, walle
               <div>
                 <label className="text-[11px] font-medium text-[var(--text-secondary)] mb-1 block">
                   Username{" "}
-                  {existingProfile?.isCustomUsername ? (
-                    <span className="text-[var(--text-muted)]">(locked — already set)</span>
+                  {usernameLocked ? (
+                    <span className="text-[var(--text-muted)]">(locked — cannot be changed)</span>
                   ) : (
-                    <span className="text-[var(--status-success)]">(changeable)</span>
+                    <span className="text-[var(--status-success)]">(changeable — once set, cannot be changed)</span>
                   )}
                 </label>
                 <div className="relative">
                   <input
                     value={username}
                     onChange={(e) => {
-                      // Only allow editing if the username is NOT custom (not locked)
-                      if (!existingProfile?.isCustomUsername) {
+                      if (!usernameLocked) {
                         setUsername(e.target.value);
                       }
                     }}
-                    readOnly={!!existingProfile?.isCustomUsername}
+                    readOnly={usernameLocked}
                     placeholder="e.g. soroban-dev"
                     className={cn(
                       "w-full rounded border bg-[var(--surface-sunken)] px-2.5 py-1.5 text-[13px] text-[var(--text-primary)] outline-none transition-colors placeholder:text-[var(--text-muted)]",
-                      existingProfile?.isCustomUsername && "opacity-60 cursor-not-allowed",
-                      usernameStatus === "available" && "border-[var(--status-success)]",
-                      usernameStatus === "taken" && "border-[var(--status-error)]",
-                      usernameStatus === "invalid" && "border-[var(--status-warning)]",
-                      (usernameStatus === "idle" || usernameStatus === "checking") && "border-[var(--border-subtle)] focus:border-[var(--accent)]"
+                      usernameLocked && "opacity-60 cursor-not-allowed",
+                      !usernameLocked && usernameStatus === "available" && "border-[var(--status-success)]",
+                      !usernameLocked && usernameStatus === "taken" && "border-[var(--status-error)]",
+                      !usernameLocked && usernameStatus === "invalid" && "border-[var(--status-warning)]",
+                      !usernameLocked && (usernameStatus === "idle" || usernameStatus === "checking") && "border-[var(--border-subtle)] focus:border-[var(--accent)]"
                     )}
                   />
                   <div className="absolute right-2 top-1/2 -translate-y-1/2">
@@ -359,14 +381,45 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile, walle
                 </div>
               )}
 
-              <Button
-                onClick={handleSaveProfile}
-                disabled={usernameStatus !== "available" || saving}
-                className="w-full gap-2 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)] disabled:opacity-50"
-              >
-                {saving ? <Loader2 size={14} strokeWidth={1.75} className="animate-spin" /> : <Save size={14} strokeWidth={1.75} />}
-                {saving ? "Saving…" : "Save profile"}
-              </Button>
+              {showUsernameConfirm && (
+                <div className="rounded-md border border-[var(--status-warning)] bg-[color-mix(in_srgb,var(--status-warning)_10%,transparent)] p-3">
+                  <div className="flex items-start gap-2 mb-2">
+                    <AlertCircle size={14} strokeWidth={1.75} className="text-[var(--status-warning)] mt-0.5 shrink-0" />
+                    <div className="text-[11px] text-[var(--text-secondary)]">
+                      <div className="font-medium text-[var(--status-warning)]">Important: Username can only be changed once</div>
+                      <div className="mt-1">
+                        You are about to set your username to <span className="font-mono font-medium text-[var(--text-primary)]">{username}</span>.
+                        After this, your username will be permanently locked and cannot be changed again.
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex gap-2 justify-end">
+                    <button
+                      onClick={() => setShowUsernameConfirm(false)}
+                      className="rounded px-2.5 py-1 text-[11px] text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleSaveProfile}
+                      className="rounded px-2.5 py-1 text-[11px] font-medium bg-[var(--status-warning)] text-black hover:opacity-90 transition-colors"
+                    >
+                      Yes, lock username
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {!showUsernameConfirm && (
+                <Button
+                  onClick={handleSaveProfile}
+                  disabled={usernameStatus !== "available" || saving}
+                  className="w-full gap-2 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)] disabled:opacity-50"
+                >
+                  {saving ? <Loader2 size={14} strokeWidth={1.75} className="animate-spin" /> : <Save size={14} strokeWidth={1.75} />}
+                  {saving ? "Saving…" : "Save profile"}
+                </Button>
+              )}
 
               <p className="text-[10px] text-[var(--text-muted)] text-center">
                 Your wallet was verified when you signed in. No additional signature needed.

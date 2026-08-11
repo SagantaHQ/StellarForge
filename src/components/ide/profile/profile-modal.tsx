@@ -154,6 +154,10 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile, walle
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: res.statusText }));
+        // If the server returned 502/503/etc, show a generic message
+        if (res.status >= 500) {
+          throw new Error("Server error — please try again");
+        }
         const msg = err.field === "username"
           ? `${err.error}`
           : err.error ?? `Save failed (${res.status})`;

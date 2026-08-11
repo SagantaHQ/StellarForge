@@ -21,8 +21,6 @@ interface ThemeState {
   editorFontSize: number;
   /** Whether to use prefers-color-scheme on first visit (cleared after first explicit pick) */
   respectsSystemPreference: boolean;
-  /** Autocomplete mode: "simple" (local index) or "lsp" (rust-analyzer via WebSocket) */
-  completionMode: "simple" | "lsp";
 
   setTheme: (id: string) => void;
   toggleMode: () => void;
@@ -30,7 +28,6 @@ interface ThemeState {
   registerCustomTheme: (theme: ThemeDefinition) => void;
   removeCustomTheme: (id: string) => void;
   setEditorFontSize: (size: number) => void;
-  setCompletionMode: (mode: "simple" | "lsp") => void;
   getActiveTheme: () => ThemeDefinition;
   getAllThemes: () => ThemeDefinition[];
 }
@@ -52,7 +49,6 @@ export const useThemeStore = create<ThemeState>()(
       customThemes: [],
       editorFontSize: 13,
       respectsSystemPreference: false,
-      completionMode: "simple", // default to simple (local index — no server needed)
 
       setTheme: (id) =>
         set({ themeId: id, respectsSystemPreference: false }),
@@ -85,8 +81,6 @@ export const useThemeStore = create<ThemeState>()(
 
       setEditorFontSize: (size) => set({ editorFontSize: size }),
 
-      setCompletionMode: (mode) => set({ completionMode: mode }),
-
       getActiveTheme: () => {
         const { themeId, customThemes } = get();
         return (
@@ -110,7 +104,6 @@ export const useThemeStore = create<ThemeState>()(
         customThemes: s.customThemes,
         editorFontSize: s.editorFontSize,
         respectsSystemPreference: s.respectsSystemPreference,
-        completionMode: s.completionMode,
       }),
     }
   )

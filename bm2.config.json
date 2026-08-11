@@ -25,35 +25,6 @@
       "error_file": "/home/z/my-project/.zscripts/bm2-error.log",
       "merge_logs": true,
       "time": true
-    },
-    {
-      "name": "soroban-build-lsp",
-      "script": "index.ts",
-      "cwd": "/home/z/my-project/mini-services/lsp-server",
-      "interpreter": "/usr/local/bin/bun",
-      "env": {
-        "NODE_ENV": "development",
-        "HOME": "/home/z",
-        "LSP_PORT": "3099",
-        "CARGO_HOME": "/home/z/.cargo",
-        "RUSTUP_HOME": "/home/z/.rustup",
-        "PATH": "/home/z/.cargo/bin:/home/z/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-      },
-      "autorestart": true,
-      "maxRestarts": 50,
-      "minUptime": 2000,
-      "restartDelay": 3000,
-      "maxMemoryRestart": "512M",
-      "killTimeout": 5000,
-      "watch": false,
-      "out_file": "/home/z/my-project/.zscripts/lsp-out.log",
-      "error_file": "/home/z/my-project/.zscripts/lsp-error.log",
-      "merge_logs": true,
-      "time": true,
-      "healthCheckUrl": "http://localhost:3099/health",
-      "healthCheckInterval": 60000,
-      "healthCheckTimeout": 5000,
-      "healthCheckMaxFails": 3
     }
   ]
 }

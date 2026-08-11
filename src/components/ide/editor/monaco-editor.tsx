@@ -115,14 +115,23 @@ export function MonacoEditor({
     }
 
     // Register the completion provider using THIS Monaco instance.
-    // Mode is configurable in Settings: "simple" (default, local index)
-    // or "lsp" (rust-analyzer via WebSocket).
+    // Mode is determined by the server config (src/lib/config/server-config.ts)
+    // — NOT user-configurable. Only admins can change it.
     if (autocompleteProviderRef.current) {
       autocompleteProviderRef.current.dispose();
     }
-    const completionMode = useThemeStore.getState().completionMode || "simple";
     const workspaceId = "local-project";
-    autocompleteProviderRef.current = registerCompletionProvider(monaco, workspaceId, completionMode);
+    // Fetch server config to determine autocomplete mode
+    fetch("/api/config")
+      .then(r => r.ok ? r.json() : null)
+      .then(config => {
+        const mode = config?.autocompleteMode || "simple";
+        autocompleteProviderRef.current = registerCompletionProvider(monaco, workspaceId, mode);
+      })
+      .catch(() => {
+        // Fallback to simple mode if config fetch fails
+        autocompleteProviderRef.current = registerCompletionProvider(monaco, workspaceId, "simple");
+      });
 
     // §6.1 — Add "Add Comment" to the editor context menu
     editor.addAction({

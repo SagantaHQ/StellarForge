@@ -124,7 +124,35 @@ export function IdeShell() {
       setProfileOpen(true);
     }
     window.addEventListener("soroban-open-login", handleOpenLogin);
-    return () => window.removeEventListener("soroban-open-login", handleOpenLogin);
+
+    // Flush unsaved edits to IDB + server BEFORE the page unloads.
+    // Without this, reloading within the 2s auto-sync debounce window
+    // loses the user's latest edits (they exist in memory but never
+    // got persisted to the project snapshot or synced to the server).
+    function handleBeforeUnload() {
+      try {
+        const fsTree = useFileSystemStore.getState().tree;
+        if (fsTree.length > 0) {
+          // Persist the current tree to the project snapshot in IDB
+          // (synchronous-ish — uses sendBeacon for the server sync).
+          useProjectsStore.getState().persistActiveProjectFiles(fsTree);
+        }
+      } catch {
+        // Best-effort — don't block the unload
+      }
+    }
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    // Also flush on tab hide (mobile + background tab cases)
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") {
+        handleBeforeUnload();
+      }
+    });
+
+    return () => {
+      window.removeEventListener("soroban-open-login", handleOpenLogin);
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
   }, [hydrate, projectsHydrate]);
 
   // Auto-build on project load: when a project becomes active (and we haven't

@@ -122,13 +122,30 @@ export const useProjectsStore = create<ProjectsState>()(
           });
 
           // §8 — If there's an active project, load its files into the file
-          // system store so the editor can render immediately. This is the
-          // "restore last opened project" behavior on page load.
+          // system store so the editor can render immediately.
+          //
+          // IMPORTANT: per-file IDB is the SOURCE OF TRUTH (written on every
+          // keystroke via persistFile). The project-snapshot `files` array is
+          // a STALE snapshot from the last time the project was saved. If we
+          // always called loadFilesIntoFileSystem(activeStored.files), it
+          // would call replaceTree → fileClearAll → write stale snapshot,
+          // OVERWRITING the user's latest edits in per-file IDB.
+          //
+          // So: only load from the snapshot if the file-system store hasn't
+          // already hydrated with newer data from per-file IDB. The
+          // file-system store's hydrate() runs in parallel and reads per-file
+          // IDB — if it found files, we must NOT overwrite them.
           if (activeId) {
             const activeStored = stored.find((p) => p.id === activeId);
-            if (activeStored && activeStored.files.length > 0) {
+            // Check if the file-system store already has files (from per-file IDB)
+            const { useFileSystemStore } = await import("@/stores/file-system-store");
+            const fsTree = useFileSystemStore.getState().tree;
+            const fsHasFiles = fsTree.length > 0;
+
+            if (activeStored && activeStored.files.length > 0 && !fsHasFiles) {
+              // Per-file IDB was empty — fall back to the project snapshot
               await loadFilesIntoFileSystem(activeStored.files);
-            } else if (activeStored && activeStored.serverProjectId) {
+            } else if (activeStored && activeStored.serverProjectId && !fsHasFiles) {
               // Local stub with no cached files — try fetching from server
               try {
                 const res = await fetch(`/api/projects/${activeStored.serverProjectId}`);
@@ -153,6 +170,7 @@ export const useProjectsStore = create<ProjectsState>()(
                 // Network error — leave file system empty, welcome page shows
               }
             }
+            // else: per-file IDB has newer files — DON'T overwrite them.
           }
         } catch {
           set({ hydrated: true });

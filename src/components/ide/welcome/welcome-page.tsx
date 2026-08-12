@@ -69,18 +69,12 @@ export function WelcomePage({
         {/* Hero */}
         <div className="mb-10 text-center">
           <div className="mb-4 flex justify-center">
-            <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-[var(--surface-raised)] ring-1 ring-[var(--border-subtle)]">
-              <svg viewBox="0 0 256 256" className="h-9 w-9">
-                <path
-                  d="M 168 80 Q 168 56 128 56 Q 88 56 88 88 Q 88 120 128 128 Q 168 136 168 168 Q 168 200 128 200 Q 88 200 88 176"
-                  fill="none"
-                  stroke="var(--accent)"
-                  strokeWidth="14"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            </div>
+            <img
+              src="/saganta-logo.png"
+              alt="Soroban.Build"
+              className="h-14 w-14 rounded-xl ring-1 ring-[var(--border-subtle)]"
+              draggable={false}
+            />
           </div>
           <h1 className="text-2xl font-semibold text-[var(--text-primary)] sm:text-3xl">
             {greeting}, <span className="text-[var(--accent)]">{displayName}</span>

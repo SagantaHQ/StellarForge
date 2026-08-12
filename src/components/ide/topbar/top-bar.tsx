@@ -110,18 +110,13 @@ export function TopBar({
     >
       {/* Left: logo + project switcher */}
       <div className="flex items-center gap-3 min-w-0">
-        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-[var(--surface-raised)]">
-          <svg viewBox="0 0 256 256" className="h-5 w-5">
-            <path
-              d="M 168 80 Q 168 56 128 56 Q 88 56 88 88 Q 88 120 128 128 Q 168 136 168 168 Q 168 200 128 200 Q 88 200 88 176"
-              fill="none"
-              stroke="var(--accent)"
-              strokeWidth="14"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </div>
+        {/* Saganta logo — Orbitron Bold S on brand green rounded square */}
+        <img
+          src="/saganta-logo.png"
+          alt="Soroban.Build"
+          className="h-7 w-7 shrink-0 rounded-md"
+          draggable={false}
+        />
 
         <div className="hidden sm:flex items-center gap-2 min-w-0">
           {/* Project switcher dropdown */}

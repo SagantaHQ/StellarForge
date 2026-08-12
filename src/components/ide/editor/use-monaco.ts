@@ -5,6 +5,7 @@ import type * as Monaco from "monaco-editor";
 import { useThemeStore } from "@/stores/theme-store";
 import { buildMonacoTheme } from "@/lib/themes/mappers";
 import { useAutocompleteStore, type CompletionItem } from "@/stores/autocomplete-store";
+import { buildAutoImportEdit } from "@/lib/autocomplete/auto-import";
 
 // Monaco must be loaded client-side only via dynamic import in the consumer.
 // This hook sets up: theme registration, Rust/Soroban language config, dispose.
@@ -440,22 +441,53 @@ export function registerAutocompleteProvider(monaco: typeof Monaco): { dispose: 
       const suggestions: Monaco.languages.CompletionItem[] = [];
       const seenLabels = new Set<string>();
 
-      const add = (label: string, kind: number, detail: string | undefined, docs: string | undefined, insertText: string | undefined, sortText: string) => {
+      // Cache the file source once per completion request — auto-import
+      // scans it to detect existing `use` statements.
+      const source = model.getValue();
+
+      const add = (
+        label: string,
+        kind: number,
+        detail: string | undefined,
+        docs: string | undefined,
+        insertText: string | undefined,
+        sortText: string,
+        autoImport?: { crate: string; symbol: string; kind: string }
+      ) => {
         if (seenLabels.has(label)) return;
         seenLabels.add(label);
+
+        // Build auto-import edit (if applicable) — attached as
+        // `additionalTextEdits` so Monaco applies it atomically with the
+        // symbol insert. This is exactly how VS Code does auto-import.
+        let additionalTextEdits: Monaco.languages.TextEdit[] | undefined;
+        if (autoImport) {
+          const result = buildAutoImportEdit(source, autoImport);
+          if (result) {
+            additionalTextEdits = [result.edit as Monaco.languages.TextEdit];
+          }
+        }
+
         suggestions.push({
           label, kind, detail,
           documentation: docs ? { value: docs } : undefined,
           insertText: insertText || label,
           insertTextRules: insertText && /\$\{/.test(insertText) ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet : undefined,
           range, sortText,
+          additionalTextEdits,
         });
       };
 
       // Layer 1: Rustdoc symbols
       if (rustdocSymbols) {
         for (const sym of rustdocSymbols) {
-          const s = sym as { name: string; kind: string; detail?: string; docs?: string };
+          const s = sym as { name: string; kind: string; detail?: string; docs?: string; module?: string };
+          // Only attach auto-import in "normal" context (not after `.` or `::`
+          // or `use`). After `.` / `::` the user is qualifying a path; after
+          // `use` they're already writing the import.
+          const canAutoImport = !isAfterDot && !isAfterDoubleColon && !isAfterUse && !!s.module;
+          const ai = canAutoImport ? { crate: s.module!, symbol: s.name, kind: s.kind } : undefined;
+
           if (isAfterDot) {
             // After `.` → show functions + macros (method completion)
             if (s.kind === "function" || s.kind === "macro") {
@@ -471,7 +503,7 @@ export function registerAutocompleteProvider(monaco: typeof Monaco): { dispose: 
           } else {
             // Normal context → show types + constants + modules (skip functions)
             if (s.kind === "function" || s.kind === "macro") continue;
-            add(s.name, kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Text, s.detail, s.docs, undefined, "1");
+            add(s.name, kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Text, s.detail, s.docs, undefined, "1", ai);
           }
         }
       }
@@ -517,6 +549,12 @@ interface LspCompletionItem {
   insertText?: string;
   insertTextFormat?: number;
   sortText?: string;
+  // LSP-side auto-import edits (rust-analyzer provides these when it would
+  // auto-import the symbol). Format: [{ range: { start, end }, newText }]
+  additionalTextEdits?: Array<{
+    range: { start: { line: number; character: number }; end: { line: number; character: number } };
+    newText: string;
+  }>;
 }
 
 class LspClient {
@@ -856,6 +894,21 @@ export function registerLspProvider(monaco: typeof Monaco, workspaceId: string):
               ? item.documentation
               : item.documentation?.value;
 
+            // Convert LSP additionalTextEdits (0-based) to Monaco (1-based).
+            // rust-analyzer sends these for auto-import candidates.
+            let monacoAdditionalEdits: Monaco.languages.TextEdit[] | undefined;
+            if (item.additionalTextEdits && item.additionalTextEdits.length > 0) {
+              monacoAdditionalEdits = item.additionalTextEdits.map((e) => ({
+                range: {
+                  startLineNumber: e.range.start.line + 1,
+                  startColumn: e.range.start.character + 1,
+                  endLineNumber: e.range.end.line + 1,
+                  endColumn: e.range.end.character + 1,
+                },
+                text: e.newText,
+              }));
+            }
+
             suggestions.push({
               label: item.label,
               kind: LSP_KIND_MAP[item.kind ?? 1] ?? monaco.languages.CompletionItemKind.Text,
@@ -867,6 +920,7 @@ export function registerLspProvider(monaco: typeof Monaco, workspaceId: string):
                 : undefined,
               range,
               sortText: item.sortText || "0",
+              additionalTextEdits: monacoAdditionalEdits,
             });
           }
 

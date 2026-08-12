@@ -312,12 +312,29 @@ function ProviderConfigList() {
   const activeProviderId = useAIKeysStore((s) => s.activeProviderId);
   const setActiveProvider = useAIKeysStore((s) => s.setActiveProvider);
 
+  // State for the "add a provider" dropdown
+  const [showAddMenu, setShowAddMenu] = useState(false);
+  // State for the provider being added (shows the key input form before saving)
+  const [addingProviderId, setAddingProviderId] = useState<ProviderId | null>(null);
+
+  // A provider is "configured" if it has an entry in the store AND (for non-ollama) has an API key
+  const isConfigured = (id: ProviderId) => {
+    const config = providers[id];
+    if (!config) return false;
+    if (id === "ollama") return true;
+    return !!config.apiKey;
+  };
+
+  // Configured providers — these are the only ones we show by default
+  const configuredProviders = PROVIDER_LIST.filter((p) => isConfigured(p.id));
+  // Unconfigured providers — available in the "+" dropdown
+  const availableProviders = PROVIDER_LIST.filter((p) => !isConfigured(p.id));
+
   return (
     <div className="space-y-2">
-      {PROVIDER_LIST.map((p) => {
-        const config = providers[p.id];
-        // Ollama doesn't need an API key — it's "configured" if the entry exists
-        const isConfigured = !!config && (p.id === "ollama" ? true : !!config.apiKey);
+      {/* Configured providers — only show those with API keys set */}
+      {configuredProviders.map((p) => {
+        const config = providers[p.id]!;
         const isActive = activeProviderId === p.id;
         return (
           <div
@@ -342,24 +359,25 @@ function ProviderConfigList() {
                     cache
                   </span>
                 )}
-                {isConfigured && (
-                  <span className="flex items-center gap-1 text-[10px] text-[var(--status-success)]">
-                    <Check size={9} strokeWidth={2} />
-                    configured
-                  </span>
-                )}
+                <span className="flex items-center gap-1 text-[10px] text-[var(--status-success)]">
+                  <Check size={9} strokeWidth={2} />
+                  configured
+                </span>
               </div>
-              {isConfigured && !isActive && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => setActiveProvider(p.id)}
-                  className="h-6 text-[10px] text-[var(--accent)] hover:bg-[var(--surface-hover)] px-2"
-                >
-                  Set active
-                </Button>
-              )}
-              {isConfigured && (
+              <div className="flex items-center gap-1">
+                {!isActive && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setActiveProvider(p.id)}
+                    className="h-6 text-[10px] text-[var(--accent)] hover:bg-[var(--surface-hover)] px-2"
+                  >
+                    Set active
+                  </Button>
+                )}
+                {isActive && (
+                  <span className="text-[10px] font-medium text-[var(--accent)] px-2">active</span>
+                )}
                 <Button
                   size="sm"
                   variant="ghost"
@@ -368,28 +386,95 @@ function ProviderConfigList() {
                 >
                   Remove
                 </Button>
-              )}
+              </div>
             </div>
-            {isConfigured ? (
-              <ProviderModelPicker providerId={p.id} />
-            ) : (
-              <ProviderKeyInput
-                providerId={p.id}
-                requiresBaseUrl={p.id === "custom-openai"}
-                onSubmit={(apiKey, baseUrl) => {
-                  setProvider(p.id, {
-                    apiKey,
-                    model: "",
-                    baseUrl: baseUrl || undefined,
-                    enabled: true,
-                  });
-                  setActiveProvider(p.id);
-                }}
-              />
-            )}
+            <ProviderModelPicker providerId={p.id} />
           </div>
         );
       })}
+
+      {/* "Add provider" form — shown when user picks a provider from the + dropdown */}
+      {addingProviderId && (
+        <div className="rounded-md border border-[var(--accent)] bg-[var(--accent-subtle)] p-2.5">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-medium text-[var(--text-primary)]">
+                {PROVIDERS[addingProviderId]?.name ?? addingProviderId}
+              </span>
+              <span className="text-[10px] text-[var(--text-muted)]">adding…</span>
+            </div>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setAddingProviderId(null)}
+              className="h-6 text-[10px] text-[var(--text-muted)] hover:bg-[var(--surface-hover)] px-2"
+            >
+              Cancel
+            </Button>
+          </div>
+          <ProviderKeyInput
+            providerId={addingProviderId}
+            requiresBaseUrl={addingProviderId === "custom-openai"}
+            onSubmit={(apiKey, baseUrl) => {
+              setProvider(addingProviderId, {
+                apiKey,
+                model: "",
+                baseUrl: baseUrl || undefined,
+                enabled: true,
+              });
+              setActiveProvider(addingProviderId);
+              setAddingProviderId(null);
+            }}
+          />
+        </div>
+      )}
+
+      {/* "+" button to add a new provider — only show if there are unconfigured providers left */}
+      {availableProviders.length > 0 && !addingProviderId && (
+        <div className="relative">
+          <button
+            onClick={() => setShowAddMenu((v) => !v)}
+            className="flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-[var(--border-subtle)] py-2 text-[11px] text-[var(--text-muted)] hover:border-[var(--accent)] hover:text-[var(--accent)] transition-colors"
+          >
+            <Plus size={12} strokeWidth={2} />
+            Add AI provider
+          </button>
+          {showAddMenu && (
+            <div className="absolute z-10 mt-1 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--surface-panel)] shadow-lg max-h-60 overflow-y-auto">
+              {availableProviders.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => {
+                    setAddingProviderId(p.id);
+                    setShowAddMenu(false);
+                  }}
+                  className="flex w-full items-center justify-between px-2.5 py-1.5 text-[11px] text-[var(--text-primary)] hover:bg-[var(--surface-hover)] transition-colors"
+                >
+                  <span className="flex items-center gap-2">
+                    <Plus size={10} strokeWidth={2} className="text-[var(--text-muted)]" />
+                    {p.name}
+                  </span>
+                  <span className="flex items-center gap-1 text-[9px] text-[var(--text-muted)]">
+                    {p.requiresProxy && <span>proxy</span>}
+                    {p.supportsCaching && <span>cache</span>}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Empty state — no providers configured yet */}
+      {configuredProviders.length === 0 && !addingProviderId && (
+        <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface-sunken)] p-4 text-center">
+          <p className="text-[11px] text-[var(--text-muted)]">
+            No AI providers configured yet. Click{" "}
+            <span className="text-[var(--accent)] font-medium">"Add AI provider"</span>{" "}
+            above to set one up.
+          </p>
+        </div>
+      )}
     </div>
   );
 }

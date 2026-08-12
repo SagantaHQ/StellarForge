@@ -608,8 +608,15 @@ function ProviderPicker({ onClose, onOpenSettings }: { onClose: () => void; onOp
   const activeProviderId = useAIKeysStore((s) => s.activeProviderId);
   const setActiveProvider = useAIKeysStore((s) => s.setActiveProvider);
 
-  const configured = PROVIDER_LIST.filter((p) => providers[p.id]?.apiKey);
-  const unconfigured = PROVIDER_LIST.filter((p) => !providers[p.id]?.apiKey);
+  // Only show CONFIGURED providers in the chat picker.
+  // A provider is "configured" if it has an entry with an API key
+  // (or it's ollama, which doesn't need a key).
+  const configured = PROVIDER_LIST.filter((p) => {
+    const cfg = providers[p.id];
+    if (!cfg) return false;
+    if (p.id === "ollama") return true;
+    return !!cfg.apiKey;
+  });
 
   return (
     <div className="border-t border-[var(--border-subtle)] bg-[var(--surface-raised)] p-3 space-y-2">
@@ -622,7 +629,7 @@ function ProviderPicker({ onClose, onOpenSettings }: { onClose: () => void; onOp
           <X size={12} strokeWidth={1.75} />
         </button>
       </div>
-      {configured.length > 0 && (
+      {configured.length > 0 ? (
         <div className="space-y-1">
           <div className="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">Configured</div>
           {configured.map((p) => (
@@ -648,24 +655,24 @@ function ProviderPicker({ onClose, onOpenSettings }: { onClose: () => void; onOp
             </button>
           ))}
         </div>
-      )}
-      <div className="space-y-1">
-        <div className="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">Available</div>
-        <div className="grid grid-cols-2 gap-1">
-          {unconfigured.map((p) => (
-            <button
-              key={p.id}
-              onClick={() => {
-                onOpenSettings();
-                onClose();
-              }}
-              className="rounded border border-[var(--border-subtle)] bg-[var(--surface-panel)] px-2 py-1 text-[11px] text-[var(--text-secondary)] hover:border-[var(--accent)] hover:text-[var(--text-primary)] transition-colors"
-            >
-              {p.name}
-            </button>
-          ))}
+      ) : (
+        // No providers configured — prompt user to add one in Settings
+        <div className="space-y-2">
+          <p className="text-[11px] text-[var(--text-muted)]">
+            No AI providers configured yet.
+          </p>
+          <button
+            onClick={() => {
+              onOpenSettings();
+              onClose();
+            }}
+            className="flex w-full items-center justify-center gap-1.5 rounded border border-dashed border-[var(--border-subtle)] py-1.5 text-[11px] text-[var(--accent)] hover:border-[var(--accent)] transition-colors"
+          >
+            <Plus size={11} strokeWidth={2} />
+            Add a provider in Settings
+          </button>
         </div>
-      </div>
+      )}
     </div>
   );
 }

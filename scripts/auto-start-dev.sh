@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
-# Auto-start the Soroban dev server via pm2 when a new shell opens.
+# Auto-start the Soroban dev server when a new shell opens.
 # This survives sandbox resets because every new shell sources ~/.bashrc,
 # which sources this script.
 #
-# Idempotent: if pm2 + soroban-build-dev are already running, does nothing.
-# Also reinstalls stellar-cli if missing (sandbox resets wipe ~/.local/bin).
+# IMPORTANT: We run the dev server DIRECTLY via nohup — NOT via pm2.
+# pm2's auto-restart + Next.js HMR were fighting each other, causing
+# reload loops. Next.js dev server has its own HMR (Hot Module
+# Replacement) which is sufficient — we don't need an external process
+# manager auto-restarting it.
+#
+# Idempotent: if the dev server is already running, does nothing.
+# Also reinstalls stellar-cli + Rust if missing (sandbox resets wipe them).
 
 # 1. Make sure tools are on PATH
-export PATH="/home/z/.local/bin:/home/z/.npm-global/bin:$PATH"
+export PATH="/home/z/.local/bin:/home/z/.npm-global/bin:/home/z/.cargo/bin:$PATH"
 
-# 2. If pm2 binary is missing, reinstall it (sandbox resets wipe global npm packages)
-if ! command -v pm2 >/dev/null 2>&1; then
-  echo "[auto-start] pm2 missing — reinstalling..."
-  npm install -g pm2 >/dev/null 2>&1
-fi
-
-# 3. If stellar-cli is missing, reinstall it from GitHub releases (prebuilt binary)
+# 2. If stellar-cli is missing, reinstall it from GitHub releases (prebuilt binary)
 if ! command -v stellar >/dev/null 2>&1; then
   echo "[auto-start] stellar-cli missing — reinstalling v27.1.0..."
   mkdir -p /home/z/.local/bin
@@ -33,22 +33,31 @@ if ! command -v stellar >/dev/null 2>&1; then
   rm -rf "$TMPDIR"
 fi
 
-# 4. If pm2 STILL missing, give up silently (no internet, etc.)
-if ! command -v pm2 >/dev/null 2>&1; then
-  return 0 2>/dev/null || exit 0
+# 3. If Rust/cargo is missing, reinstall it (needed for stellar contract build)
+if ! command -v cargo >/dev/null 2>&1; then
+  echo "[auto-start] Rust missing — reinstalling..."
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal >/dev/null 2>&1
+  . "$HOME/.cargo/env"
+  rustup target add wasm32v1-none >/dev/null 2>&1
+  echo "[auto-start] Rust + wasm32 target installed"
 fi
 
-# 5. If pm2 daemon isn't running, start it (this also revives saved processes)
-if ! pm2 jlist >/dev/null 2>&1; then
-  pm2 resurrect >/dev/null 2>&1
+# 4. Kill any pm2 daemon that might be running (we don't use pm2 anymore)
+if command -v pm2 >/dev/null 2>&1; then
+  pm2 kill >/dev/null 2>&1 || true
 fi
 
-# 6. Check if soroban-build-dev is running. If not, start it.
-PM2_LIST="$(pm2 jlist 2>/dev/null || echo '[]')"
-if ! echo "$PM2_LIST" | grep -q '"soroban-build-dev"' 2>/dev/null; then
-  echo "[auto-start] starting soroban-build-dev..."
-  pm2 start /home/z/my-project/ecosystem.config.cjs >/dev/null 2>&1
+# 5. Check if the dev server is already running (via PID file)
+PID_FILE="/home/z/my-project/.zscripts/dev.pid"
+if [ -f "$PID_FILE" ]; then
+  PID=$(cat "$PID_FILE")
+  if kill -0 "$PID" 2>/dev/null; then
+    # Dev server is already running — nothing to do
+    return 0 2>/dev/null || exit 0
+  fi
+  rm -f "$PID_FILE"
 fi
 
-# 7. Save the process list so `pm2 resurrect` can restore it after future resets
-pm2 save >/dev/null 2>&1
+# 6. Start the dev server directly via nohup (no pm2, no auto-restart)
+echo "[auto-start] starting dev server..."
+bash /home/z/my-project/scripts/start-dev.sh --bg >/dev/null 2>&1

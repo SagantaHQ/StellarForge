@@ -17,6 +17,8 @@ import {
   BookOpen,
   RefreshCw,
   Loader2,
+  ChevronDown,
+  Search,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -543,6 +545,10 @@ function ProviderModelPicker({ providerId }: { providerId: string }) {
   const [modelError, setModelError] = useState<string | null>(null);
   const [showCustom, setShowCustom] = useState(config?.model === "__custom__");
 
+  // Searchable dropdown state
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+
   async function fetchModels() {
     if (!config?.apiKey) return;
     setLoadingModels(true);
@@ -564,37 +570,157 @@ function ProviderModelPicker({ providerId }: { providerId: string }) {
     }
   }, [config?.apiKey]);
 
+  // Filter models by search query (case-insensitive substring match)
+  const filteredModels = searchQuery.trim()
+    ? models.filter((m) => m.toLowerCase().includes(searchQuery.trim().toLowerCase()))
+    : models;
+
+  // Current display value
+  const currentValue = config?.model === "__custom__"
+    ? (config?.customModel || "Custom model name…")
+    : (config?.model || "");
+
+  function selectModel(model: string) {
+    setProvider(providerId as ProviderId, { model });
+    setShowCustom(model === "__custom__");
+    setDropdownOpen(false);
+    setSearchQuery("");
+  }
+
   return (
     <div className="space-y-1.5">
+      {/* Searchable model dropdown */}
       <div className="flex items-center gap-1.5">
-        <select
-          value={config?.model ?? ""}
-          onChange={(e) => {
-            setProvider(providerId as ProviderId, { model: e.target.value });
-            setShowCustom(e.target.value === "__custom__");
-          }}
-          className="flex-1 rounded border border-[var(--border-subtle)] bg-[var(--surface-panel)] px-2 py-1 text-[11px] text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
-        >
-          <option value="">Select model…</option>
-          {models.map((m) => (
-            <option key={m} value={m}>
-              {m}
-            </option>
-          ))}
-          <option value="__custom__">Custom model name…</option>
-        </select>
+        <div className="relative flex-1">
+          {/* Trigger button — shows current model + opens dropdown */}
+          <button
+            type="button"
+            onClick={() => setDropdownOpen((v) => !v)}
+            className={cn(
+              "flex w-full items-center justify-between rounded border bg-[var(--surface-panel)] px-2 py-1 text-[11px] outline-none transition-colors",
+              dropdownOpen
+                ? "border-[var(--accent)]"
+                : "border-[var(--border-subtle)] focus:border-[var(--accent)]"
+            )}
+          >
+            <span className={cn("truncate", currentValue ? "text-[var(--text-primary)] font-mono" : "text-[var(--text-muted)]")}>
+              {currentValue || "Select model…"}
+            </span>
+            <ChevronDown
+              size={10}
+              strokeWidth={2}
+              className={cn(
+                "ml-1 shrink-0 text-[var(--text-muted)] transition-transform",
+                dropdownOpen && "rotate-180"
+              )}
+            />
+          </button>
+
+          {/* Dropdown panel */}
+          {dropdownOpen && (
+            <>
+              {/* Click-away backdrop */}
+              <div
+                className="fixed inset-0 z-10"
+                onClick={() => { setDropdownOpen(false); setSearchQuery(""); }}
+              />
+              <div className="absolute z-20 mt-1 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--surface-panel)] shadow-lg">
+                {/* Search input */}
+                <div className="border-b border-[var(--border-subtle)] p-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <Search
+                      size={10}
+                      strokeWidth={2}
+                      className="text-[var(--text-muted)] shrink-0"
+                    />
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Search models…"
+                      autoFocus
+                      className="flex-1 bg-transparent text-[11px] text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)]"
+                    />
+                    {searchQuery && (
+                      <button
+                        onClick={() => setSearchQuery("")}
+                        className="text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                      >
+                        <X size={10} strokeWidth={2} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Model list (scrollable, filtered) */}
+                <div className="max-h-48 overflow-y-auto p-1">
+                  {loadingModels && (
+                    <div className="flex items-center justify-center py-3 text-[10px] text-[var(--text-muted)]">
+                      <Loader2 size={10} strokeWidth={2} className="animate-spin mr-1.5" />
+                      Loading models…
+                    </div>
+                  )}
+                  {!loadingModels && modelError && (
+                    <div className="px-2 py-1.5 text-[10px] text-[var(--status-error)]">
+                      {modelError}
+                    </div>
+                  )}
+                  {!loadingModels && !modelError && filteredModels.length === 0 && (
+                    <div className="px-2 py-2 text-center text-[10px] text-[var(--text-muted)]">
+                      {models.length === 0 ? "No models fetched — click ↻" : "No matches"}
+                    </div>
+                  )}
+                  {!loadingModels && filteredModels.map((m) => (
+                    <button
+                      key={m}
+                      onClick={() => selectModel(m)}
+                      className={cn(
+                        "flex w-full items-center justify-between rounded px-2 py-1 text-left text-[11px] font-mono transition-colors",
+                        config?.model === m
+                          ? "bg-[var(--accent-subtle)] text-[var(--accent)]"
+                          : "text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
+                      )}
+                    >
+                      <span className="truncate">{m}</span>
+                      {config?.model === m && (
+                        <Check size={9} strokeWidth={2} className="shrink-0 ml-1" />
+                      )}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Custom model option at bottom */}
+                <div className="border-t border-[var(--border-subtle)] p-1">
+                  <button
+                    onClick={() => selectModel("__custom__")}
+                    className={cn(
+                      "flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-[11px] transition-colors",
+                      config?.model === "__custom__"
+                        ? "bg-[var(--accent-subtle)] text-[var(--accent)]"
+                        : "text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+                    )}
+                  >
+                    <Plus size={10} strokeWidth={2} />
+                    Custom model name…
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Refresh button */}
         <button
           onClick={fetchModels}
           disabled={loadingModels}
           className="rounded px-1.5 py-1 text-[10px] text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] disabled:opacity-50"
           title="Refresh model list"
         >
-          {loadingModels ? "…" : "↻"}
+          {loadingModels ? <Loader2 size={10} strokeWidth={2} className="animate-spin" /> : <RefreshCw size={10} strokeWidth={2} />}
         </button>
       </div>
-      {modelError && (
-        <div className="text-[10px] text-[var(--status-error)]">{modelError}</div>
-      )}
+
+      {/* Custom model name input */}
       {showCustom && (
         <input
           type="text"
@@ -606,7 +732,9 @@ function ProviderModelPicker({ providerId }: { providerId: string }) {
           className="w-full rounded border border-[var(--border-subtle)] bg-[var(--surface-panel)] px-2 py-1 text-[11px] font-mono text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
         />
       )}
-      {config?.model && config.model !== "__custom__" && (
+
+      {/* Active model display */}
+      {config?.model && config.model !== "__custom__" && !dropdownOpen && (
         <div className="text-[10px] text-[var(--text-muted)]">
           Active model: <span className="font-mono text-[var(--text-secondary)]">{config.model}</span>
         </div>

@@ -57,6 +57,7 @@ export function AgentPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
   const activeProviderId = useAIKeysStore((s) => s.activeProviderId);
   const providers = useAIKeysStore((s) => s.providers);
   const setActiveProvider = useAIKeysStore((s) => s.setActiveProvider);
+  const profile = useProfileStore((s) => s.profile);
   const allowAlways = useAIKeysStore((s) => s.allowAlways);
   const setAllowAlways = useAIKeysStore((s) => s.setAllowAlways);
 

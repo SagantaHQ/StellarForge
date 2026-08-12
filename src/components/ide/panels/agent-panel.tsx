@@ -355,7 +355,7 @@ export function AgentPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
         </button>
       </div>
 
-      {/* Scope badge */}
+      {/* Scope badge + provider/model selector */}
       <div className="flex items-center justify-between border-b border-[var(--border-subtle)] bg-[var(--surface-sunken)] px-3 py-1.5">
         <div className="flex items-center gap-2 text-[11px]">
           <span className="text-[var(--text-muted)]">Scope:</span>
@@ -363,15 +363,32 @@ export function AgentPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
             {scope.replace("-", " ")}
           </span>
         </div>
-        {hasProvider && activeProviderId && (
-          <div className="flex items-center gap-1.5 text-[11px]">
-            <span className="text-[var(--text-muted)]">{PROVIDERS[activeProviderId].name}</span>
-            <span className="text-[var(--text-muted)]">·</span>
-            <span className="font-mono text-[var(--text-secondary)]">
-              {activeConfig?.model === "__custom__" ? activeConfig?.customModel : activeConfig?.model}
-            </span>
-          </div>
-        )}
+        {/* Provider + model selector — moved here from the input row to free
+            up horizontal space in the chat input. Click opens the picker. */}
+        <button
+          onClick={() => setShowProviderPicker((v) => !v)}
+          className={cn(
+            "flex items-center gap-1.5 rounded px-1.5 py-0.5 text-[11px] transition-colors",
+            activeProviderId
+              ? "text-[var(--accent)] hover:bg-[var(--surface-hover)]"
+              : "text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+          )}
+          aria-label="Switch provider"
+          title="Switch provider / model"
+        >
+          {hasProvider && activeProviderId ? (
+            <>
+              <span className="max-w-[100px] truncate">{PROVIDERS[activeProviderId].name}</span>
+              <span className="text-[var(--text-muted)]">·</span>
+              <span className="max-w-[120px] truncate font-mono text-[10px]">
+                {activeConfig?.model === "__custom__" ? activeConfig?.customModel : activeConfig?.model}
+              </span>
+            </>
+          ) : (
+            <span>Pick provider</span>
+          )}
+          <ChevronDown size={10} strokeWidth={1.75} />
+        </button>
       </div>
 
       {/* Messages */}
@@ -476,22 +493,8 @@ export function AgentPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
             className="flex-1 bg-transparent text-[13px] text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)] resize-none disabled:opacity-50"
           />
           <div className="flex items-center gap-1">
-            <button
-              onClick={() => setShowProviderPicker((v) => !v)}
-              className={cn(
-                "flex h-7 items-center gap-1 rounded px-2 text-[11px] transition-colors",
-                activeProviderId
-                  ? "text-[var(--accent)] hover:bg-[var(--surface-hover)]"
-                  : "text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
-              )}
-              aria-label="Switch provider"
-              title="Switch provider"
-            >
-              <span className="max-w-[80px] truncate">
-                {activeProviderId ? PROVIDERS[activeProviderId].name : "Pick provider"}
-              </span>
-              <ChevronDown size={10} strokeWidth={1.75} />
-            </button>
+            {/* Provider/model selector moved to the header bar above to free
+                up horizontal space in the input row. */}
             <Button
               size="sm"
               onClick={handleSend}

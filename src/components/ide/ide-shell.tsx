@@ -382,9 +382,8 @@ export function IdeShell() {
               focusedCommentId: null,
             });
 
-            // 7. Clear deploy store
-            const { useDeployStore } = await import("@/stores/deploy-store");
-            useDeployStore.getState().reset();
+            // 7. (deploy-store removed — deploy now uses wallet-based flow
+            //     via /api/contracts/deploy-tx + appkit.signTransaction)
 
             // 8. Clear autocomplete store
             const { useAutocompleteStore } = await import("@/stores/autocomplete-store");

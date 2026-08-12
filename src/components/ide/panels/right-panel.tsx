@@ -14,6 +14,7 @@ import {
   Search as SearchIcon,
   FileText,
   ExternalLink,
+  Wallet,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -535,8 +536,20 @@ function DeployPanel({ network }: { network: string }) {
   }
 
   async function handleDeploy() {
-    if (!profile?.address || !activeProject?.serverProjectId) {
-      setError("You must be logged in and have an active project to deploy.");
+    if (!profile?.address) {
+      setError("Connect your wallet first — deployment requires wallet signing.");
+      return;
+    }
+    if (!walletConnected) {
+      setError("Wallet not connected. Click 'Connect Wallet' above to connect.");
+      return;
+    }
+    if (!activeProject?.serverProjectId) {
+      setError("No active project. Open or create a project first.");
+      return;
+    }
+    if (!wasmInfo) {
+      setError("No WASM file. Build the contract first.");
       return;
     }
 
@@ -572,20 +585,35 @@ function DeployPanel({ network }: { network: string }) {
       // Get the appkit instance to sign the transaction
       const appkit = await getAppKitForSigning();
       if (!appkit) {
-        setError("Wallet not connected. Connect your wallet first.");
+        setError(
+          "Wallet signing is not available. Make sure your wallet is connected and the stellar-appkit modal is loaded. Try reconnecting your wallet."
+        );
         setDeploying(false);
         setStatusMsg("");
         return;
       }
 
-      const signResult = await appkit.signTransaction(txData.unsignedXdr, {
-        network: network.toUpperCase(),
-        networkPassphrase: txData.networkPassphrase,
-      });
-
-      const signedXdr = signResult.signedTxXdr || signResult.signedXdr;
-      if (!signedXdr) {
-        throw new Error("Wallet did not return a signed transaction");
+      let signedXdr: string;
+      try {
+        const signResult = await appkit.signTransaction(txData.unsignedXdr, {
+          network: network.toUpperCase(),
+          networkPassphrase: txData.networkPassphrase,
+        });
+        signedXdr = signResult.signedTxXdr || signResult.signedXdr || "";
+        if (!signedXdr) {
+          throw new Error("Wallet did not return a signed transaction");
+        }
+      } catch (signErr) {
+        // User rejected the sign request, or wallet threw an error
+        const msg = signErr instanceof Error ? signErr.message : String(signErr);
+        if (msg.toLowerCase().includes("reject") || msg.toLowerCase().includes("cancel") || msg.toLowerCase().includes("denied")) {
+          setError("Transaction signing was rejected. Please approve the transaction in your wallet to deploy.");
+        } else {
+          setError(`Wallet signing failed: ${msg}`);
+        }
+        setDeploying(false);
+        setStatusMsg("");
+        return;
       }
 
       // Step 3: Submit the signed transaction
@@ -641,10 +669,24 @@ function DeployPanel({ network }: { network: string }) {
         {isUpgrade ? "Upgrade Contract" : "Deploy Contract"}
       </h3>
 
-      {/* Not logged in */}
+      {/* Not logged in — deployment is impossible without a wallet */}
       {!walletConnected && (
-        <div className="rounded-md border border-[var(--status-warning)]/40 bg-[color-mix(in_srgb,var(--status-warning)_8%,transparent)] p-2.5 text-[11px] text-[var(--text-secondary)]">
-          Connect your wallet to deploy a contract.
+        <div className="rounded-md border border-[var(--status-warning)]/40 bg-[color-mix(in_srgb,var(--status-warning)_8%,transparent)] p-3 space-y-2">
+          <div className="flex items-center gap-2 text-[11px] text-[var(--text-secondary)]">
+            <Wallet size={12} strokeWidth={1.75} className="text-[var(--status-warning)] shrink-0" />
+            <span>Wallet not connected. Deployment requires wallet signing — no secret keys needed.</span>
+          </div>
+          <Button
+            size="sm"
+            onClick={() => {
+              const handle = (window as unknown as { __walletModal?: { open: () => void } }).__walletModal;
+              handle?.open();
+            }}
+            className="w-full h-7 gap-1.5 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)]"
+          >
+            <Wallet size={11} strokeWidth={1.75} />
+            Connect Wallet
+          </Button>
         </div>
       )}
 

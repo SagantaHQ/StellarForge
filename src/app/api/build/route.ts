@@ -50,7 +50,8 @@ async function resolveBinary(name: string): Promise<string | null> {
   const { existsSync } = await import("fs");
   const home = process.env.HOME ?? "/home/z";
   const candidates = [
-    `${home}/.cargo/bin/${name}`,
+    `${home}/.local/bin/${name}`,   // stellar-cli (prebuilt binary install location)
+    `${home}/.cargo/bin/${name}`,   // cargo-installed binaries
     `/usr/local/bin/${name}`,
     `/usr/bin/${name}`,
     `/bin/${name}`,
@@ -85,10 +86,11 @@ export async function POST(req: NextRequest) {
   const fs = await import("fs/promises");
 
   const home = process.env.HOME ?? "/home/z";
+  const localBin = `${home}/.local/bin`;
   const cargoBin = `${home}/.cargo/bin`;
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    PATH: `${cargoBin}:${process.env.PATH ?? ""}`,
+    PATH: `${localBin}:${cargoBin}:${process.env.PATH ?? ""}`,
     CARGO_HOME: `${home}/.cargo`,
     RUSTUP_HOME: `${home}/.rustup`,
     // Force cargo to emit colorless output (we colorize in the UI)
@@ -124,6 +126,7 @@ export async function POST(req: NextRequest) {
             : `Run: cargo install stellar-cli`,
         cli: buildCommand,
         searched: [
+          `${home}/.local/bin/${buildCommand}`,
           `${home}/.cargo/bin/${buildCommand}`,
           `/usr/local/bin/${buildCommand}`,
           `/usr/bin/${buildCommand}`,

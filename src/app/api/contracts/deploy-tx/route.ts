@@ -155,10 +155,11 @@ export async function POST(req: NextRequest) {
     // For upgrades, we use: stellar contract deploy --build-only --wasm <path> --source-account <addr> --rpc-url <rpc> --network-passphrase <passphrase> --contract-id <existing>
 
     const home = process.env.HOME ?? "/home/z";
+    const localBin = `${home}/.local/bin`;
     const cargoBin = `${home}/.cargo/bin`;
     const env = {
       ...process.env,
-      PATH: `${cargoBin}:${process.env.PATH ?? ""}`,
+      PATH: `${localBin}:${cargoBin}:${process.env.PATH ?? ""}`,
       CARGO_HOME: `${home}/.cargo`,
       RUSTUP_HOME: `${home}/.rustup`,
     };

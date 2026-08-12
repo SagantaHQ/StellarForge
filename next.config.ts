@@ -7,6 +7,21 @@ const nextConfig: NextConfig = {
     ignoreBuildErrors: true,
   },
   reactStrictMode: false,
+  // Ignore non-source directories from the file watcher so writes to them
+  // don't trigger dev-mode recompiles / full page reloads.
+  // - data/: rustdoc-index JSON files written by /api/autocomplete/build-deps
+  // - download/: generated logos, screenshots, exported files
+  // - .zscripts/: pm2 logs
+  // - upload/: user-uploaded files
+  watchOptions: {
+    ignored: [
+      "**/data/**",
+      "**/download/**",
+      "**/.zscripts/**",
+      "**/upload/**",
+      "**/db/**",
+    ],
+  },
   serverExternalPackages: [
     "@prisma/client",
     "@node-rs/argon2",

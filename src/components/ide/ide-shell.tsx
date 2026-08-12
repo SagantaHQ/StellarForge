@@ -154,13 +154,15 @@ export function IdeShell() {
   }, [activeProject?.id, projectsHydrated, startBuild]);
 
   // Build autocomplete artifacts after a successful build (or project load)
-  // Also triggers when the file tree changes (e.g. after package add/remove)
+  // Debounced (800ms) so rapid file edits don't trigger a re-parse on every
+  // keystroke. The timer resets on each `tree` change, so it only fires
+  // 800ms after the user STOPS typing.
+  // Also triggers on project switch (activeProject?.id change).
   useEffect(() => {
     if (activeProject && projectsHydrated) {
-      // Build immediately on project load (no build needed — we parse source)
       const timer = setTimeout(() => {
         buildAutocomplete(tree);
-      }, 300);
+      }, 800);
       return () => clearTimeout(timer);
     }
   }, [activeProject?.id, projectsHydrated, buildAutocomplete, tree]);

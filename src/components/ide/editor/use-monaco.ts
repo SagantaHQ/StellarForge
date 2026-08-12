@@ -404,6 +404,19 @@ export function registerAutocompleteProvider(monaco: typeof Monaco): { dispose: 
       const isAfterDoubleColon = lineUntilPosition.endsWith("::");
       const isAfterUse = trimmed.startsWith("use ") || trimmed === "use";
 
+      // Detect "Type::" or "Type::partial" — Monaco re-calls the provider on
+      // every keystroke, so when the user types `String::f` to filter for
+      // `from_str`, `isAfterDoubleColon` is false (line ends with `f`). We
+      // need to recognize the broader "in a Type:: path" pattern so auto-import
+      // of `Type` still fires when the user accepts `from_str`.
+      //
+      // Match: identifier, optional whitespace, `::`, optional partial
+      // identifier at end of line. e.g. `String::`, `String::f`, `String::from_str`.
+      // (Doesn't match `::foo` with no type before — that's a different context.)
+      const typePathMatch = lineUntilPosition.match(/([A-Za-z_][A-Za-z0-9_]*)\s*::\s*[A-Za-z0-9_]*$/);
+      const typeBeforeColonsName = typePathMatch ? typePathMatch[1] : null;
+      const isInTypePath = typeBeforeColonsName !== null;
+
       // When after `::` or `.`, the word at cursor is empty (Monaco doesn't
       // treat : or . as word characters). Use the cursor position directly
       // as the range so Monaco shows the completion widget.
@@ -427,16 +440,10 @@ export function registerAutocompleteProvider(monaco: typeof Monaco): { dispose: 
         };
       }
 
-      // Detect the type before `::` for context-aware completion
-      // e.g. "String::" → typeName = "String"
-      let typeName: string | null = null;
-      if (isAfterDoubleColon) {
-        const beforeColons = lineUntilPosition.slice(0, -2);
-        const match = beforeColons.match(/([A-Za-z_][A-Za-z0-9_]*)\s*$/);
-        if (match) {
-          typeName = match[1];
-        }
-      }
+      // Detect the type before `::` for context-aware completion.
+      // Uses the broader `typePathMatch` (works for both `String::` and
+      // `String::from_str`) — see comment above for why this matters.
+      const typeName = typeBeforeColonsName;
 
       const suggestions: Monaco.languages.CompletionItem[] = [];
       const seenLabels = new Set<string>();
@@ -445,13 +452,18 @@ export function registerAutocompleteProvider(monaco: typeof Monaco): { dispose: 
       // scans it to detect existing `use` statements.
       const source = model.getValue();
 
-      // When after `Type::`, the user is qualifying a path — they want to
-      // use `Type::something`. The thing that needs importing is `Type`
-      // itself (not the method they pick). Look up `Type` in the rustdoc
-      // index ONCE here, then attach the same auto-import edit to every
-      // suggestion in the `::` branch.
+      // When the user is in a `Type::` path (whether `Type::` or
+      // `Type::partial`), the thing that needs importing is `Type` itself
+      // (not the method they pick). Look up `Type` in the rustdoc index ONCE
+      // here, then attach the same auto-import edit to every suggestion in
+      // the `::` branch.
+      //
+      // We use `isInTypePath` (broader) rather than `isAfterDoubleColon`
+      // because Monaco re-calls the provider on every keystroke — when the
+      // user types `String::f`, `isAfterDoubleColon` is false but
+      // `isInTypePath` is still true.
       let typeBeforeColonsImport: { crate: string; symbol: string; kind: string } | undefined;
-      if (isAfterDoubleColon && typeName && rustdocSymbols) {
+      if (isInTypePath && typeName && rustdocSymbols) {
         // Find the first type-like symbol matching `typeName` in the index.
         // (soroban_sdk symbols come first in the merged index, so they win
         // over std/alloc duplicates — which is the right priority for a
@@ -518,11 +530,17 @@ export function registerAutocompleteProvider(monaco: typeof Monaco): { dispose: 
             if (s.kind === "function" || s.kind === "macro") {
               add(s.name, kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Function, s.detail, s.docs, undefined, "1");
             }
-          } else if (isAfterDoubleColon) {
-            // After `Type::` → show ALL symbols (associated functions, constants, etc.)
-            // Don't filter by typeName — just show everything so the user can pick.
+          } else if (isInTypePath) {
+            // In a `Type::` path (covers both `Type::` and `Type::partial`).
+            // Show ALL symbols so the user can pick an associated item.
             // Attach `typeBeforeColonsImport` so that whatever they pick, the
             // type before `::` gets imported if it isn't already.
+            //
+            // NOTE: this branch MUST come before the `isAfterUse` / normal
+            // branches because `Type::partial` doesn't trip `isAfterDoubleColon`
+            // (the line doesn't end with `::`). Without this, `String::from_str`
+            // would fall through to "normal context" and try to auto-import
+            // `from_str` instead of `String`.
             add(s.name, kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Text, s.detail, s.docs, undefined, "1", typeBeforeColonsImport);
           } else if (isAfterUse) {
             // After `use ` → show modules + types
@@ -535,8 +553,8 @@ export function registerAutocompleteProvider(monaco: typeof Monaco): { dispose: 
         }
       }
 
-      // Layer 2: Source-parsed symbols (skip when after . or ::)
-      if (!isAfterDot && !isAfterDoubleColon) {
+      // Layer 2: Source-parsed symbols (skip when after . or in a Type:: path)
+      if (!isAfterDot && !isInTypePath) {
         for (const item of currentItems) {
           if (item.kind === "module" && !isAfterUse) continue;
           add(item.label, kindMap[item.kind] ?? monaco.languages.CompletionItemKind.Text, item.detail, item.documentation, item.insertText || item.label, item.kind === "snippet" ? "0" : item.kind === "function" ? "1" : "2");

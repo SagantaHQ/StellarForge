@@ -60,11 +60,26 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile, walle
   const [fetchingProfile, setFetchingProfile] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // When the modal opens, fetch FRESH user data from the DB
+  // When the modal opens, determine which step to show.
+  //
+  // CRITICAL: If the wallet is already connected (walletConnected=true),
+  // we MUST skip to the "profile" step — even if the server session check
+  // returns loggedIn:false (e.g. user connected their wallet but hasn't
+  // created a profile yet). The "wallet" step is ONLY for users who
+  // haven't connected a wallet at all.
+  //
+  // We also fetch FRESH user data from the DB to pre-fill the form.
   useEffect(() => {
     if (!open) return;
 
     const addr = existingProfile?.address || walletAddress;
+
+    // If wallet is connected, always go to profile step + set address
+    if (walletConnected && addr) {
+      setAddress(addr);
+      setStep("profile");
+    }
+
     if (!addr) return;
 
     setFetchingProfile(true);
@@ -73,6 +88,7 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile, walle
       .then(r => r.ok ? r.json() : null)
       .then(data => {
         if (data?.loggedIn && data?.profile) {
+          // Server has a profile for this user — pre-fill fields
           setUsername(data.profile.username || "");
           setBio(data.profile.bio || "");
           setAvatarUrl(data.profile.avatarUrl || undefined);
@@ -81,10 +97,21 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile, walle
             setAsyncUsernameStatus("available");
           }
           setStep("profile");
+        } else if (existingProfile) {
+          // Server says not logged in, but we have a cached profile —
+          // use cached data. User can still edit + save.
+          setUsername(existingProfile.username || "");
+          setBio(existingProfile.bio || "");
+          setAvatarUrl(existingProfile.avatarUrl);
+          setUsernameLocked(!!existingProfile.isCustomUsername);
+          setStep("profile");
         }
+        // else: wallet connected, no profile in DB, no cached profile —
+        // stay on "profile" step with empty fields (already set above
+        // by the walletConnected check). User fills in username + saves.
       })
       .catch(() => {
-        // Fall back to existingProfile data
+        // Network error — fall back to existingProfile data
         if (existingProfile) {
           setUsername(existingProfile.username || "");
           setBio(existingProfile.bio || "");
@@ -99,13 +126,9 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile, walle
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  // If wallet is already connected (but no profile yet), skip to profile step
-  useEffect(() => {
-    if (open && walletConnected && walletAddress && !existingProfile) {
-      setAddress(walletAddress);
-      setStep("profile");
-    }
-  }, [open, walletConnected, walletAddress, existingProfile]);
+  // (The wallet-connected check is now handled in the first useEffect above —
+  // if walletConnected is true, we skip to "profile" step immediately and
+  // fetch fresh data in parallel.)
 
   // Reset on close
   useEffect(() => {

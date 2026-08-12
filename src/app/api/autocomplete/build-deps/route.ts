@@ -25,7 +25,10 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-const INDEX_DIR = path.join(process.cwd(), "data", "rustdoc-index");
+// Index directory — use /tmp (OUTSIDE the project) so writes don't
+// trigger Next.js file-watcher reloads. The index is a cache; if /tmp
+// is cleared, it regenerates on next build.
+const INDEX_DIR = path.join("/tmp", "soroban-rustdoc-index");
 
 interface CargoDep {
   name: string;

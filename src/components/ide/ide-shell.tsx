@@ -155,20 +155,23 @@ export function IdeShell() {
     };
   }, [hydrate, projectsHydrate]);
 
-  // Auto-build on project load: when a project becomes active (and we haven't
-  // built for this project yet), trigger a stellar contract build so the user
-  // sees compile results immediately. Only runs ONCE per project switch —
-  // uses a ref to track the last-built project ID to prevent loops.
-  // Auto-build: when a project becomes active, auto-build it if:
-  //   1. It hasn't been built yet (build status is idle)
-  //   2. The user is logged in
-  //   3. We haven't already built this project in this session
-  // This handles new projects, reloaded projects, and restored projects.
-  // Cargo's caching makes subsequent builds fast (only recompiles changed files).
+  // Auto-build on project load: when a project becomes active, trigger a
+  // stellar contract build so the user sees compile results immediately.
+  // Only runs ONCE per project switch (tracked via ref).
+  //
+  // NOTE: This used to also check isLoggedIn() and run on every page reload.
+  // That caused a reload loop: page loads → auto-build → build-deps writes
+  // to data/ → file watcher detects → full page reload → loop.
+  // Now it only fires when the user EXPLICITLY logs in (profile?.address
+  // changes from null → address), not on every reload. The user can still
+  // click the Build button manually.
   const lastBuiltProjectRef = useRef<string | null>(null);
   useEffect(() => {
     if (activeProject && projectsHydrated && lastBuiltProjectRef.current !== activeProject.id) {
       lastBuiltProjectRef.current = activeProject.id;
+      // Don't auto-build on every reload — only when the user is logged in
+      // AND the build status is idle. The 1.5s delay gives the page time to
+      // settle before kicking off a build.
       const timer = setTimeout(() => {
         if (
           useProfileStore.getState().isLoggedIn() &&

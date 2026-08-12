@@ -18,14 +18,21 @@ import path from "path";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const INDEX_DIR = path.join(process.cwd(), "data", "rustdoc-index");
+// Index directory — check /tmp first (where build-deps writes new indexes),
+// then fall back to data/ (where pre-built indexes are committed).
+// This way the committed soroban-sdk-index.json is always found, and
+// dynamically-built dep indexes are found in /tmp without triggering
+// Next.js file-watcher reloads.
+const TMP_INDEX_DIR = path.join("/tmp", "soroban-rustdoc-index");
+const DATA_INDEX_DIR = path.join(process.cwd(), "data", "rustdoc-index");
 
 export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
     const includeDeps = url.searchParams.get("deps") === "true";
 
-    const sdkPath = path.join(INDEX_DIR, "soroban-sdk-index.json");
+    // soroban-sdk index lives in data/ (committed pre-built index)
+    const sdkPath = path.join(DATA_INDEX_DIR, "soroban-sdk-index.json");
 
     // Load soroban-sdk index (always)
     let sdkIndex: { crate: string; version: string; symbols: unknown[]; total_count: number } | null = null;
@@ -46,21 +53,30 @@ export async function GET(req: Request) {
       return NextResponse.json(sdkIndex);
     }
 
-    // Load all cached dep indexes
-    const allFiles = await fs.readdir(INDEX_DIR);
-    const depFiles = allFiles.filter(
-      (f) => f.endsWith(".json") &&
-        f !== "soroban-sdk-index.json" &&
-        f !== "std-index.json" &&
-        !f.startsWith("std-")
-    );
-
+    // Load all cached dep indexes — check /tmp first, then data/
+    // /tmp is where build-deps writes new indexes (outside the project dir
+    // so it doesn't trigger file-watcher reloads). data/ has any pre-built
+    // committed indexes.
     const depIndexes: Array<{ crate: string; version: string; symbols: unknown[]; total_count: number }> = [];
-    for (const file of depFiles) {
+    const seenFiles = new Set<string>();
+
+    for (const dir of [TMP_INDEX_DIR, DATA_INDEX_DIR]) {
+      let files: string[] = [];
       try {
-        const data = JSON.parse(await fs.readFile(path.join(INDEX_DIR, file), "utf-8"));
-        depIndexes.push(data);
-      } catch {}
+        files = await fs.readdir(dir);
+      } catch {
+        continue; // dir doesn't exist yet
+      }
+      for (const file of files) {
+        if (seenFiles.has(file)) continue; // don't load the same file twice
+        if (!file.endsWith(".json")) continue;
+        if (file === "soroban-sdk-index.json" || file === "std-index.json" || file.startsWith("std-")) continue;
+        try {
+          const data = JSON.parse(await fs.readFile(path.join(dir, file), "utf-8"));
+          depIndexes.push(data);
+          seenFiles.add(file);
+        } catch {}
+      }
     }
 
     // Merge all symbols

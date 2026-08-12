@@ -7,21 +7,9 @@ const nextConfig: NextConfig = {
     ignoreBuildErrors: true,
   },
   reactStrictMode: false,
-  // Ignore non-source directories from the file watcher so writes to them
-  // don't trigger dev-mode recompiles / full page reloads.
-  // - data/: rustdoc-index JSON files written by /api/autocomplete/build-deps
-  // - download/: generated logos, screenshots, exported files
-  // - .zscripts/: pm2 logs
-  // - upload/: user-uploaded files
-  watchOptions: {
-    ignored: [
-      "**/data/**",
-      "**/download/**",
-      "**/.zscripts/**",
-      "**/upload/**",
-      "**/db/**",
-    ],
-  },
+  // Note: Next.js 16 removed 'watchOptions.ignored' (only pollIntervalMs is
+  // accepted now). File-watcher ignore paths are configured in the webpack
+  // config below via config.snapshot + config.watchOptions.ignored.
   serverExternalPackages: [
     "@prisma/client",
     "@node-rs/argon2",
@@ -37,7 +25,9 @@ const nextConfig: NextConfig = {
   // Webpack config — used when running with --webpack flag.
   // Aliases Trezor packages to an empty stub (we don't use Trezor wallets,
   // and their ESM exports are broken with webpack).
-  webpack: (config, { isServer }) => {
+  // Also configures the file watcher to ignore non-source directories so
+  // writes to data/, download/, etc. don't trigger dev-mode recompiles.
+  webpack: (config, { isServer, dev }) => {
     const stubPath = path.resolve(__dirname, "src/stubs/empty.ts");
     config.resolve = config.resolve || {};
     config.resolve.alias = {
@@ -50,6 +40,34 @@ const nextConfig: NextConfig = {
       "@trezor/transport-webhid": stubPath,
       "@trezor/hw-app-str": stubPath,
     };
+
+    // In dev mode, configure the file watcher to ignore non-source dirs.
+    // This prevents writes to data/rustdoc-index/ (by /api/autocomplete/build-deps),
+    // download/, .zscripts/, upload/, db/, scripts/ from triggering full
+    // page reloads. Without this, every build-deps API call writes JSON files
+    // → Next.js detects them → recompiles → reloads the page → loop.
+    if (dev) {
+      const existing = config.watchOptions?.ignored;
+      const ignorePaths = [
+        path.resolve(__dirname, "data/**"),
+        path.resolve(__dirname, "data/**/*"),
+        path.resolve(__dirname, "download/**"),
+        path.resolve(__dirname, "download/**/*"),
+        path.resolve(__dirname, ".zscripts/**"),
+        path.resolve(__dirname, ".zscripts/**/*"),
+        path.resolve(__dirname, "upload/**"),
+        path.resolve(__dirname, "upload/**/*"),
+        path.resolve(__dirname, "db/**"),
+        path.resolve(__dirname, "db/**/*"),
+        path.resolve(__dirname, "scripts/**"),
+        path.resolve(__dirname, "scripts/**/*"),
+      ];
+      config.watchOptions = {
+        ...config.watchOptions,
+        ignored: Array.isArray(existing) ? [...existing, ...ignorePaths] : ignorePaths,
+      };
+    }
+
     return config;
   },
   // Turbopack config — used by default in Next.js 16 dev mode.

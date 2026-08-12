@@ -39,6 +39,16 @@ Knowledge base: You have access to the following reference material (cloned at i
 
 When you propose a code change:
 - Output a fenced diff using \`\`\`diff blocks with proper --- / +++ / @@ markers
+- ALWAYS include the file path in the diff header. Use the EXACT path from the
+  project file list provided in the context. Format:
+    --- a/path/to/file.rs
+    +++ b/path/to/file.rs
+    @@ -10,5 +10,8 @@
+     existing line
+    +new line
+     existing line
+- The path after \`+++ b/\` MUST match a file path from the project file list.
+  Do NOT invent paths — if you're not sure which file to edit, ask the user.
 - Only touch code within the active scope (Smart Contract / UI / General)
 - Always explain WHY the change fixes the issue or improves the code — teach, don't just patch
 - Prefer minimal diffs; do not refactor unrelated code unless explicitly asked
@@ -203,6 +213,46 @@ export function assembleContext(opts: AssembleOptions): AssembledContext {
     usage.cargoToml = estimateTokens(cargoContent);
   }
 
+  // 5b. Project file tree — list ALL file paths so the AI knows which files
+  // exist and can reference them in diffs. Without this, the AI guesses file
+  // paths (often wrong) → "(unknown file)" in the diff approval UI.
+  // We include the full content of small files (under 8KB) too, so the AI
+  // can edit ANY file in the project, not just the active one.
+  const allProjectFiles = flattenFiles(opts.tree);
+  const fileList = allProjectFiles
+    .filter((f) => !f.path.startsWith("target/") && !f.path.startsWith(".next/"))
+    .map((f) => f.path);
+  let projectTreeContent = `--- Project file list ---\n${fileList.map((p) => `- ${p}`).join("\n")}\n`;
+  usage.cargoToml += estimateTokens(projectTreeContent);
+
+  // 5c. Include full content of ALL source files (not just active + imports)
+  // so the AI can edit any file. Cap total at ~40% of budget to leave room
+  // for the response.
+  const sourceFilesBudget = Math.floor(budget * 0.4);
+  let allFilesContent = "";
+  let allFilesTokens = 0;
+  for (const f of allProjectFiles) {
+    // Skip target/, .next/, node_modules/, large files
+    if (f.path.startsWith("target/") || f.path.startsWith(".next/") || f.path.startsWith("node_modules/")) continue;
+    if (f.content.length > 16000) continue; // skip files > 4k tokens
+    // Don't duplicate the active file or imports (already included above)
+    if (f.path === opts.activeFilePath) continue;
+    if (filesIncluded.includes(f.path)) continue;
+    // Don't duplicate Cargo.toml (already included above)
+    if (f.name === "Cargo.toml") continue;
+
+    const fileText = `--- ${f.path} ---\n\`\`\`${f.language}\n${f.content}\n\`\`\`\n`;
+    const fileTokens = estimateTokens(fileText);
+    if (allFilesTokens + fileTokens > sourceFilesBudget) {
+      truncated = true;
+      break;
+    }
+    allFilesContent += fileText;
+    allFilesTokens += fileTokens;
+    filesIncluded.push(f.path);
+  }
+  usage.imports += allFilesTokens;
+
   // 6. Imported files
   let importsContent = "";
   if (opts.activeFilePath) {
@@ -249,8 +299,10 @@ export function assembleContext(opts: AssembleOptions): AssembledContext {
   const finalUserContent = [
     knowledgeContent,
     cargoContent,
+    projectTreeContent,
     activeFileContent,
     importsContent,
+    allFilesContent,
     "",
     "User request:",
     userContent,
@@ -287,14 +339,60 @@ export interface ParsedDiff {
   raw: string;
 }
 
-export function parseDiffFromResponse(content: string): ParsedDiff[] {
+export function parseDiffFromResponse(content: string, knownFiles?: string[]): ParsedDiff[] {
   const diffs: ParsedDiff[] = [];
   const diffBlockPattern = /```diff\n([\s\S]*?)```/g;
   let m: RegExpExecArray | null;
   while ((m = diffBlockPattern.exec(content)) !== null) {
     const raw = m[1];
-    const filePathMatch = raw.match(/^\+\+\+ b\/(.+)$/m);
-    const filePath = filePathMatch ? filePathMatch[1] : "(unknown file)";
+
+    // Try multiple file path formats (LLMs are inconsistent):
+    //   +++ b/path/to/file.rs    (standard git format)
+    //   +++ path/to/file.rs      (no b/ prefix)
+    //   +++ a/path/to/file.rs    (wrong prefix but common)
+    //   --- path/to/file.rs      (only minus line)
+    //   # path/to/file.rs        (comment header)
+    //   File: path/to/file.rs    (explicit label)
+    let filePath = "";
+    const patterns = [
+      /^\+\+\+ b\/(.+)$/m,           // +++ b/path
+      /^\+\+\+ a\/(.+)$/m,           // +++ a/path (wrong but seen)
+      /^\+\+\+ (.+)$/m,              // +++ path
+      /^--- (.+)$/m,                 // --- path
+      /^# File: (.+)$/m,             // # File: path
+      /^File: (.+)$/m,               // File: path
+      /^# (.+\.rs)$/m,               // # path.rs (comment with .rs extension)
+    ];
+    for (const pat of patterns) {
+      const fm = raw.match(pat);
+      if (fm) {
+        filePath = fm[1].trim();
+        // Strip trailing tab/space + any "diff --git" artifacts
+        filePath = filePath.split(/\s/)[0];
+        break;
+      }
+    }
+
+    // If no path found, try to extract from the first hunk's context
+    // or fall back to "(unknown file)"
+    if (!filePath) {
+      filePath = "(unknown file)";
+    }
+
+    // If we have known files, try to match the extracted path against them
+    // (LLMs sometimes add/remove the b/ prefix or use relative paths)
+    if (knownFiles && knownFiles.length > 0 && filePath !== "(unknown file)") {
+      // Try exact match first
+      if (!knownFiles.includes(filePath)) {
+        // Try matching by basename (filename without directory)
+        const basename = filePath.split("/").pop();
+        const match = knownFiles.find((f) => f === filePath || f.endsWith("/" + basename) || f === basename);
+        if (match) {
+          filePath = match;
+        }
+      }
+    }
+
     const hunkPattern = /@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@\n([\s\S]*?)(?=\n@@|\n```|$)/g;
     const hunks: ParsedDiff["hunks"] = [];
     let h: RegExpExecArray | null;

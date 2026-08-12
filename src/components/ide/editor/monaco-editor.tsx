@@ -199,6 +199,157 @@ export function MonacoEditor({
       },
     });
 
+    // ── Professional editor features ──────────────────────────────
+
+    // Format Document — Monaco's built-in formatter (Rust uses a basic
+    // regex-based formatter; for real formatting, rust-analyzer LSP is needed)
+    editor.addAction({
+      id: "soroban.formatDocument",
+      label: "Format Document",
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyI],
+      contextMenuGroupId: "soroban",
+      contextMenuOrder: 2,
+      run: (ed) => {
+        ed.getAction("editor.action.formatDocument")?.run();
+      },
+    });
+
+    // Format Selection
+    editor.addAction({
+      id: "soroban.formatSelection",
+      label: "Format Selection",
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyK],
+      contextMenuGroupId: "soroban",
+      contextMenuOrder: 3,
+      run: (ed) => {
+        ed.getAction("editor.action.formatSelection")?.run();
+      },
+    });
+
+    // Rename Symbol — Monaco's built-in rename (works for tokens in the same file)
+    editor.addAction({
+      id: "soroban.renameSymbol",
+      label: "Rename Symbol",
+      keybindings: [monaco.KeyCode.F2],
+      contextMenuGroupId: "soroban",
+      contextMenuOrder: 4,
+      run: (ed) => {
+        ed.getAction("editor.action.rename")?.run();
+      },
+    });
+
+    // Go to Definition — Monaco's built-in (works for same-file tokens)
+    editor.addAction({
+      id: "soroban.goToDefinition",
+      label: "Go to Definition",
+      keybindings: [monaco.KeyCode.F12],
+      contextMenuGroupId: "soroban",
+      contextMenuOrder: 5,
+      run: (ed) => {
+        ed.getAction("editor.action.revealDefinition")?.run();
+      },
+    });
+
+    // Find All References
+    editor.addAction({
+      id: "soroban.findAllReferences",
+      label: "Find All References",
+      keybindings: [monaco.KeyMod.Shift | monaco.KeyCode.F12],
+      contextMenuGroupId: "soroban",
+      contextMenuOrder: 6,
+      run: (ed) => {
+        ed.getAction("editor.action.referenceSearch.trigger")?.run();
+      },
+    });
+
+    // Refactor with AI — sends the selected code (or the whole file) to the
+    // AI agent with a "refactor" prompt. Opens the agent panel with the
+    // refactor request pre-filled.
+    editor.addAction({
+      id: "soroban.refactorWithAI",
+      label: "Refactor with AI",
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyR],
+      contextMenuGroupId: "soroban",
+      contextMenuOrder: 7,
+      run: (ed) => {
+        const selection = ed.getSelection();
+        const model = ed.getModel();
+        if (!model) return;
+
+        let codeToRefactor = "";
+        let scopeDesc = "";
+
+        if (selection && !selection.isEmpty()) {
+          // Selected code — refactor just that part
+          codeToRefactor = model.getValueInRange(selection);
+          const startLine = selection.startLineNumber;
+          const endLine = selection.endLineNumber;
+          scopeDesc = `lines ${startLine}-${endLine}`;
+        } else {
+          // No selection — refactor the whole file
+          codeToRefactor = model.getValue();
+          scopeDesc = "the entire file";
+        }
+
+        // Build the refactor prompt
+        const prompt = `Refactor ${scopeDesc} of the current file. Improve readability, extract functions where appropriate, simplify complex logic, and apply Rust/Soroban best practices. Keep the behavior identical. Show the refactored code as a diff.\n\n\`\`\`rust\n${codeToRefactor}\n\`\`\``;
+
+        // Dispatch a custom event that the agent panel listens for
+        window.dispatchEvent(new CustomEvent("soroban-agent-prompt", {
+          detail: { prompt }
+        }));
+      },
+    });
+
+    // Explain with AI — sends the selected code to the agent with an
+    // "explain" prompt. Useful for understanding unfamiliar code.
+    editor.addAction({
+      id: "soroban.explainWithAI",
+      label: "Explain with AI",
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyE],
+      contextMenuGroupId: "soroban",
+      contextMenuOrder: 8,
+      run: (ed) => {
+        const selection = ed.getSelection();
+        const model = ed.getModel();
+        if (!model || !selection || selection.isEmpty()) return;
+
+        const code = model.getValueInRange(selection);
+        const prompt = `Explain this code — what does it do, how does it work, and are there any issues or improvements I should know about?\n\n\`\`\`rust\n${code}\n\`\`\``;
+
+        window.dispatchEvent(new CustomEvent("soroban-agent-prompt", {
+          detail: { prompt }
+        }));
+      },
+    });
+
+    // Fix with AI — sends the selected code (or whole file) with a "fix" prompt
+    editor.addAction({
+      id: "soroban.fixWithAI",
+      label: "Fix with AI",
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyF],
+      contextMenuGroupId: "soroban",
+      contextMenuOrder: 9,
+      run: (ed) => {
+        const selection = ed.getSelection();
+        const model = ed.getModel();
+        if (!model) return;
+
+        let code = "";
+        if (selection && !selection.isEmpty()) {
+          code = model.getValueInRange(selection);
+        } else {
+          code = model.getValue();
+        }
+
+        const prompt = `Fix any bugs, errors, or issues in this code. Address compilation errors first, then security issues (missing require_auth, unchecked arithmetic), then best practices. Show the fix as a diff.\n\n\`\`\`rust\n${code}\n\`\`\``;
+
+        window.dispatchEvent(new CustomEvent("soroban-agent-prompt", {
+          detail: { prompt }
+        }));
+      },
+    });
+
     // §6.10 — Click on glyph margin → focus that thread
     editor.onMouseDown((e) => {
       const target = e.target;

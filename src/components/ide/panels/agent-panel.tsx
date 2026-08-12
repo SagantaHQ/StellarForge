@@ -22,6 +22,7 @@ import { useAIChat } from "@/hooks/use-ai-chat";
 import { PROVIDERS, PROVIDER_LIST, type ProviderId, type ChatMessage } from "@/lib/ai/providers";
 import { parseDiffFromResponse, type ParsedDiff } from "@/lib/ai/context-assembler";
 import { useFileSystemStore } from "@/stores/file-system-store";
+import { flattenFiles } from "@/lib/soroban/sample-project";
 import { useFixWithAIStore } from "@/stores/fix-with-ai-store";
 import { useAttributionStore } from "@/stores/attribution-store";
 import { useProfileStore } from "@/stores/profile-store";
@@ -78,6 +79,26 @@ export function AgentPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [activeTab.messages.length, loading]);
 
+  // Listen for AI prompt events from the editor (Refactor / Explain / Fix with AI)
+  // These are dispatched by monaco-editor.tsx when the user right-clicks and
+  // picks one of the AI actions. We pre-fill the input with the prompt so the
+  // user can review it before sending (or just press Enter to send).
+  useEffect(() => {
+    function handleAgentPrompt(e: Event) {
+      const detail = (e as CustomEvent<{ prompt: string }>).detail;
+      if (detail?.prompt) {
+        setInput(detail.prompt);
+        // Focus the input so the user can immediately press Enter to send
+        const inputEl = document.querySelector<HTMLTextAreaElement | HTMLInputElement>(
+          "[data-agent-input]"
+        );
+        inputEl?.focus();
+      }
+    }
+    window.addEventListener("soroban-agent-prompt", handleAgentPrompt);
+    return () => window.removeEventListener("soroban-agent-prompt", handleAgentPrompt);
+  }, []);
+
   // §9.7 — Auto-consume pending fix requests from the terminal 'Fix with AI' button
   useEffect(() => {
     if (!pendingFix || loading || !hasProvider) return;
@@ -112,7 +133,10 @@ export function AgentPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
                       timestamp: Date.now(),
                     },
                   ],
-                  pendingDiffs: parseDiffFromResponse(response.content),
+                  pendingDiffs: parseDiffFromResponse(
+                    response.content,
+                    flattenFiles(useFileSystemStore.getState().tree).map((f) => f.path)
+                  ),
                 }
               : t
           )
@@ -174,46 +198,75 @@ export function AgentPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
     const fs = useFileSystemStore.getState();
     const file = findFile(fs.tree, diff.filePath);
 
-    if (file) {
-      const newContent = applyDiffToFile(file.content, diff);
+    if (!file) {
+      // File not found in the project tree — show a visible error instead of
+      // silently doing nothing. This happens when the AI hallucinates a path
+      // or when the file was deleted after the AI generated the diff.
+      console.error("[agent] cannot apply diff — file not found:", diff.filePath, {
+        knownFiles: flattenFiles(fs.tree).map((f) => f.path),
+        diffRaw: diff.raw.substring(0, 200),
+      });
+      setTabs((prev) =>
+        prev.map((t) =>
+          t.id === activeTabId
+            ? {
+                ...t,
+                messages: [
+                  ...t.messages,
+                  {
+                    role: "assistant" as const,
+                    content: `⚠️ Could not apply the proposed change — the file \`${diff.filePath}\` was not found in the project.\n\nThis usually means I guessed the file path wrong. Please tell me which file to edit (e.g. "edit src/lib.rs") and I'll try again.\n\nAvailable files:\n${flattenFiles(fs.tree).map((f) => `- \`${f.path}\``).join("\n")}`,
+                    timestamp: Date.now(),
+                  },
+                ],
+              }
+            : t
+        )
+      );
+      // Remove the un-applicable diff from pending
+      setTabs((prev) =>
+        prev.map((t) =>
+          t.id === activeTabId
+            ? { ...t, pendingDiffs: t.pendingDiffs.filter((d) => d !== diff) }
+            : t
+        )
+      );
+      return;
+    }
 
-      // §9.9 — Single-step undo: use Monaco's pushUndoStop + executeEdits
-      // so the entire AI diff is ONE undo step (not dozens of individual edits).
-      // We need access to the Monaco editor instance — get it from the global.
-      const monacoEditor = (window as unknown as { __monacoEditor?: { pushUndoStop: () => void; executeEdits: (source: string, edits: unknown[]) => void } }).__monacoEditor;
-      if (monacoEditor) {
-        // Push an undo stop BEFORE the edit, then apply, then push another stop.
-        // This groups the AI diff as a single undoable operation.
-        monacoEditor.pushUndoStop();
-      }
+    const newContent = applyDiffToFile(file.content, diff);
 
-      // Apply the new content to the file system (triggers Monaco model update)
-      fs.updateFileContent(diff.filePath, newContent);
+    // §9.9 — Single-step undo: use Monaco's pushUndoStop + executeEdits
+    // so the entire AI diff is ONE undo step (not dozens of individual edits).
+    const monacoEditor = (window as unknown as { __monacoEditor?: { pushUndoStop: () => void; executeEdits: (source: string, edits: unknown[]) => void } }).__monacoEditor;
+    if (monacoEditor) {
+      monacoEditor.pushUndoStop();
+    }
 
-      if (monacoEditor) {
-        // Push another undo stop AFTER the edit
-        setTimeout(() => monacoEditor.pushUndoStop(), 0);
-      }
+    // Apply the new content to the file system (triggers Monaco model update)
+    fs.updateFileContent(diff.filePath, newContent);
 
-      // §9.9 — Record AI attribution for the edited lines
-      const provider = activeProviderId ? PROVIDERS[activeProviderId as ProviderId] : null;
-      const model = activeConfig?.model === "__custom__"
-        ? activeConfig?.customModel
-        : activeConfig?.model;
+    if (monacoEditor) {
+      setTimeout(() => monacoEditor.pushUndoStop(), 0);
+    }
 
-      if (provider && model) {
-        // Record attribution for each hunk's line range
-        for (const hunk of diff.hunks) {
-          recordEdit(
-            diff.filePath,
-            hunk.newStart,
-            hunk.newStart + hunk.lines.filter((l) => l.startsWith("+") && !l.startsWith("+++")).length - 1,
-            profile
-              ? { id: profile.address, name: profile.username, color: useProfileStore.getState().accentColor }
-              : { id: "local-user", name: "You", color: "#4F8C8C" },
-            { provider: provider.name, model }
-          );
-        }
+    // §9.9 — Record AI attribution for the edited lines
+    const provider = activeProviderId ? PROVIDERS[activeProviderId as ProviderId] : null;
+    const model = activeConfig?.model === "__custom__"
+      ? activeConfig?.customModel
+      : activeConfig?.model;
+
+    if (provider && model) {
+      for (const hunk of diff.hunks) {
+        recordEdit(
+          diff.filePath,
+          hunk.newStart,
+          hunk.newStart + hunk.lines.filter((l) => l.startsWith("+") && !l.startsWith("+++")).length - 1,
+          profile
+            ? { id: profile.address, name: profile.username, color: useProfileStore.getState().accentColor }
+            : { id: "local-user", name: "You", color: "#4F8C8C" },
+          { provider: provider.name, model }
+        );
       }
     }
 
@@ -403,6 +456,7 @@ export function AgentPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
       <div className="border-t border-[var(--border-subtle)] p-2.5">
         <div className="flex items-end gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--surface-sunken)] p-2">
           <textarea
+            data-agent-input
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {

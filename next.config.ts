@@ -7,6 +7,16 @@ const nextConfig: NextConfig = {
     ignoreBuildErrors: true,
   },
   reactStrictMode: false,
+  // Allow cross-origin requests from the preview URL (space-z.ai) to /_next/*
+  // Without this, Next.js detects cross-origin requests in dev mode and
+  // can trigger full page reloads. The preview is served from
+  // preview-chat-<id>.space-z.ai but makes requests to the dev server.
+  allowedDevOrigins: [
+    "*.space-z.ai",
+    "preview-chat-*.space-z.ai",
+    "localhost:3000",
+    "127.0.0.1:3000",
+  ],
   // Note: Next.js 16 removed 'watchOptions.ignored' (only pollIntervalMs is
   // accepted now). File-watcher ignore paths are configured in the webpack
   // config below via config.snapshot + config.watchOptions.ignored.

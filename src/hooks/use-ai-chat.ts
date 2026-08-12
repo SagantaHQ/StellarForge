@@ -54,7 +54,8 @@ export function useAIChat(opts: UseAIChatOptions = {}) {
     async (
       userMessage: string,
       history: ChatMessage[] = [],
-      onChunk?: (text: string) => void
+      onChunk?: (text: string) => void,
+      sendOpts?: { errorContext?: string }
     ): Promise<{ response: ChatResponse | null; diffs: ParsedDiff[] }> => {
       const activeConfig = getActiveConfig();
       if (!activeConfig) {
@@ -94,6 +95,7 @@ export function useAIChat(opts: UseAIChatOptions = {}) {
           tree,
           activeFilePath,
           userMessage,
+          errorContext: sendOpts?.errorContext,
           scope: opts.scope,
           customScopePaths: opts.customScopePaths,
           budget: tokenBudget,

@@ -125,6 +125,13 @@ export function IdeShell() {
     }
     window.addEventListener("soroban-open-login", handleOpenLogin);
 
+    // Switch right panel to agent when "Fix with AI" is clicked in the build panel
+    function handleSwitchRightPanel(e: Event) {
+      const detail = (e as CustomEvent<string>).detail;
+      if (detail === "agent") setRightPanelView("agent");
+    }
+    window.addEventListener("soroban-switch-right-panel", handleSwitchRightPanel as EventListener);
+
     // Flush unsaved edits to IDB + server BEFORE the page unloads.
     // Without this, reloading within the 2s auto-sync debounce window
     // loses the user's latest edits (they exist in memory but never
@@ -151,6 +158,7 @@ export function IdeShell() {
 
     return () => {
       window.removeEventListener("soroban-open-login", handleOpenLogin);
+      window.removeEventListener("soroban-switch-right-panel", handleSwitchRightPanel as EventListener);
       window.removeEventListener("beforeunload", handleBeforeUnload);
     };
   }, [hydrate, projectsHydrate]);

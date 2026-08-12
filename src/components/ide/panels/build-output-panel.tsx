@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { Wrench, Check, X, Loader2, FileCode2 } from "lucide-react";
+import { Wrench, Check, X, Loader2, FileCode2, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useBuildStore } from "@/stores/build-store";
+import { useFixWithAIStore } from "@/stores/fix-with-ai-store";
 
 /**
  * Build output panel — replaces the terminal panel.
@@ -28,6 +29,7 @@ export function BuildOutputPanel({ collapsed, onToggleCollapse }: BuildOutputPan
   const wasmInfo = useBuildStore((s) => s.wasmInfo);
   const error = useBuildStore((s) => s.error);
   const outputRef = useRef<HTMLDivElement>(null);
+  const requestFix = useFixWithAIStore((s) => s.requestFix);
 
   useEffect(() => {
     if (outputRef.current) {
@@ -135,10 +137,31 @@ export function BuildOutputPanel({ collapsed, onToggleCollapse }: BuildOutputPan
         </div>
       )}
 
-      {/* Error */}
+      {/* Error + Fix with AI button */}
       {error && status === "failed" && (
-        <div className="border-t border-[var(--border-subtle)] px-3 py-2 bg-[color-mix(in_srgb,var(--status-error)_10%,transparent)]">
+        <div className="border-t border-[var(--border-subtle)] px-3 py-2 bg-[color-mix(in_srgb,var(--status-error)_10%,transparent)] space-y-2">
           <div className="text-[11px] text-[var(--status-error)]">{error}</div>
+          <button
+            onClick={() => {
+              // Collect all stderr lines + the error message as the error context.
+              // The agent panel will receive this via the fix-with-ai-store and
+              // send it to the AI with the full file contents + Cargo.toml as
+              // behind-the-scenes context (assembleContext handles that).
+              const errorLines = lines
+                .filter((l) => l.type === "stderr" || l.text.startsWith("error") || l.text.startsWith("warning"))
+                .map((l) => l.text)
+                .join("\n");
+              const fullError = errorLines || error;
+              requestFix(fullError, "stellar contract build");
+              // Switch to the agent panel so the user sees the fix request
+              const switchEvent = new CustomEvent("soroban-switch-right-panel", { detail: "agent" });
+              window.dispatchEvent(switchEvent);
+            }}
+            className="flex items-center gap-1.5 rounded-md border border-[var(--accent)]/40 bg-[var(--accent)]/10 px-2.5 py-1.5 text-[11px] font-medium text-[var(--accent)] hover:bg-[var(--accent)]/20 transition-colors"
+          >
+            <Sparkles size={11} strokeWidth={1.75} />
+            Fix with AI
+          </button>
         </div>
       )}
     </div>

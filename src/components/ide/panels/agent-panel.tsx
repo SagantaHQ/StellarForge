@@ -102,7 +102,7 @@ export function AgentPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
     return () => window.removeEventListener("soroban-agent-prompt", handleAgentPrompt);
   }, []);
 
-  // §9.7 — Auto-consume pending fix requests from the terminal 'Fix with AI' button
+  // §9.7 — Auto-consume pending fix requests from the terminal/build 'Fix with AI' button
   useEffect(() => {
     if (!pendingFix || loading || !hasProvider) return;
     const fixMessage = `The following command failed:\n\n\`\`\`\n$ ${pendingFix.command}\n\`\`\`\n\nError output:\n\`\`\`\n${pendingFix.errorOutput}\n\`\`\`\n\nDiagnose the error and propose a fix. Explain why the error happened and how the fix resolves it.`;
@@ -120,8 +120,13 @@ export function AgentPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
           : t
       )
     );
-    // Send to the provider with the error as context
-    sendMessage(fixMessage, [], undefined).then(({ response }) => {
+    // Send to the provider with the error as context.
+    // assembleContext (called inside sendMessage) automatically includes:
+    //   - all project file contents (behind the scenes)
+    //   - Cargo.toml (behind the scenes)
+    //   - the errorContext (prepended to the user message)
+    // So the AI sees: error + file contents + Cargo.toml + user request.
+    sendMessage(fixMessage, [], undefined, { errorContext: pendingFix.errorOutput }).then(({ response }) => {
       if (response) {
         setTabs((prev) =>
           prev.map((t) =>

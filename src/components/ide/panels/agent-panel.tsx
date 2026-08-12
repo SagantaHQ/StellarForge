@@ -14,6 +14,8 @@ import {
   Loader2,
   Sparkles,
   ChevronDown,
+  Search,
+  RefreshCw,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -355,8 +357,8 @@ export function AgentPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
         </button>
       </div>
 
-      {/* Scope badge + provider/model selector */}
-      <div className="flex items-center justify-between border-b border-[var(--border-subtle)] bg-[var(--surface-sunken)] px-3 py-1.5">
+      {/* Scope badge + provider/model selector — responsive */}
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-[var(--border-subtle)] bg-[var(--surface-sunken)] px-3 py-1.5">
         <div className="flex items-center gap-2 text-[11px]">
           <span className="text-[var(--text-muted)]">Scope:</span>
           <span className="font-medium text-[var(--text-secondary)] capitalize">
@@ -364,11 +366,12 @@ export function AgentPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
           </span>
         </div>
         {/* Provider + model selector — moved here from the input row to free
-            up horizontal space in the chat input. Click opens the picker. */}
+            up horizontal space in the chat input. Click opens the picker.
+            Responsive: truncates on small screens, wraps to new line if needed. */}
         <button
           onClick={() => setShowProviderPicker((v) => !v)}
           className={cn(
-            "flex items-center gap-1.5 rounded px-1.5 py-0.5 text-[11px] transition-colors",
+            "flex items-center gap-1.5 rounded px-1.5 py-0.5 text-[11px] transition-colors min-w-0",
             activeProviderId
               ? "text-[var(--accent)] hover:bg-[var(--surface-hover)]"
               : "text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
@@ -378,16 +381,18 @@ export function AgentPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
         >
           {hasProvider && activeProviderId ? (
             <>
-              <span className="max-w-[100px] truncate">{PROVIDERS[activeProviderId].name}</span>
-              <span className="text-[var(--text-muted)]">·</span>
-              <span className="max-w-[120px] truncate font-mono text-[10px]">
+              <span className="max-w-[80px] sm:max-w-[120px] truncate shrink-0">
+                {PROVIDERS[activeProviderId].name}
+              </span>
+              <span className="text-[var(--text-muted)] shrink-0">·</span>
+              <span className="max-w-[100px] sm:max-w-[180px] truncate font-mono text-[10px] min-w-0">
                 {activeConfig?.model === "__custom__" ? activeConfig?.customModel : activeConfig?.model}
               </span>
             </>
           ) : (
             <span>Pick provider</span>
           )}
-          <ChevronDown size={10} strokeWidth={1.75} />
+          <ChevronDown size={10} strokeWidth={1.75} className="shrink-0" />
         </button>
       </div>
 
@@ -665,10 +670,13 @@ function ProviderPicker({ onClose, onOpenSettings }: { onClose: () => void; onOp
   const providers = useAIKeysStore((s) => s.providers);
   const activeProviderId = useAIKeysStore((s) => s.activeProviderId);
   const setActiveProvider = useAIKeysStore((s) => s.setActiveProvider);
+  const setProvider = useAIKeysStore((s) => s.setProvider);
+
+  // Track which provider row is expanded to show its model list.
+  // Clicking a provider expands it (instead of immediately closing the picker).
+  const [expandedProvider, setExpandedProvider] = useState<ProviderId | null>(activeProviderId);
 
   // Only show CONFIGURED providers in the chat picker.
-  // A provider is "configured" if it has an entry with an API key
-  // (or it's ollama, which doesn't need a key).
   const configured = PROVIDER_LIST.filter((p) => {
     const cfg = providers[p.id];
     if (!cfg) return false;
@@ -676,42 +684,186 @@ function ProviderPicker({ onClose, onOpenSettings }: { onClose: () => void; onOp
     return !!cfg.apiKey;
   });
 
+  // Fetch models for the expanded provider (cached in local state)
+  const [models, setModels] = useState<string[]>([]);
+  const [loadingModels, setLoadingModels] = useState(false);
+  const [modelError, setModelError] = useState<string | null>(null);
+  const [modelSearch, setModelSearch] = useState("");
+
+  async function fetchModels(providerId: ProviderId) {
+    const cfg = providers[providerId];
+    if (!cfg || (!cfg.apiKey && providerId !== "ollama")) return;
+    setLoadingModels(true);
+    setModelError(null);
+    try {
+      const provider = PROVIDERS[providerId];
+      const list = await provider.listModels(cfg.apiKey, cfg.baseUrl);
+      setModels(list);
+    } catch (err) {
+      setModelError(err instanceof Error ? err.message : "Failed to fetch models");
+    } finally {
+      setLoadingModels(false);
+    }
+  }
+
+  // When the expanded provider changes, fetch its models
+  useEffect(() => {
+    if (expandedProvider) {
+      setModels([]);
+      setModelSearch("");
+      fetchModels(expandedProvider);
+    }
+  }, [expandedProvider]);
+
+  const filteredModels = modelSearch.trim()
+    ? models.filter((m) => m.toLowerCase().includes(modelSearch.trim().toLowerCase()))
+    : models;
+
+  function handleSelectProvider(providerId: ProviderId) {
+    setActiveProvider(providerId);
+    // Don't close the picker — let the user pick a model.
+    // They can close manually via the X button or by clicking elsewhere.
+    setExpandedProvider(providerId);
+  }
+
+  function handleSelectModel(providerId: ProviderId, model: string) {
+    setProvider(providerId, { model });
+    setActiveProvider(providerId);
+    onClose();
+  }
+
   return (
-    <div className="border-t border-[var(--border-subtle)] bg-[var(--surface-raised)] p-3 space-y-2">
-      <div className="flex items-center justify-between">
+    <div className="border-t border-[var(--border-subtle)] bg-[var(--surface-raised)] p-3 space-y-2 max-h-[60vh] overflow-y-auto">
+      <div className="flex items-center justify-between sticky top-0 bg-[var(--surface-raised)] -mx-3 px-3 py-1 z-10">
         <span className="text-xs font-medium text-[var(--text-secondary)]">Switch provider</span>
         <button
           onClick={onClose}
           className="text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+          aria-label="Close"
         >
           <X size={12} strokeWidth={1.75} />
         </button>
       </div>
       {configured.length > 0 ? (
         <div className="space-y-1">
-          <div className="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">Configured</div>
-          {configured.map((p) => (
-            <button
-              key={p.id}
-              onClick={() => {
-                setActiveProvider(p.id);
-                onClose();
-              }}
-              className={cn(
-                "flex w-full items-center justify-between rounded px-2 py-1.5 text-xs transition-colors",
-                activeProviderId === p.id
-                  ? "bg-[var(--accent-subtle)] text-[var(--accent)]"
-                  : "text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
-              )}
-            >
-              <span>{p.name}</span>
-              <span className="font-mono text-[10px] text-[var(--text-muted)]">
-                {providers[p.id]?.model === "__custom__"
-                  ? providers[p.id]?.customModel
-                  : providers[p.id]?.model}
-              </span>
-            </button>
-          ))}
+          <div className="text-[10px] uppercase tracking-wide text-[var(--text-muted)] px-1">
+            Configured
+          </div>
+          {configured.map((p) => {
+            const isExpanded = expandedProvider === p.id;
+            const isActive = activeProviderId === p.id;
+            const cfg = providers[p.id];
+            return (
+              <div key={p.id} className="space-y-1">
+                <button
+                  onClick={() => handleSelectProvider(p.id)}
+                  className={cn(
+                    "flex w-full items-center justify-between rounded px-2 py-1.5 text-xs transition-colors",
+                    isActive
+                      ? "bg-[var(--accent-subtle)] text-[var(--accent)]"
+                      : "text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+                  )}
+                >
+                  <span className="flex items-center gap-1.5">
+                    {isActive && <Check size={10} strokeWidth={2} />}
+                    {p.name}
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="font-mono text-[10px] text-[var(--text-muted)] max-w-[140px] truncate">
+                      {cfg?.model === "__custom__" ? cfg?.customModel : cfg?.model}
+                    </span>
+                    <ChevronDown
+                      size={10}
+                      strokeWidth={1.75}
+                      className={cn("transition-transform", isExpanded && "rotate-180")}
+                    />
+                  </span>
+                </button>
+
+                {/* Expanded: show model picker for this provider */}
+                {isExpanded && (
+                  <div className="ml-3 rounded border border-[var(--border-subtle)] bg-[var(--surface-sunken)] p-2 space-y-2">
+                    {/* Search box */}
+                    <div className="flex items-center gap-1.5 rounded border border-[var(--border-subtle)] bg-[var(--surface-panel)] px-1.5 py-1">
+                      <Search size={10} strokeWidth={2} className="text-[var(--text-muted)] shrink-0" />
+                      <input
+                        type="text"
+                        value={modelSearch}
+                        onChange={(e) => setModelSearch(e.target.value)}
+                        placeholder="Search models…"
+                        autoFocus
+                        className="flex-1 bg-transparent text-[11px] text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)]"
+                      />
+                      {modelSearch && (
+                        <button onClick={() => setModelSearch("")} className="text-[var(--text-muted)] hover:text-[var(--text-primary)]">
+                          <X size={10} strokeWidth={2} />
+                        </button>
+                      )}
+                      <button
+                        onClick={() => fetchModels(p.id)}
+                        disabled={loadingModels}
+                        className="text-[var(--text-muted)] hover:text-[var(--text-primary)] disabled:opacity-50"
+                        title="Refresh models"
+                      >
+                        {loadingModels ? <Loader2 size={10} strokeWidth={2} className="animate-spin" /> : <RefreshCw size={10} strokeWidth={2} />}
+                      </button>
+                    </div>
+
+                    {/* Model list */}
+                    <div className="max-h-40 overflow-y-auto space-y-0.5">
+                      {loadingModels && (
+                        <div className="flex items-center justify-center py-2 text-[10px] text-[var(--text-muted)]">
+                          <Loader2 size={10} strokeWidth={2} className="animate-spin mr-1.5" />
+                          Loading models…
+                        </div>
+                      )}
+                      {!loadingModels && modelError && (
+                        <div className="px-2 py-1 text-[10px] text-[var(--status-error)]">{modelError}</div>
+                      )}
+                      {!loadingModels && !modelError && filteredModels.length === 0 && (
+                        <div className="px-2 py-2 text-center text-[10px] text-[var(--text-muted)]">
+                          {models.length === 0 ? "No models fetched" : "No matches"}
+                        </div>
+                      )}
+                      {!loadingModels && filteredModels.map((m) => (
+                        <button
+                          key={m}
+                          onClick={() => handleSelectModel(p.id, m)}
+                          className={cn(
+                            "flex w-full items-center justify-between rounded px-2 py-1 text-left text-[11px] font-mono transition-colors",
+                            cfg?.model === m
+                              ? "bg-[var(--accent-subtle)] text-[var(--accent)]"
+                              : "text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
+                          )}
+                        >
+                          <span className="truncate">{m}</span>
+                          {cfg?.model === m && <Check size={9} strokeWidth={2} className="shrink-0 ml-1" />}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Custom model option */}
+                    <button
+                      onClick={() => {
+                        setProvider(p.id, { model: "__custom__" });
+                        setActiveProvider(p.id);
+                        onClose();
+                      }}
+                      className={cn(
+                        "flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-[11px] transition-colors",
+                        cfg?.model === "__custom__"
+                          ? "bg-[var(--accent-subtle)] text-[var(--accent)]"
+                          : "text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+                      )}
+                    >
+                      <Plus size={10} strokeWidth={2} />
+                      Custom model name…
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       ) : (
         // No providers configured — prompt user to add one in Settings

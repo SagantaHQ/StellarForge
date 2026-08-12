@@ -445,6 +445,29 @@ export function registerAutocompleteProvider(monaco: typeof Monaco): { dispose: 
       // scans it to detect existing `use` statements.
       const source = model.getValue();
 
+      // When after `Type::`, the user is qualifying a path — they want to
+      // use `Type::something`. The thing that needs importing is `Type`
+      // itself (not the method they pick). Look up `Type` in the rustdoc
+      // index ONCE here, then attach the same auto-import edit to every
+      // suggestion in the `::` branch.
+      let typeBeforeColonsImport: { crate: string; symbol: string; kind: string } | undefined;
+      if (isAfterDoubleColon && typeName && rustdocSymbols) {
+        // Find the first type-like symbol matching `typeName` in the index.
+        // (soroban_sdk symbols come first in the merged index, so they win
+        // over std/alloc duplicates — which is the right priority for a
+        // Soroban contract.)
+        for (const sym of rustdocSymbols) {
+          const s = sym as { name: string; kind: string; module?: string };
+          if (s.name === typeName && s.module && (
+            s.kind === "struct" || s.kind === "enum" || s.kind === "trait" ||
+            s.kind === "type_alias" || s.kind === "typeAlias" || s.kind === "module"
+          )) {
+            typeBeforeColonsImport = { crate: s.module, symbol: s.name, kind: s.kind };
+            break;
+          }
+        }
+      }
+
       const add = (
         label: string,
         kind: number,
@@ -485,6 +508,8 @@ export function registerAutocompleteProvider(monaco: typeof Monaco): { dispose: 
           // Only attach auto-import in "normal" context (not after `.` or `::`
           // or `use`). After `.` / `::` the user is qualifying a path; after
           // `use` they're already writing the import.
+          // EXCEPTION: after `::`, we attach `typeBeforeColonsImport` (the
+          // type before `::`) to every suggestion — see above.
           const canAutoImport = !isAfterDot && !isAfterDoubleColon && !isAfterUse && !!s.module;
           const ai = canAutoImport ? { crate: s.module!, symbol: s.name, kind: s.kind } : undefined;
 
@@ -495,8 +520,10 @@ export function registerAutocompleteProvider(monaco: typeof Monaco): { dispose: 
             }
           } else if (isAfterDoubleColon) {
             // After `Type::` → show ALL symbols (associated functions, constants, etc.)
-            // Don't filter by typeName — just show everything so the user can pick
-            add(s.name, kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Text, s.detail, s.docs, undefined, "1");
+            // Don't filter by typeName — just show everything so the user can pick.
+            // Attach `typeBeforeColonsImport` so that whatever they pick, the
+            // type before `::` gets imported if it isn't already.
+            add(s.name, kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Text, s.detail, s.docs, undefined, "1", typeBeforeColonsImport);
           } else if (isAfterUse) {
             // After `use ` → show modules + types
             add(s.name, kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Text, s.detail, s.docs, undefined, "1");

@@ -175,6 +175,62 @@ console.log("\n=== buildAutoImportEdit ===");
   const src9 = "use other_crate::Address;";
   const r9 = buildAutoImportEdit(src9, { crate: "soroban_sdk", symbol: "Address", kind: "struct" });
   check("case 9: name conflict returns null", r9 === null);
+
+  // Case 10: simulated `String::` scenario — type before `::` needs importing.
+  // This is the shape of input the provider builds when the user types
+  // `String::` and accepts any suggestion. The provider looks up `String` in
+  // the rustdoc index → finds `{ crate: "soroban_sdk", kind: "struct" }` →
+  // passes it to buildAutoImportEdit. The picked suggestion's name doesn't
+  // matter — the import is for the type before `::`.
+  {
+    const src10 = "fn main() {\n    let s = String::new();\n}";
+    const r10 = buildAutoImportEdit(src10, { crate: "soroban_sdk", symbol: "String", kind: "struct" });
+    check("case 10: `String::` scenario returns edit", r10 !== null);
+    if (r10) {
+      console.log(`       desc: ${r10.description}`);
+      // Apply
+      const lines = src10.split("\n");
+      const newLines = [r10.edit.text.replace(/\n$/, ""), ...lines];
+      const finalSrc = newLines.join("\n");
+      console.log(`       result first line: ${finalSrc.split("\n")[0]}`);
+      check("case 10: result adds use soroban_sdk::String", finalSrc.includes("use soroban_sdk::String;"));
+    }
+  }
+
+  // Case 11: `String::` scenario but String already imported — no edit
+  {
+    const src11 = "use soroban_sdk::String;\n\nfn main() {\n    let s = String::new();\n}";
+    const r11 = buildAutoImportEdit(src11, { crate: "soroban_sdk", symbol: "String", kind: "struct" });
+    check("case 11: `String::` with existing import returns null", r11 === null);
+  }
+
+  // Case 12: `String::` scenario with glob import — no edit needed
+  {
+    const src12 = "use soroban_sdk::*;\n\nfn main() {\n    let s = String::new();\n}";
+    const r12 = buildAutoImportEdit(src12, { crate: "soroban_sdk", symbol: "String", kind: "struct" });
+    check("case 12: `String::` with glob import returns null", r12 === null);
+  }
+
+  // Case 13: `String::` scenario — extend existing use group
+  {
+    const src13 = "use soroban_sdk::{Address, Env};\n\nfn main() {\n    let s = String::new();\n}";
+    const r13 = buildAutoImportEdit(src13, { crate: "soroban_sdk", symbol: "String", kind: "struct" });
+    check("case 13: `String::` extends existing group", r13 !== null);
+    if (r13) {
+      console.log(`       desc: ${r13.description}`);
+      // Apply
+      const lines = src13.split("\n");
+      const line = lines[r13.edit.range.startLineNumber - 1];
+      const before = line.slice(0, r13.edit.range.startColumn - 1);
+      const after = line.slice(r13.edit.range.endColumn - 1);
+      const newLine = before + r13.edit.text + after;
+      const result = [...lines];
+      result[r13.edit.range.startLineNumber - 1] = newLine;
+      const finalSrc = result.join("\n");
+      console.log(`       result line 1: ${finalSrc.split("\n")[0]}`);
+      check("case 13: result has String in group", finalSrc.includes("String"));
+    }
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

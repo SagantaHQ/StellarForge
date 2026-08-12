@@ -10,7 +10,10 @@ module.exports = {
       interpreter: 'node',
       env: {
         NODE_ENV: 'development',
-        NODE_OPTIONS: '--max-old-space-size=1536',
+        // Increased from 1536 to 2560 MB — the dev server was OOM-crashing
+        // at 1.4GB heap, causing pm2 auto-restarts → full page reloads.
+        // The sandbox has 4GB RAM; 2.5GB for Node + 1.5GB for OS/stellar/cargo.
+        NODE_OPTIONS: '--max-old-space-size=2560',
         HOME: '/home/z',
         PATH: '/home/z/.local/bin:/home/z/.cargo/bin:/home/z/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
         // NON-NEGOTIABLE: always PostgreSQL (Neon). Never SQLite.
@@ -22,7 +25,9 @@ module.exports = {
       maxRestarts: 100,
       minUptime: 5000,
       restartDelay: 5000,
-      maxMemoryRestart: '2G',
+      // Increased from 2G to 3G — match the new heap limit so pm2 doesn't
+      // restart the process before Node's own GC can reclaim memory.
+      maxMemoryRestart: '3G',
       killTimeout: 10000,
       watch: false,
       out_file: '/home/z/my-project/.zscripts/bm2-out.log',

@@ -29,6 +29,7 @@ import { useFixWithAIStore } from "@/stores/fix-with-ai-store";
 import { useAttributionStore } from "@/stores/attribution-store";
 import { useProfileStore } from "@/stores/profile-store";
 import { useAgentTabsStore } from "@/stores/agent-tabs-store";
+import { useBuildStore } from "@/stores/build-store";
 import { findFile } from "@/lib/soroban/sample-project";
 
 type AgentScope = "smart-contract" | "ui-frontend" | "general" | "custom";
@@ -327,6 +328,13 @@ Do NOT just explain the error — output the actual fix as a diff.`;
           : t
       )
     );
+
+    // Auto-build after the AI edit is applied — the user just accepted a fix,
+    // so they likely want to see if it compiles now. Small delay to let the
+    // file system store + Monaco model settle before building.
+    setTimeout(() => {
+      useBuildStore.getState().startBuild({ silent: false });
+    }, 500);
   }
 
   function handleRejectDiff(diff: ParsedDiff) {

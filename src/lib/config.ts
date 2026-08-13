@@ -51,11 +51,11 @@ const ConfigSchema = z.object({
   STELLAR_RPC_MAINNET: z
     .string()
     .url()
-    .default("https://rpc.mainnet.stellar.org"),
+    .default("https://soroban-mainnet.stellar.org"),
   STELLAR_RPC_TESTNET: z
     .string()
     .url()
-    .default("https://rpc.testnet.stellar.org"),
+    .default("https://soroban-testnet.stellar.org"),
   STELLAR_RPC_FUTURENET: z
     .string()
     .url()

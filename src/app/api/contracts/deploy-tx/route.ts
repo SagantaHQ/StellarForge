@@ -36,8 +36,8 @@ export const maxDuration = 60;
 const BUILDS_DIR = "/tmp/soroban-builds";
 
 const NETWORK_RPC: Record<string, string> = {
-  mainnet: "https://rpc.mainnet.stellar.org",
-  testnet: "https://rpc.testnet.stellar.org",
+  mainnet: "https://soroban-mainnet.stellar.org",
+  testnet: "https://soroban-testnet.stellar.org",
   futurenet: "https://rpc.futurenet.stellar.org",
   local: "http://localhost:8000",
 };
@@ -166,23 +166,16 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Build the transaction
-    // For a NEW deploy: uploadContractWasm (upload WASM) + createCustomContract (create instance)
-    // For an UPGRADE: uploadContractWasm only (the client will use the existing contract ID)
+    // Build the transaction — upload WASM only.
+    // The contract creation (createCustomContract) is done in a SEPARATE
+    // transaction after the upload is confirmed. prepareTransaction doesn't
+    // support multi-operation Soroban transactions ("Transaction contains
+    // more than one operation" error).
     //
-    // We use uploadContractWasm to install the WASM on-chain. The wasm hash
-    // is returned in the transaction result. For a new deploy, we then use
-    // createCustomContract to create a new contract instance bound to that WASM.
-    //
-    // NOTE: The standard 2-step deploy (upload + create) requires the upload
-    // tx hash to use as salt. Since we can't get the tx hash before signing,
-    // we use a random salt instead (the contract ID will be different each
-    // deploy, which is fine for a new deploy).
-    //
-    // For upgrades, we only upload the new WASM — the client will call
-    // `stellar contract extend` or the contract's `upgrade` function after
-    // the upload is confirmed.
-
+    // Flow:
+    //   1. This endpoint: build uploadContractWasm tx → user signs → submit
+    //   2. After upload confirmed: build createCustomContract tx → user signs → submit
+    //   (step 2 is handled by the submit route after it detects the upload succeeded)
     const wasmBytes = Buffer.from(wasmBuffer);
 
     const txBuilder = new TransactionBuilder(sourceAccount, {
@@ -190,28 +183,11 @@ export async function POST(req: NextRequest) {
       networkPassphrase: passphrase,
     });
 
-    // Step 1: Upload the WASM
     txBuilder.addOperation(
       Operation.uploadContractWasm({
         wasm: wasmBytes,
       })
     );
-
-    // Step 2: For a NEW deploy, add createCustomContract
-    // (For upgrades, we skip this — the existing contract ID is used)
-    if (!isUpgrade) {
-      const salt = randomBytes(32);
-      // The wasmHash for createCustomContract must be a Buffer (32 bytes),
-      // not a hex string. We pass the raw SHA-256 hash bytes.
-      const wasmHashBytes = Buffer.from(wasmHash, "hex");
-      txBuilder.addOperation(
-        Operation.createCustomContract({
-          wasmHash: wasmHashBytes,
-          address: Address.fromString(walletAddress),
-          salt,
-        })
-      );
-    }
 
     txBuilder.setTimeout(300);
 

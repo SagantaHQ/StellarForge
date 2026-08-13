@@ -38,8 +38,8 @@ export const maxDuration = 60;
 const BUILDS_DIR = "/tmp/soroban-builds";
 
 const NETWORK_RPC: Record<string, string> = {
-  mainnet: "https://rpc.mainnet.stellar.org",
-  testnet: "https://rpc.testnet.stellar.org",
+  mainnet: "https://soroban-mainnet.stellar.org",
+  testnet: "https://soroban-testnet.stellar.org",
   futurenet: "https://rpc.futurenet.stellar.org",
   local: "http://localhost:8000",
 };

@@ -256,6 +256,50 @@ export const useProjectsStore = create<ProjectsState>()(
           set({
             projects: merged.sort((a, b) => b.updatedAt - a.updatedAt),
           });
+
+          // EAGERLY fetch files for all server projects. This way, when the
+          // user selects a project, the files are already in IDB + load
+          // instantly. We fetch in parallel (batches of 3) for speed.
+          const projectsNeedingFiles = merged.filter((p) => p.serverProjectId);
+
+          // Fetch files in batches of 3
+          const BATCH_SIZE = 3;
+          for (let i = 0; i < projectsNeedingFiles.length; i += BATCH_SIZE) {
+            const batch = projectsNeedingFiles.slice(i, i + BATCH_SIZE);
+            await Promise.all(batch.map(async (p) => {
+              if (!p.serverProjectId) return;
+              // Check if we already have files cached in IDB
+              const cached = await projectGet(p.id);
+              if (cached && cached.files && cached.files.length > 0) return; // already cached
+              try {
+                const fileRes = await fetch(`/api/projects/${p.serverProjectId}`);
+                if (fileRes.ok) {
+                  const fileData = await fileRes.json();
+                  const serverFiles = (fileData.project.files ?? []).map(
+                    (f: { path: string; content: string; language: string }) => ({
+                      path: f.path,
+                      content: f.content,
+                      language: f.language,
+                    })
+                  );
+                  // Cache in IDB for next time
+                  await projectSet({
+                    id: p.id,
+                    name: p.name,
+                    slug: p.slug,
+                    description: p.description,
+                    ownerId: p.ownerId,
+                    serverProjectId: p.serverProjectId,
+                    files: serverFiles,
+                    createdAt: p.createdAt,
+                    updatedAt: Date.now(),
+                  });
+                }
+              } catch {
+                // Best-effort — if one project fails, continue with others
+              }
+            }));
+          }
         } catch {
           // Silently fail — local-first means we work offline
         }

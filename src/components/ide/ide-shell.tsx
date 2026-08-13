@@ -235,12 +235,15 @@ export function IdeShell() {
         .then((r) => r.ok ? r.json() : null)
         .then((data) => {
           if (data?.loggedIn && data?.user?.id) {
+            // Show syncing indicator while fetching all projects + files
+            useProjectsStore.setState({ syncingFromCloud: true });
             projectsSyncFromServer(data.user.id).then(() => {
-              // After syncing projects from server, re-hydrate the file
-              // system store from IDB (in case a project was active before)
+              // After syncing projects + files from server, re-hydrate
               hydrate();
-              // Also re-hydrate projects from IDB (merged with server data)
               projectsHydrate();
+              useProjectsStore.setState({ syncingFromCloud: false });
+            }).catch(() => {
+              useProjectsStore.setState({ syncingFromCloud: false });
             });
           }
         })

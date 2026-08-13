@@ -338,14 +338,28 @@ export const useProfileStore = create<ProfileState>()(
     {
       name: "soroban-build:profile",
       storage: createJSONStorage(() => localStorage),
+      // CRITICAL: Do NOT persist walletConnected, profile, or siwsValidated.
+      //
+      // Previously we persisted walletConnected + profile so the UI showed
+      // the avatar immediately on page load. But this caused a bug: the user
+      // appeared "logged in" even when the wallet wasn't actually connected
+      // (e.g. wallet extension closed, storage cleared, different browser).
+      //
+      // Now we only persist:
+      //   - accentColor (cosmetic, safe to restore)
+      //   - githubConnected + githubUsername (set after OAuth, not wallet-dependent)
+      //
+      // On page load:
+      //   - walletConnected starts false
+      //   - profile starts null
+      //   - siwsValidated starts false
+      //   - The SiwsSessionBridge + SDK restore() verify the wallet is actually
+      //     connected before setting these to true
+      //   - If the wallet isn't connected within 15s, the user stays logged out
       partialize: (s) => ({
-        profile: s.profile,
         accentColor: s.accentColor,
-        // Persist walletConnected + walletAddress so the UI shows the avatar
-        // immediately on page load (before the SDK finishes async restore).
-        // The SiwsSessionBridge will confirm or correct this shortly after.
-        walletConnected: s.walletConnected,
-        walletAddress: s.walletAddress,
+        githubConnected: s.githubConnected,
+        githubUsername: s.githubUsername,
       }),
     }
   )

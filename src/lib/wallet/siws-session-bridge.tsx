@@ -136,24 +136,22 @@ export function SiwsSessionBridge() {
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const giveUpTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // ── 1. Optimistic restore on mount ──────────────────────────────────
-  // Read the persisted SIWS session + wallet address from localStorage
-  // and set the profile-store immediately, so the UI shows the avatar
-  // before the SDK finishes its async restore().
+  // ── 1. NO optimistic restore on mount ───────────────────────────────
+  // Previously we read the persisted SIWS session + wallet address from
+  // localStorage and set the profile-store immediately. But this caused
+  // the "logged in without wallet connected" bug — the user appeared
+  // logged in before the SDK verified the wallet was actually connected.
+  //
+  // Now we DON'T restore optimistically. The SDK's restoreOnMount +
+  // the SiwsSessionBridge's retry logic will verify the wallet connection
+  // + set the profile only when the wallet is actually connected.
+  //
+  // We still read the persisted address for the auto-connect logic below,
+  // but we DON'T set walletConnected or profile from it.
+  const persistedWalletAddressRef = useRef<string | null>(null);
   useEffect(() => {
-    const persistedSession = readPersistedSiwsSession();
-    const persistedAddress = readPersistedWalletAddress();
-
-    if (persistedSession) {
-      // Optimistically set the profile from the persisted SIWS session
-      lastSyncedAddress.current = persistedSession.address;
-      syncFromSiwsSession(persistedSession);
-    } else if (persistedAddress) {
-      // Wallet was connected but no SIWS session — set walletConnected
-      // so the UI at least shows the right state
-      setWalletConnected(true, persistedAddress);
-    }
-  }, [syncFromSiwsSession, setWalletConnected]);
+    persistedWalletAddressRef.current = readPersistedWalletAddress();
+  }, []);
 
   // ── 2. Sync SIWS session changes → profile store ───────────────────
   // Also validates the session against the server and fetches FRESH user

@@ -536,12 +536,16 @@ function DeployPanel({ network }: { network: string }) {
   }
 
   async function handleDeploy() {
-    if (!profile?.address) {
-      setError("Connect your wallet first — deployment requires wallet signing.");
-      return;
-    }
-    if (!walletConnected) {
-      setError("Wallet not connected. Click 'Connect Wallet' above to connect.");
+    // Check if wallet is connected — if not, open the wallet modal automatically
+    if (!profile?.address || !walletConnected) {
+      // Open the wallet modal so the user can connect
+      const handle = (window as unknown as { __walletModal?: { open: () => void } }).__walletModal;
+      if (handle) {
+        setError("Wallet not connected. Opening wallet picker…");
+        handle.open();
+      } else {
+        setError("Wallet not connected. Please connect your wallet first.");
+      }
       return;
     }
     if (!activeProject?.serverProjectId) {
@@ -661,7 +665,9 @@ function DeployPanel({ network }: { network: string }) {
   }
 
   const isUpgrade = !!existingContract;
-  const canDeploy = profile && walletConnected && activeProject?.serverProjectId && wasmInfo && !deploying;
+  // canDeploy allows clicking the button even without a wallet — handleDeploy
+  // will open the wallet modal if the wallet isn't connected.
+  const canDeploy = activeProject?.serverProjectId && wasmInfo && !deploying;
 
   return (
     <div className="flex h-full flex-col p-3 gap-3 overflow-y-auto">

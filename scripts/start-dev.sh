@@ -18,7 +18,11 @@ cd /home/z/my-project
 
 # Load env
 export NODE_ENV=development
-export NODE_OPTIONS="--max-old-space-size=2560"
+# Lowered from 2560 to 1536 MB — the dev server was still OOM-killing at
+# 3.5GB anonymous RSS because --max-old-space-size only limits V8's JS heap,
+# not Node's total memory (buffers, native allocations, string storage).
+# 1.5GB forces V8 to GC more aggressively, keeping total RSS lower.
+export NODE_OPTIONS="--max-old-space-size=1536"
 export HOME=/home/z
 export PATH="/home/z/.local/bin:/home/z/.cargo/bin:/home/z/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 

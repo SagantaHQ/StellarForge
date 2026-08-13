@@ -150,36 +150,41 @@ export function BuildOutputPanel({ collapsed, onToggleCollapse }: BuildOutputPan
         </div>
       )}
 
-      {/* Error + Fix with AI button */}
+      {/* Error + Fix with AI button (only for code/compiler errors) */}
       {error && status === "failed" && (
         <div className="border-t border-[var(--border-subtle)] px-3 py-2 bg-[color-mix(in_srgb,var(--status-error)_10%,transparent)] space-y-2">
           <div className="text-[11px] text-[var(--status-error)]">{error}</div>
-          {!fixRequested ? (
-            <button
-              onClick={() => {
-                // Collect all stderr lines + the error message as the error context.
-                const errorLines = lines
-                  .filter((l) => l.type === "stderr" || l.text.startsWith("error") || l.text.startsWith("warning"))
-                  .map((l) => l.text)
-                  .join("\n");
-                const fullError = errorLines || error;
-                requestFix(fullError, "stellar contract build");
-                // Hide the button — fix request has been sent to the AI agent
-                setFixRequested(true);
-                // Switch to the agent panel so the user sees the fix request
-                const switchEvent = new CustomEvent("soroban-switch-right-panel", { detail: "agent" });
-                window.dispatchEvent(switchEvent);
-              }}
-              className="flex items-center gap-1.5 rounded-md border border-[var(--accent)]/40 bg-[var(--accent)]/10 px-2.5 py-1.5 text-[11px] font-medium text-[var(--accent)] hover:bg-[var(--accent)]/20 transition-colors"
-            >
-              <Sparkles size={11} strokeWidth={1.75} />
-              Fix with AI
-            </button>
-          ) : (
-            <div className="flex items-center gap-1.5 rounded-md border border-[var(--accent)]/30 bg-[var(--accent)]/5 px-2.5 py-1.5 text-[11px] text-[var(--accent)]">
-              <Check size={11} strokeWidth={2} />
-              Fix sent to AI agent — check the Agent panel for the proposed fix
-            </div>
+          {/* Only show "Fix with AI" for actual code/compiler errors — not
+              server errors, timeouts, missing tools, etc. The AI can only fix
+              Rust/Soroban code issues, not infrastructure problems. */}
+          {isCodeError(error, lines) && (
+            !fixRequested ? (
+              <button
+                onClick={() => {
+                  // Collect all stderr lines + the error message as the error context.
+                  const errorLines = lines
+                    .filter((l) => l.type === "stderr" || l.text.startsWith("error") || l.text.startsWith("warning"))
+                    .map((l) => l.text)
+                    .join("\n");
+                  const fullError = errorLines || error;
+                  requestFix(fullError, "stellar contract build");
+                  // Hide the button — fix request has been sent to the AI agent
+                  setFixRequested(true);
+                  // Switch to the agent panel so the user sees the fix request
+                  const switchEvent = new CustomEvent("soroban-switch-right-panel", { detail: "agent" });
+                  window.dispatchEvent(switchEvent);
+                }}
+                className="flex items-center gap-1.5 rounded-md border border-[var(--accent)]/40 bg-[var(--accent)]/10 px-2.5 py-1.5 text-[11px] font-medium text-[var(--accent)] hover:bg-[var(--accent)]/20 transition-colors"
+              >
+                <Sparkles size={11} strokeWidth={1.75} />
+                Fix with AI
+              </button>
+            ) : (
+              <div className="flex items-center gap-1.5 rounded-md border border-[var(--accent)]/30 bg-[var(--accent)]/5 px-2.5 py-1.5 text-[11px] text-[var(--accent)]">
+                <Check size={11} strokeWidth={2} />
+                Fix sent to AI agent — check the Agent panel for the proposed fix
+              </div>
+            )
           )}
         </div>
       )}
@@ -188,3 +193,102 @@ export function BuildOutputPanel({ collapsed, onToggleCollapse }: BuildOutputPan
 }
 
 import { ChevronDown } from "lucide-react";
+
+/**
+ * Determine if a build error is a CODE/COMPILER error (AI can fix) vs a
+ * SERVER/INFRASTRUCTURE error (AI can't fix).
+ *
+ * Code errors the AI CAN fix:
+ *   - Rust compiler errors (error[E0XXX], error: expected, error: cannot find)
+ *   - Soroban SDK errors
+ *   - Missing imports, type mismatches, syntax errors
+ *   - Cargo.toml dependency errors
+ *
+ * Server/infra errors the AI CANNOT fix:
+ *   - stellar CLI not installed
+ *   - cargo not found / No such file or directory
+ *   - Network timeouts, connection refused
+ *   - OOM / heap out of memory
+ *   - 502 / 500 server errors
+ *   - Permission denied
+ */
+function isCodeError(
+  error: string,
+  lines: { type: string; text: string }[]
+): boolean {
+  // Combine the error message + all stderr lines for checking
+  const allText = (error + " " + lines.map((l) => l.text).join(" ")).toLowerCase();
+
+  // Server/infrastructure error patterns — if ANY match, it's NOT a code error
+  const infraPatterns = [
+    "no such file or directory",
+    "command not found",
+    "not installed",
+    "enoent",
+    "eacces",
+    "permission denied",
+    "connection refused",
+    "connection reset",
+    "timed out",
+    "timeout",
+    "bad gateway",
+    "internal server error",
+    "heap out of memory",
+    "oom",
+    "killed process",
+    "exit code 127", // command not found
+    "failed to start",
+    "network error",
+    "econnrefused",
+    "econnreset",
+    "database is not available",
+    "failed to spawn",
+    "cargo metadata",
+  ];
+
+  for (const pattern of infraPatterns) {
+    if (allText.includes(pattern)) return false;
+  }
+
+  // Code error patterns — if ANY match, it IS a code error
+  const codePatterns = [
+    "error[e",          // Rust compiler error codes (E0XXX)
+    "error:",           // Generic Rust error
+    "warning:",         // Rust warning
+    "expected",         // "expected `;`" etc.
+    "cannot find",      // "cannot find function/type/macro in this scope"
+    "mismatched types",
+    "no method named",
+    "not found in this scope",
+    "missing",          // "missing field" etc.
+    "undefined",
+    "syntax error",
+    "borrow of moved",
+    "the trait",        // "the trait `Copy` is not implemented"
+    "lifetime",         // lifetime errors
+    "overflow",         // arithmetic overflow
+    "cannot assign",
+    "expected one of",  // parse errors
+    "unresolved",
+    "not a member",
+    "no variant",
+    "invalid reference",
+    "--> src/",         // Rust error location pointer
+    "src/lib.rs:",
+    "src/contract.rs:",
+    "src/test.rs:",
+  ];
+
+  for (const pattern of codePatterns) {
+    if (allText.includes(pattern)) return true;
+  }
+
+  // Default: if the error has "exit code 1" (typical cargo build failure)
+  // and no infra pattern matched, assume it's a code error
+  if (allText.includes("exit code 1") || allText.includes("build failed")) {
+    return true;
+  }
+
+  // Default: don't show the button (safer — avoid sending non-code errors to AI)
+  return false;
+}

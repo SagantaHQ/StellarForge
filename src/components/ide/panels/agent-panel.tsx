@@ -28,6 +28,7 @@ import { flattenFiles } from "@/lib/soroban/sample-project";
 import { useFixWithAIStore } from "@/stores/fix-with-ai-store";
 import { useAttributionStore } from "@/stores/attribution-store";
 import { useProfileStore } from "@/stores/profile-store";
+import { useAgentTabsStore } from "@/stores/agent-tabs-store";
 import { findFile } from "@/lib/soroban/sample-project";
 
 type AgentScope = "smart-contract" | "ui-frontend" | "general" | "custom";
@@ -42,16 +43,28 @@ interface AgentTab {
 }
 
 export function AgentPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
-  const [tabs, setTabs] = useState<AgentTab[]>([
-    {
-      id: "tab-1",
-      name: "Contract Work",
-      scope: "smart-contract",
-      messages: [],
-      pendingDiffs: [],
-    },
-  ]);
-  const [activeTabId, setActiveTabId] = useState("tab-1");
+  // Chat tabs are now persisted in the agent-tabs-store (localStorage) so
+  // chat history survives page reloads. We use the store's updateTab helper
+  // via a setTabs wrapper to minimize changes to the existing setTabs calls.
+  const storeTabs = useAgentTabsStore((s) => s.tabs);
+  const storeActiveTabId = useAgentTabsStore((s) => s.activeTabId);
+  const storeSetTabs = useAgentTabsStore((s) => s.setTabs);
+  const storeSetActiveTabId = useAgentTabsStore((s) => s.setActiveTabId);
+  const storeRemoveTab = useAgentTabsStore((s) => s.removeTab);
+
+  // Cast to local AgentTab type (pendingDiffs is unknown[] in the store,
+  // ParsedDiff[] here — same shape, just typed differently to avoid import cycle)
+  const tabs = storeTabs as AgentTab[];
+  const activeTabId = storeActiveTabId;
+
+  // Wrapper: accepts either an array or an updater function, matches the
+  // old useState pattern so existing setTabs((prev) => ...) calls work.
+  const setTabs = (updater: AgentTab[] | ((prev: AgentTab[]) => AgentTab[])) => {
+    const newTabs = typeof updater === "function" ? (updater as (prev: AgentTab[]) => AgentTab[])(storeTabs as AgentTab[]) : updater;
+    storeSetTabs(newTabs);
+  };
+
+  const setActiveTabId = (id: string) => storeSetActiveTabId(id);
   const [input, setInput] = useState("");
   const [showProviderPicker, setShowProviderPicker] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -372,7 +385,7 @@ Do NOT just explain the error — output the actual fix as a diff.`;
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  setTabs((prev) => prev.filter((t) => t.id !== tab.id));
+                  storeRemoveTab(tab.id);
                 }}
                 className="opacity-0 group-hover:opacity-100 hover:bg-[var(--surface-hover)] rounded p-0.5"
                 aria-label="Close tab"

@@ -584,7 +584,12 @@ function DeployPanel({ network }: { network: string }) {
 
       const txData = await buildTxRes.json();
       if (!buildTxRes.ok) {
-        setError(txData.error || "Failed to build deploy transaction");
+        // Show the FULL error detail (not just the generic message) so the
+        // user knows exactly what went wrong without digging in the network tab
+        const errMsg = txData.detail
+          ? `${txData.error}: ${txData.detail}`
+          : txData.error || "Failed to build deploy transaction";
+        setError(errMsg);
         setDeploying(false);
         setStatusMsg("");
         return;

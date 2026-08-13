@@ -67,13 +67,18 @@ export const useBuildStore = create<BuildState>((set, get) => ({
     const tree = opts.tree ?? useFileSystemStore.getState().tree;
     const files = flattenFiles(tree).map((f) => ({ path: f.path, content: f.content }));
 
+    // Get the real project ID from the projects store (not hardcoded)
+    const { useProjectsStore } = await import("@/stores/projects-store");
+    const activeProject = useProjectsStore.getState().getActiveProject();
+    const projectId = activeProject?.serverProjectId ?? activeProject?.id ?? "local-project";
+
     try {
       const res = await fetch("/api/build", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          projectId: "local-project",
-          projectName: opts.projectName,
+          projectId,
+          projectName: opts.projectName ?? activeProject?.name,
           files,
           command: opts.command ?? "stellar",
         }),

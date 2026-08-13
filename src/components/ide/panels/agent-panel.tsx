@@ -16,6 +16,7 @@ import {
   ChevronDown,
   Search,
   RefreshCw,
+  RotateCcw,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -69,6 +70,9 @@ export function AgentPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
   const [input, setInput] = useState("");
   const [showProviderPicker, setShowProviderPicker] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  // Track the last sent message + its errorContext so we can retry on failure.
+  // Stored as a ref (not state) so it doesn't trigger re-renders.
+  const lastSentRef = useRef<{ message: string; errorContext?: string } | null>(null);
 
   const activeProviderId = useAIKeysStore((s) => s.activeProviderId);
   const providers = useAIKeysStore((s) => s.providers);
@@ -194,6 +198,8 @@ Do NOT just explain the error — output the actual fix as a diff.`;
         );
       }
     });
+    // Track for retry (including the errorContext so the retry has the same context)
+    lastSentRef.current = { message: fixMessage, errorContext: pendingFix.errorOutput };
     consumeFix();
   }, [pendingFix, loading, hasProvider, activeTabId, sendMessage, consumeFix]);
 
@@ -221,6 +227,49 @@ Do NOT just explain the error — output the actual fix as a diff.`;
     }));
 
     sendMessage(userInput, history).then(({ response, diffs }) => {
+      if (response) {
+        setTabs((prev) =>
+          prev.map((t) =>
+            t.id === activeTabId
+              ? {
+                  ...t,
+                  messages: [
+                    ...t.messages,
+                    {
+                      role: "assistant" as const,
+                      content: response.content,
+                      timestamp: Date.now(),
+                    },
+                  ],
+                  pendingDiffs: diffs,
+                }
+              : t
+          )
+        );
+      }
+    });
+
+    // Track for retry
+    lastSentRef.current = { message: userInput };
+  }
+
+  // Retry the last sent message when the AI request failed.
+  // Re-sends the same message + errorContext (if any) to the provider.
+  function handleRetry() {
+    if (!lastSentRef.current || loading) return;
+    const { message, errorContext } = lastSentRef.current;
+
+    // Clear the error first
+    clearError();
+
+    // Build history from the current tab's messages (excluding the failed
+    // user message if it's the last one — we're about to re-send it)
+    const history: ChatMessage[] = activeTab.messages.slice(-10).map((m) => ({
+      role: m.role === "system" ? "system" : m.role,
+      content: m.content,
+    }));
+
+    sendMessage(message, history, undefined, errorContext ? { errorContext } : undefined).then(({ response, diffs }) => {
       if (response) {
         setTabs((prev) =>
           prev.map((t) =>
@@ -487,7 +536,7 @@ Do NOT just explain the error — output the actual fix as a diff.`;
           </div>
         )}
 
-        {/* Error */}
+        {/* Error + Retry button */}
         {error && (
           <div className="rounded border border-[var(--status-error)] bg-[color-mix(in_srgb,var(--status-error)_12%,transparent)] px-2.5 py-1.5 text-xs text-[var(--status-error)]">
             <div className="flex items-start gap-2">
@@ -496,6 +545,16 @@ Do NOT just explain the error — output the actual fix as a diff.`;
                 <div className="font-medium">Request failed</div>
                 <div className="mt-0.5 text-[11px] opacity-90">{error}</div>
               </div>
+              <button
+                onClick={handleRetry}
+                disabled={loading || !lastSentRef.current}
+                className="shrink-0 flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium hover:bg-[color-mix(in_srgb,var(--status-error)_20%,transparent)] disabled:opacity-50 transition-colors"
+                aria-label="Retry last request"
+                title="Retry last request"
+              >
+                <RotateCcw size={10} strokeWidth={2} />
+                Retry
+              </button>
               <button
                 onClick={clearError}
                 className="shrink-0 hover:opacity-70"

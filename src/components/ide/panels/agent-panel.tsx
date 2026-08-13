@@ -101,22 +101,11 @@ export function AgentPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
   const setAllowAlways = useAIKeysStore((s) => s.setAllowAlways);
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? tabs[0] ?? null;
+  const scope = activeTab?.scope ?? "general" as AgentScope;
 
-  // If no active tab (no project open or no tabs), show an empty state
-  if (!activeTab) {
-    return (
-      <div className="flex h-full flex-col">
-        <div className="flex-1 flex items-center justify-center p-4 text-center">
-          <div className="text-xs text-[var(--text-muted)]">
-            Open a project to start chatting with the AI agent.
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  const scope = activeTab.scope;
-
+  // All hooks MUST be called before any early return — React requires hooks
+  // to be called in the same order on every render. The early return for
+  // "no active tab" must come AFTER all hook calls.
   const { sendMessage, loading, error, lastTokenUsage, lastContextFiles, clearError } = useAIChat({
     scope,
   });
@@ -128,6 +117,20 @@ export function AgentPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
     const cfg = s.providers[s.activeProviderId ?? "" as ProviderId];
     return !!cfg && (s.activeProviderId === "ollama" ? true : !!cfg.apiKey);
   });
+
+  // If no active tab (no project open or no tabs), show an empty state.
+  // This MUST come after all hook calls above.
+  if (!activeTab) {
+    return (
+      <div className="flex h-full flex-col">
+        <div className="flex-1 flex items-center justify-center p-4 text-center">
+          <div className="text-xs text-[var(--text-muted)]">
+            Open a project to start chatting with the AI agent.
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });

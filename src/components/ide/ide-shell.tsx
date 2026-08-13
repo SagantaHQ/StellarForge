@@ -175,13 +175,30 @@ export function IdeShell() {
   // click the Build button manually.
   const lastBuiltProjectRef = useRef<string | null>(null);
   useEffect(() => {
-    if (activeProject && projectsHydrated && lastBuiltProjectRef.current !== activeProject.id) {
+    // Wait for ALL of these before auto-building:
+    //   1. activeProject is set
+    //   2. projects store is hydrated
+    //   3. file system store has files loaded (tree.length > 0)
+    //   4. We haven't already built this project in this session
+    // Without checking #3, the build fires before files are loaded from
+    // the server (when opening a project on a new device) → "Missing
+    // projectId or files" error.
+    const fsTree = useFileSystemStore.getState().tree;
+    if (
+      activeProject &&
+      projectsHydrated &&
+      fsTree.length > 0 &&
+      lastBuiltProjectRef.current !== activeProject.id
+    ) {
       lastBuiltProjectRef.current = activeProject.id;
       // Don't auto-build on every reload — only when the user is logged in
       // AND the build status is idle. The 1.5s delay gives the page time to
       // settle before kicking off a build.
       const timer = setTimeout(() => {
+        // Re-check that files are still loaded (user might have closed the project)
+        const currentTree = useFileSystemStore.getState().tree;
         if (
+          currentTree.length > 0 &&
           useProfileStore.getState().isLoggedIn() &&
           useBuildStore.getState().status === "idle"
         ) {
@@ -190,7 +207,7 @@ export function IdeShell() {
       }, 1500);
       return () => clearTimeout(timer);
     }
-  }, [activeProject?.id, projectsHydrated, startBuild]);
+  }, [activeProject?.id, projectsHydrated, tree.length, startBuild]);
 
   // Build autocomplete artifacts after a successful build (or project load)
   // Debounced (800ms) so rapid file edits don't trigger a re-parse on every

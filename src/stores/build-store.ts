@@ -67,6 +67,19 @@ export const useBuildStore = create<BuildState>((set, get) => ({
     const tree = opts.tree ?? useFileSystemStore.getState().tree;
     const files = flattenFiles(tree).map((f) => ({ path: f.path, content: f.content }));
 
+    // Guard: don't build if there are no files loaded yet.
+    // This happens when a project is opened on a new device — the files
+    // are being fetched from the server, and the build would fail with
+    // "Missing projectId or files" error.
+    if (files.length === 0) {
+      set({
+        status: "failed",
+        error: "No files loaded. Wait for the project to finish loading before building.",
+        finishedAt: Date.now(),
+      });
+      return;
+    }
+
     // Get the real project ID from the projects store (not hardcoded)
     const { useProjectsStore } = await import("@/stores/projects-store");
     const activeProject = useProjectsStore.getState().getActiveProject();

@@ -105,7 +105,7 @@ export function AgentPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
 
   // All hooks MUST be called before any early return — React requires hooks
   // to be called in the same order on every render. The early return for
-  // "no active tab" must come AFTER all hook calls.
+  // "no active tab" must come AFTER all hook calls (including useEffects).
   const { sendMessage, loading, error, lastTokenUsage, lastContextFiles, clearError } = useAIChat({
     scope,
   });
@@ -118,34 +118,16 @@ export function AgentPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
     return !!cfg && (s.activeProviderId === "ollama" ? true : !!cfg.apiKey);
   });
 
-  // If no active tab (no project open or no tabs), show an empty state.
-  // This MUST come after all hook calls above.
-  if (!activeTab) {
-    return (
-      <div className="flex h-full flex-col">
-        <div className="flex-1 flex items-center justify-center p-4 text-center">
-          <div className="text-xs text-[var(--text-muted)]">
-            Open a project to start chatting with the AI agent.
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [activeTab.messages.length, loading]);
+  }, [activeTab?.messages.length ?? 0, loading]);
 
   // Listen for AI prompt events from the editor (Refactor / Explain / Fix with AI)
-  // These are dispatched by monaco-editor.tsx when the user right-clicks and
-  // picks one of the AI actions. We pre-fill the input with the prompt so the
-  // user can review it before sending (or just press Enter to send).
   useEffect(() => {
     function handleAgentPrompt(e: Event) {
       const detail = (e as CustomEvent<{ prompt: string }>).detail;
       if (detail?.prompt) {
         setInput(detail.prompt);
-        // Focus the input so the user can immediately press Enter to send
         const inputEl = document.querySelector<HTMLTextAreaElement | HTMLInputElement>(
           "[data-agent-input]"
         );
@@ -158,7 +140,7 @@ export function AgentPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
 
   // §9.7 — Auto-consume pending fix requests from the terminal/build 'Fix with AI' button
   useEffect(() => {
-    if (!pendingFix || loading || !hasProvider) return;
+    if (!pendingFix || loading || !hasProvider || !activeTab) return;
     const fixMessage = `The following build command failed:
 
 \`\`\`
@@ -238,6 +220,20 @@ Do NOT just explain the error — output the actual fix as a diff.`;
     lastSentRef.current = { message: fixMessage, errorContext: pendingFix.errorOutput };
     consumeFix();
   }, [pendingFix, loading, hasProvider, activeTabId, sendMessage, consumeFix]);
+
+  // If no active tab (no project open or no tabs), show an empty state.
+  // This MUST come after ALL hook calls above (including useEffects).
+  if (!activeTab) {
+    return (
+      <div className="flex h-full flex-col">
+        <div className="flex-1 flex items-center justify-center p-4 text-center">
+          <div className="text-xs text-[var(--text-muted)]">
+            Open a project to start chatting with the AI agent.
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   function handleSend() {
     if (!input.trim() || loading) return;

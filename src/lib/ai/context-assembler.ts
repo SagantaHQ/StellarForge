@@ -230,15 +230,16 @@ export function assembleContext(opts: AssembleOptions): AssembledContext {
   usage.cargoToml += estimateTokens(projectTreeContent);
 
   // 5c. Include full content of ALL source files (not just active + imports)
-  // so the AI can edit any file. Cap total at ~40% of budget to leave room
-  // for the response.
-  const sourceFilesBudget = Math.floor(budget * 0.4);
+  // so the AI can edit any file. Cap total at ~25% of budget (was 40%) to
+  // reduce memory pressure — the dev server was OOM-killing when the AI
+  // context was too large + cargo build ran at the same time.
+  const sourceFilesBudget = Math.floor(budget * 0.25);
   let allFilesContent = "";
   let allFilesTokens = 0;
   for (const f of allProjectFiles) {
     // Skip target/, .next/, node_modules/, large files
     if (f.path.startsWith("target/") || f.path.startsWith(".next/") || f.path.startsWith("node_modules/")) continue;
-    if (f.content.length > 16000) continue; // skip files > 4k tokens
+    if (f.content.length > 8000) continue; // skip files > 2k tokens (was 16k) — reduce memory
     // Don't duplicate the active file or imports (already included above)
     if (f.path === opts.activeFilePath) continue;
     if (filesIncluded.includes(f.path)) continue;

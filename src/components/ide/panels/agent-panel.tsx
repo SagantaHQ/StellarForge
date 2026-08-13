@@ -330,11 +330,17 @@ Do NOT just explain the error — output the actual fix as a diff.`;
     );
 
     // Auto-build after the AI edit is applied — the user just accepted a fix,
-    // so they likely want to see if it compiles now. Small delay to let the
-    // file system store + Monaco model settle before building.
+    // so they likely want to see if it compiles now.
+    //
+    // Memory note: the dev server + cargo build (spawned by /api/build) can
+    // together exceed the sandbox's 4GB RAM. We add a 1.5s delay to let:
+    //   1. The file system store settle (updateFileContent is async)
+    //   2. Monaco model update complete
+    //   3. The AI response finish rendering (frees some memory)
+    //   4. Node GC run before the memory-intensive cargo build starts
     setTimeout(() => {
-      useBuildStore.getState().startBuild({ silent: false });
-    }, 500);
+      useBuildStore.getState().startBuild({ silent: true });
+    }, 1500);
   }
 
   function handleRejectDiff(diff: ParsedDiff) {

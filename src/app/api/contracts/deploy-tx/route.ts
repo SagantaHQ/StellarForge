@@ -144,10 +144,27 @@ export async function POST(req: NextRequest) {
 
     // Build the transaction using @stellar/stellar-sdk directly (no subprocess)
     const StellarSdk = await import("@stellar/stellar-sdk");
-    const { rpc: stellarRpc, Address, BASE_FEE, Memo, Operation, TransactionBuilder } = StellarSdk;
+    const { rpc: stellarRpc, Address, BASE_FEE, Operation, TransactionBuilder } = StellarSdk;
 
     const server = new stellarRpc.Server(rpc);
-    const sourceAccount = await server.getAccount(walletAddress);
+
+    // Fetch the source account — this will fail if the account doesn't exist
+    // on the network (e.g. unfunded testnet account). Give a helpful error.
+    let sourceAccount;
+    try {
+      sourceAccount = await server.getAccount(walletAddress);
+    } catch {
+      const friendbotUrl = network === "testnet"
+        ? `https://friendbot.stellar.org?addr=${walletAddress}`
+        : null;
+      return NextResponse.json(
+        {
+          error: `Account ${walletAddress.substring(0, 12)}… not found on ${network}.` +
+            (friendbotUrl ? ` Fund it first: ${friendbotUrl}` : " Make sure the wallet is connected to the correct network."),
+        },
+        { status: 400 }
+      );
+    }
 
     // Build the transaction
     // For a NEW deploy: uploadContractWasm (upload WASM) + createCustomContract (create instance)

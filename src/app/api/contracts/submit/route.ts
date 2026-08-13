@@ -83,10 +83,11 @@ export async function POST(req: NextRequest) {
     }
 
     const home = process.env.HOME ?? "/home/z";
+    const localBin = `${home}/.local/bin`;
     const cargoBin = `${home}/.cargo/bin`;
     const env = {
       ...process.env,
-      PATH: `${cargoBin}:${process.env.PATH ?? ""}`,
+      PATH: `${localBin}:${cargoBin}:${process.env.PATH ?? ""}`,
       CARGO_HOME: `${home}/.cargo`,
       RUSTUP_HOME: `${home}/.rustup`,
     };

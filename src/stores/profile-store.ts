@@ -104,7 +104,18 @@ export const useProfileStore = create<ProfileState>()(
           sessionChecked: true,
         }),
 
-      clearProfile: () =>
+      clearProfile: () => {
+        // Call the server signout endpoint (fire-and-forget) to clear the
+        // server-side SIWS session. This ensures the user is fully logged
+        // out on both client + server.
+        const address = get().profile?.address ?? get().walletAddress;
+        if (address) {
+          fetch("/api/siws/logout", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ address }),
+          }).catch(() => {});
+        }
         set({
           profile: null,
           walletConnected: false,
@@ -114,7 +125,8 @@ export const useProfileStore = create<ProfileState>()(
           accentColor: "#4F8C8C",
           githubConnected: false,
           githubUsername: null,
-        }),
+        });
+      },
 
       setWalletConnected: (connected: boolean, address?: string | null) =>
         set((s) => {

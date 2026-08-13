@@ -245,6 +245,53 @@ export function SiwsSessionBridge() {
     };
   }, []);
 
+  // ── 5b. Auto-connect wallet + logout if wallet not connected ────────
+  // On page load, the SDK tries to restore the wallet session via
+  // restoreOnMount. But if the wallet extension isn't connected (e.g.
+  // the user closed it, or cleared its storage), restore() fails silently
+  // and walletConnected stays true (persisted from localStorage).
+  //
+  // This effect:
+  //   1. Waits 5s for the SDK to restore the wallet session
+  //   2. If no wallet session is found, tries appkit.open() to auto-connect
+  //   3. If still no wallet after 15s total, logs the user out
+  useEffect(() => {
+    // If we already have a wallet session, nothing to do
+    if (walletSession?.address) return;
+
+    // Timer 1: after 5s, check if wallet is connected. If not, the user
+    // might have the wallet extension installed but not connected — try
+    // to auto-connect by calling restore() again (the wallet extension
+    // might have been slow to initialize).
+    const autoConnectTimer = setTimeout(() => {
+      if (useProfileStore.getState().walletConnected && !walletSession?.address) {
+        console.log("[siws-bridge] wallet not connected after 5s — retrying restore()");
+        appkit?.restore?.().catch(() => {});
+      }
+    }, 5_000);
+
+    // Timer 2: after 15s total, if the wallet still isn't connected AND
+    // we don't have a valid SIWS session, log the user out. This handles:
+    //   - Wallet extension not installed
+    //   - Wallet extension installed but not connected
+    //   - Wallet extension storage cleared
+    //   - User disconnected the wallet in the extension
+    const logoutTimer = setTimeout(() => {
+      const state = useProfileStore.getState();
+      // Only logout if we THINK we're connected (persisted state) but
+      // the wallet session is actually null
+      if (state.walletConnected && !walletSession?.address && !siwsSession) {
+        console.log("[siws-bridge] wallet not connected after 15s — logging out");
+        state.clearProfile();
+      }
+    }, 15_000);
+
+    return () => {
+      clearTimeout(autoConnectTimer);
+      clearTimeout(logoutTimer);
+    };
+  }, [walletSession?.address, siwsSession, appkit]);
+
   // ── 6. Listen for siwsSessionChange events (backup) ────────────────
   useEffect(() => {
     if (!appkit?.on) return;

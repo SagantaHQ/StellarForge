@@ -65,6 +65,7 @@ async function resolveBinary(name: string): Promise<string | null> {
 export async function POST(req: NextRequest) {
   let body: {
     projectId: string;
+    projectName?: string;
     files: { path: string; content: string }[];
     command?: "stellar" | "cargo";
   };
@@ -255,9 +256,35 @@ export async function POST(req: NextRequest) {
         findWasm(workspaceDir)
           .then(async (wasmPath) => {
             if (wasmPath) {
-              const stat = await fs.stat(wasmPath);
+              // If a project name was provided, rename the WASM file to the
+              // slugified project name (lowercase, hyphens). E.g. "My Token"
+              // → "my-token.wasm". This makes the WASM file identifiable as
+              // belonging to this project.
+              let finalWasmPath = wasmPath;
+              if (body.projectName) {
+                const slug = body.projectName
+                  .toLowerCase()
+                  .trim()
+                  .replace(/[^a-z0-9\s-]/g, "")
+                  .replace(/[\s_-]+/g, "-")
+                  .replace(/^-+|-+$/g, "");
+                if (slug) {
+                  const wasmDir = path.dirname(wasmPath);
+                  finalWasmPath = path.join(wasmDir, `${slug}.wasm`);
+                  if (finalWasmPath !== wasmPath) {
+                    try {
+                      await fs.copyFile(wasmPath, finalWasmPath);
+                    } catch {
+                      // If copy fails (e.g. name collision), keep the original
+                      finalWasmPath = wasmPath;
+                    }
+                  }
+                }
+              }
+
+              const stat = await fs.stat(finalWasmPath);
               job.wasmInfo = {
-                path: wasmPath.replace(workspaceDir + "/", ""),
+                path: finalWasmPath.replace(workspaceDir + "/", ""),
                 sizeBytes: stat.size,
               };
               job.lines.push({

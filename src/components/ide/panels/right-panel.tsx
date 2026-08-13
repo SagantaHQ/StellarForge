@@ -92,6 +92,13 @@ function CompilePanel() {
   const outputRef = useRef<HTMLDivElement>(null);
   const tree = useFileSystemStore((s) => s.tree);
 
+  // Get the active project name for WASM file naming
+  const activeProjectId = useProjectsStore((s) => s.activeProjectId);
+  const projectsList = useProjectsStore((s) => s.projects);
+  const activeProject = activeProjectId
+    ? projectsList.find((p) => p.id === activeProjectId) ?? null
+    : null;
+
   // Parse contract functions from the Rust source after successful build
   const contractFunctions = useMemo(() => {
     if (status !== "success") return [];
@@ -154,7 +161,7 @@ function CompilePanel() {
         <div className="space-y-2">
           <Button
             size="sm"
-            onClick={() => startBuild({ silent: false })}
+            onClick={() => startBuild({ silent: false, projectName: activeProject?.name })}
             disabled={status === "building"}
             className="w-full h-8 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)] gap-2 disabled:opacity-60"
           >

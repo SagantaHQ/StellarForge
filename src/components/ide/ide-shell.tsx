@@ -185,7 +185,7 @@ export function IdeShell() {
           useProfileStore.getState().isLoggedIn() &&
           useBuildStore.getState().status === "idle"
         ) {
-          startBuild({ silent: true });
+          startBuild({ silent: true, projectName: activeProject.name });
         }
       }, 1500);
       return () => clearTimeout(timer);

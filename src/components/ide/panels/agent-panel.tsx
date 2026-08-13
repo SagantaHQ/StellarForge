@@ -17,6 +17,7 @@ import {
   Search,
   RefreshCw,
   RotateCcw,
+  Wrench,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -30,7 +31,6 @@ import { useFixWithAIStore } from "@/stores/fix-with-ai-store";
 import { useAttributionStore } from "@/stores/attribution-store";
 import { useProfileStore } from "@/stores/profile-store";
 import { useAgentTabsStore } from "@/stores/agent-tabs-store";
-import { useBuildStore } from "@/stores/build-store";
 import { findFile } from "@/lib/soroban/sample-project";
 
 type AgentScope = "smart-contract" | "ui-frontend" | "general" | "custom";
@@ -378,18 +378,15 @@ Do NOT just explain the error — output the actual fix as a diff.`;
       )
     );
 
-    // Auto-build after the AI edit is applied — the user just accepted a fix,
-    // so they likely want to see if it compiles now.
+    // NOTE: Auto-build after AI edit was removed because it caused OOM crashes.
+    // The dev server accumulates memory over time (Next.js dev mode doesn't GC
+    // aggressively), and spawning 'cargo build' (which uses ~1.5GB) on top of
+    // the already-high dev server memory (~3.5GB) exceeded the 4GB sandbox
+    // limit → OS OOM-killer killed the next-server process.
     //
-    // Memory note: the dev server + cargo build (spawned by /api/build) can
-    // together exceed the sandbox's 4GB RAM. We add a 1.5s delay to let:
-    //   1. The file system store settle (updateFileContent is async)
-    //   2. Monaco model update complete
-    //   3. The AI response finish rendering (frees some memory)
-    //   4. Node GC run before the memory-intensive cargo build starts
-    setTimeout(() => {
-      useBuildStore.getState().startBuild({ silent: true });
-    }, 1500);
+    // The user should click the Build button manually after accepting a fix.
+    // This is safer + gives the user control over when the memory-intensive
+    // build runs.
   }
 
   function handleRejectDiff(diff: ParsedDiff) {
@@ -527,6 +524,32 @@ Do NOT just explain the error — output the actual fix as a diff.`;
             onToggleAllowAlways={setAllowAlways}
           />
         ))}
+
+        {/* Build button — shown when there are no pending diffs but the last
+            message was from the assistant (e.g. after accepting a fix).
+            Lets the user manually trigger a build to check if the fix compiled.
+            We don't auto-build because cargo build + dev server can OOM the
+            4GB sandbox (see handleAcceptDiff comment). */}
+        {activeTab.pendingDiffs.length === 0 &&
+         activeTab.messages.length > 0 &&
+         activeTab.messages[activeTab.messages.length - 1].role === "assistant" &&
+         !loading && (
+          <button
+            onClick={() => {
+              // Trigger build via the build store
+              import("@/stores/build-store").then(({ useBuildStore }) => {
+                useBuildStore.getState().startBuild({ silent: false });
+              });
+              // Switch to the compile panel to show build output
+              const switchEvent = new CustomEvent("soroban-switch-right-panel", { detail: "compile" });
+              window.dispatchEvent(switchEvent);
+            }}
+            className="flex items-center gap-1.5 self-start rounded-md border border-[var(--accent)]/40 bg-[var(--accent)]/10 px-2.5 py-1.5 text-[11px] font-medium text-[var(--accent)] hover:bg-[var(--accent)]/20 transition-colors"
+          >
+            <Wrench size={11} strokeWidth={1.75} />
+            Build to verify the fix
+          </button>
+        )}
 
         {/* Loading */}
         {loading && (

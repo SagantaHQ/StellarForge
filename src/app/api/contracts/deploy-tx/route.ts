@@ -65,13 +65,21 @@ const NETWORK_PASSPHRASE: Record<string, string> = {
 };
 
 async function findWasm(dir: string): Promise<string | null> {
-  const { readdir, stat } = await import("fs/promises");
+  const { readdir } = await import("fs/promises");
   const entries = await readdir(dir, { withFileTypes: true });
+
+  // First pass: check files in THIS directory (the project WASM is in
+  // target/wasm32v1-none/release/<name>.wasm, not in deps/)
   for (const entry of entries) {
-    const fullPath = path.join(dir, entry.name);
-    if (entry.isFile() && entry.name.endsWith(".wasm")) return fullPath;
-    if (entry.isDirectory()) {
-      const found = await findWasm(fullPath);
+    if (entry.isFile() && entry.name.endsWith(".wasm")) {
+      return path.join(dir, entry.name);
+    }
+  }
+
+  // Second pass: recurse into subdirectories (skip deps/, .fingerprint/, build/)
+  for (const entry of entries) {
+    if (entry.isDirectory() && entry.name !== "deps" && entry.name !== ".fingerprint" && entry.name !== "build") {
+      const found = await findWasm(path.join(dir, entry.name));
       if (found) return found;
     }
   }

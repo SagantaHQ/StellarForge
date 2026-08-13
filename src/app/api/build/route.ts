@@ -310,14 +310,24 @@ export async function POST(req: NextRequest) {
   });
 
   async function findWasm(dir: string): Promise<string | null> {
+    // Look for .wasm files directly in this directory (not in subdirectories).
+    // The project's WASM is in target/wasm32v1-none/release/<name>.wasm.
+    // Dependency WASMs are in target/wasm32v1-none/release/deps/ — we don't
+    // want those. So check files in the current dir first, then recurse
+    // (skipping the deps/ directory).
     const entries = await fs.readdir(dir, { withFileTypes: true });
+
+    // First pass: check files in THIS directory
     for (const entry of entries) {
-      const fullPath = path.join(dir, entry.name);
       if (entry.isFile() && entry.name.endsWith(".wasm")) {
-        return fullPath;
+        return path.join(dir, entry.name);
       }
-      if (entry.isDirectory()) {
-        const found = await findWasm(fullPath);
+    }
+
+    // Second pass: recurse into subdirectories (skip deps/)
+    for (const entry of entries) {
+      if (entry.isDirectory() && entry.name !== "deps" && entry.name !== ".fingerprint" && entry.name !== "build") {
+        const found = await findWasm(path.join(dir, entry.name));
         if (found) return found;
       }
     }

@@ -105,7 +105,36 @@ export function AgentPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
   // §9.7 — Auto-consume pending fix requests from the terminal/build 'Fix with AI' button
   useEffect(() => {
     if (!pendingFix || loading || !hasProvider) return;
-    const fixMessage = `The following command failed:\n\n\`\`\`\n$ ${pendingFix.command}\n\`\`\`\n\nError output:\n\`\`\`\n${pendingFix.errorOutput}\n\`\`\`\n\nDiagnose the error and propose a fix. Explain why the error happened and how the fix resolves it.`;
+    const fixMessage = `The following build command failed:
+
+\`\`\`
+$ ${pendingFix.command}
+\`\`\`
+
+Error output:
+\`\`\`
+${pendingFix.errorOutput}
+\`\`\`
+
+Fix the error. You MUST output a diff block with the corrected code so it can be applied directly. Format:
+
+\`\`\`diff
+--- a/<file_path>
++++ b/<file_path>
+@@ -<line>,<count> +<line>,<count> @@
+ context line
+-removed line
++added line
+ context line
+\`\`\`
+
+Steps:
+1. Identify which file caused the error (the error output usually contains the file path + line number, e.g. \`src/lib.rs:10:5\`)
+2. Explain briefly why the error occurred (1-2 sentences)
+3. Output the fix as a diff block with the EXACT file path from the project file list
+4. The diff must use proper --- / +++ / @@ markers so it can be parsed + applied
+
+Do NOT just explain the error — output the actual fix as a diff.`;
     // Add the user message visibly
     setTabs((prev) =>
       prev.map((t) =>

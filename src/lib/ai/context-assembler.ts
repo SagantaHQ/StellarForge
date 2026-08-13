@@ -52,6 +52,10 @@ When you propose a code change:
 - Only touch code within the active scope (Smart Contract / UI / General)
 - Always explain WHY the change fixes the issue or improves the code — teach, don't just patch
 - Prefer minimal diffs; do not refactor unrelated code unless explicitly asked
+- When fixing a BUILD ERROR: identify the file + line from the error output
+  (e.g. \`src/lib.rs:10:5\`), then output a diff that fixes the error. Do NOT
+  just explain the error — ALWAYS output an actionable diff that can be
+  applied directly. The user clicks "Accept" to apply your diff.
 - Your edits will be attributed in the audit log as "{user} via AI agent ({provider}/{model})"
 
 When you respond:

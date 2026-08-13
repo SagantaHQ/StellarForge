@@ -52,6 +52,7 @@ export function WelcomePage({
   const projects = useProjectsStore((s) => s.projects);
   const profile = useProfileStore((s) => s.profile);
   const walletConnected = useProfileStore((s) => s.walletConnected);
+  const syncingFromCloud = useProjectsStore((s) => s.syncingFromCloud);
 
   const greeting = useGreeting();
   const displayName = profile?.username ?? (walletConnected ? "builder" : "there");
@@ -112,16 +113,27 @@ export function WelcomePage({
           <div className="mb-4 flex items-center justify-between">
             <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-[var(--text-muted)]">
               <Clock size={14} strokeWidth={1.75} />
-              {sortedProjects.length > 0 ? "Recent projects" : "No projects yet"}
+              {syncingFromCloud
+                ? "Loading projects…"
+                : sortedProjects.length > 0
+                ? "Recent projects"
+                : "No projects yet"}
             </h2>
-            {sortedProjects.length > 0 && (
+            {sortedProjects.length > 0 && !syncingFromCloud && (
               <span className="text-[11px] text-[var(--text-muted)]">
                 {sortedProjects.length} {sortedProjects.length === 1 ? "project" : "projects"}
               </span>
             )}
           </div>
 
-          {sortedProjects.length === 0 ? (
+          {syncingFromCloud ? (
+            <div className="flex items-center justify-center py-16">
+              <div className="flex flex-col items-center gap-3">
+                <Loader2 size={24} strokeWidth={1.75} className="animate-spin text-[var(--accent)]" />
+                <span className="text-xs text-[var(--text-muted)]">Fetching projects from cloud…</span>
+              </div>
+            </div>
+          ) : sortedProjects.length === 0 ? (
             <EmptyState onNewProject={onNewProject} onBrowseTemplates={onBrowseTemplates} />
           ) : (
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">

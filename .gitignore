@@ -65,3 +65,5 @@ server.log
 /knowledge/
 /test-results/
 package-lock.json
+bun.lock
+package-lock.json

@@ -1,46 +1,31 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { spawn } from "child_process";
-import { promisify } from "util";
 import { readFile } from "fs/promises";
-import { createHash } from "crypto";
+import { createHash, randomBytes } from "crypto";
 import path from "path";
-
-const execFileAsync = promisify(spawn);
 
 /**
  * POST /api/contracts/deploy-tx
  *
  * Builds a Soroban contract deploy (or upgrade) transaction XDR that the
- * client signs with their wallet. The client then submits the signed XDR
- * via /api/contracts/submit.
+ * client signs with their wallet. Uses @stellar/stellar-sdk directly (NOT
+ * stellar-cli) to avoid spawning a subprocess + cargo metadata which was
+ * causing OOM crashes on the 4GB sandbox.
  *
  * Flow:
  *   1. Find the .wasm file from the last build
- *   2. Upload the WASM to the network (stellar contract upload)
- *   3. Build a CreateContract or RestoreContract transaction
- *   4. Return the unsigned XDR + wasm hash to the client
- *
- * For upgrades:
- *   - If a DeployedContract already exists for this project + network,
- *     we build an upgrade transaction instead ( stellar contract install )
+ *   2. Read the WASM + compute hash
+ *   3. Build an uploadContractWasm + createCustomContract transaction
+ *      (or uploadContractWasm only for upgrades)
+ *   4. Simulate + prepare the transaction (attach footprint + fees)
+ *   5. Return the unsigned XDR for the wallet to sign
  *
  * Body:
  *   {
- *     projectId: string,       // server project ID
- *     walletAddress: string,   // deployer's wallet address
- *     network: string,         // testnet | mainnet | futurenet
- *     wasmPath?: string,       // optional explicit wasm path
- *   }
- *
- * Returns:
- *   {
- *     unsignedXdr: string,     // base64 XDR for the wallet to sign
- *     wasmHash: string,        // SHA-256 hash of the WASM
- *     isUpgrade: boolean,      // true if this is an upgrade (contract already deployed)
- *     contractId?: string,     // existing contract ID (for upgrades)
+ *     projectId: string,
+ *     walletAddress: string,
  *     network: string,
- *     networkPassphrase: string,
+ *     wasmPath?: string,
  *   }
  */
 
@@ -68,8 +53,7 @@ async function findWasm(dir: string): Promise<string | null> {
   const { readdir } = await import("fs/promises");
   const entries = await readdir(dir, { withFileTypes: true });
 
-  // First pass: check files in THIS directory (the project WASM is in
-  // target/wasm32v1-none/release/<name>.wasm, not in deps/)
+  // First pass: check files in THIS directory
   for (const entry of entries) {
     if (entry.isFile() && entry.name.endsWith(".wasm")) {
       return path.join(dir, entry.name);
@@ -142,89 +126,85 @@ export async function POST(req: NextRequest) {
 
     // Check if the WASM hash matches the last deployed version
     if (existingContract) {
-      const lastVersion = await db.wasmVersion.findFirst({
-        where: { contractId: existingContract.id },
-        orderBy: { version: "desc" },
-      });
-      if (lastVersion && lastVersion.wasmHash === wasmHash) {
-        return NextResponse.json(
-          { error: "WASM unchanged — no need to upgrade. Build after making changes." },
-          { status: 409 }
-        );
+      try {
+        const lastVersion = await db.wasmVersion.findFirst({
+          where: { contractId: existingContract.id },
+          orderBy: { version: "desc" },
+        });
+        if (lastVersion && lastVersion.wasmHash === wasmHash) {
+          return NextResponse.json(
+            { error: "WASM unchanged — no need to upgrade. Build after making changes." },
+            { status: 409 }
+          );
+        }
+      } catch {
+        // DB unavailable — skip the check
       }
     }
 
-    // Use stellar-cli to build the transaction XDR
-    // For a new deploy: stellar contract deploy --build-only --wasm <path> --source-account <addr> --rpc-url <rpc> --network-passphrase <passphrase>
-    // For an upgrade: stellar contract install --build-only --wasm <path> --source-account <addr> --rpc-url <rpc> --network-passphrase <passphrase>
-    //   then: stellar contract extend --wasm-hash <hash> ...
+    // Build the transaction using @stellar/stellar-sdk directly (no subprocess)
+    const StellarSdk = await import("@stellar/stellar-sdk");
+    const { rpc: stellarRpc, Address, BASE_FEE, Memo, Operation, TransactionBuilder } = StellarSdk;
+
+    const server = new stellarRpc.Server(rpc);
+    const sourceAccount = await server.getAccount(walletAddress);
+
+    // Build the transaction
+    // For a NEW deploy: uploadContractWasm (upload WASM) + createCustomContract (create instance)
+    // For an UPGRADE: uploadContractWasm only (the client will use the existing contract ID)
     //
-    // Actually, stellar contract deploy with --build-only outputs the unsigned XDR.
-    // For upgrades, we use: stellar contract deploy --build-only --wasm <path> --source-account <addr> --rpc-url <rpc> --network-passphrase <passphrase> --contract-id <existing>
+    // We use uploadContractWasm to install the WASM on-chain. The wasm hash
+    // is returned in the transaction result. For a new deploy, we then use
+    // createCustomContract to create a new contract instance bound to that WASM.
+    //
+    // NOTE: The standard 2-step deploy (upload + create) requires the upload
+    // tx hash to use as salt. Since we can't get the tx hash before signing,
+    // we use a random salt instead (the contract ID will be different each
+    // deploy, which is fine for a new deploy).
+    //
+    // For upgrades, we only upload the new WASM — the client will call
+    // `stellar contract extend` or the contract's `upgrade` function after
+    // the upload is confirmed.
 
-    const home = process.env.HOME ?? "/home/z";
-    const localBin = `${home}/.local/bin`;
-    const cargoBin = `${home}/.cargo/bin`;
-    const env = {
-      ...process.env,
-      PATH: `${localBin}:${cargoBin}:${process.env.PATH ?? ""}`,
-      CARGO_HOME: `${home}/.cargo`,
-      RUSTUP_HOME: `${home}/.rustup`,
-    };
+    const wasmBytes = Buffer.from(wasmBuffer);
 
-    // Build the deploy/upgrade transaction
-    const args = [
-      "contract", "deploy",
-      "--build-only",
-      "--wasm", wasmFilePath,
-      "--source-account", walletAddress,
-      "--rpc-url", rpc,
-      "--network-passphrase", passphrase,
-    ];
-
-    // For upgrades, add --contract-id
-    if (isUpgrade && existingContractId) {
-      args.push("--contract-id", existingContractId);
-    }
-
-    const { stdout, stderr } = await new Promise<{stdout: string; stderr: string}>((resolve, reject) => {
-      const child = spawn("stellar", args, {
-        cwd: workspaceDir,
-        env,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-
-      let stdout = "";
-      let stderr = "";
-
-      child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
-      child.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
-
-      child.on("close", (code) => {
-        if (code === 0) resolve({ stdout, stderr });
-        else reject(new Error(`stellar contract deploy --build-only failed (exit ${code}): ${stderr || stdout}`));
-      });
-
-      child.on("error", (err) => reject(err));
-
-      // 30s timeout
-      setTimeout(() => {
-        child.kill();
-        reject(new Error("Build transaction timed out after 30s"));
-      }, 30000);
+    const txBuilder = new TransactionBuilder(sourceAccount, {
+      fee: BASE_FEE,
+      networkPassphrase: passphrase,
     });
 
-    // The XDR is the last line of stdout (strip any warnings)
-    const xdrLine = stdout.trim().split("\n").pop();
-    if (!xdrLine || xdrLine.length < 50) {
-      return NextResponse.json(
-        { error: "Failed to build transaction XDR", detail: stdout + stderr },
-        { status: 500 }
+    // Step 1: Upload the WASM
+    txBuilder.addOperation(
+      Operation.uploadContractWasm({
+        wasm: wasmBytes,
+      })
+    );
+
+    // Step 2: For a NEW deploy, add createCustomContract
+    // (For upgrades, we skip this — the existing contract ID is used)
+    if (!isUpgrade) {
+      const salt = randomBytes(32);
+      // The wasmHash for createCustomContract must be a Buffer (32 bytes),
+      // not a hex string. We pass the raw SHA-256 hash bytes.
+      const wasmHashBytes = Buffer.from(wasmHash, "hex");
+      txBuilder.addOperation(
+        Operation.createCustomContract({
+          wasmHash: wasmHashBytes,
+          address: Address.fromString(walletAddress),
+          salt,
+        })
       );
     }
 
+    txBuilder.setTimeout(300);
+
+    const tx = txBuilder.build();
+
+    // Simulate + prepare the transaction (attach resource footprint + fees)
+    const preparedTx = await server.prepareTransaction(tx);
+
     return NextResponse.json({
-      unsignedXdr: xdrLine.trim(),
+      unsignedXdr: preparedTx.toXDR(),
       wasmHash,
       wasmSizeBytes: wasmBuffer.length,
       isUpgrade,
@@ -233,6 +213,7 @@ export async function POST(req: NextRequest) {
       networkPassphrase: passphrase,
     });
   } catch (err) {
+    console.error("[deploy-tx] error:", err);
     return NextResponse.json(
       { error: "Failed to build deploy transaction", detail: err instanceof Error ? err.message : String(err) },
       { status: 500 }

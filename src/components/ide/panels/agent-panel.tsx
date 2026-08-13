@@ -31,6 +31,7 @@ import { useFixWithAIStore } from "@/stores/fix-with-ai-store";
 import { useAttributionStore } from "@/stores/attribution-store";
 import { useProfileStore } from "@/stores/profile-store";
 import { useAgentTabsStore } from "@/stores/agent-tabs-store";
+import { useProjectsStore } from "@/stores/projects-store";
 import { findFile } from "@/lib/soroban/sample-project";
 
 type AgentScope = "smart-contract" | "ui-frontend" | "general" | "custom";
@@ -45,25 +46,43 @@ interface AgentTab {
 }
 
 export function AgentPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
-  // Chat tabs are now persisted in the agent-tabs-store (localStorage) so
-  // chat history survives page reloads. We use the store's updateTab helper
-  // via a setTabs wrapper to minimize changes to the existing setTabs calls.
+  // Chat tabs are persisted in agent-tabs-store (localStorage) + scoped per-project.
+  // When the active project changes, tabs are filtered by projectId.
   const storeTabs = useAgentTabsStore((s) => s.tabs);
   const storeActiveTabId = useAgentTabsStore((s) => s.activeTabId);
   const storeSetTabs = useAgentTabsStore((s) => s.setTabs);
   const storeSetActiveTabId = useAgentTabsStore((s) => s.setActiveTabId);
   const storeRemoveTab = useAgentTabsStore((s) => s.removeTab);
+  const storeSetActiveProject = useAgentTabsStore((s) => s.setActiveProject);
+  const storeActiveProjectId = useAgentTabsStore((s) => s.activeProjectId);
+
+  // Get the current active project from the projects store
+  const activeProjectId = useProjectsStore((s) => s.activeProjectId);
+
+  // Sync the agent-tabs-store's activeProjectId with the projects store.
+  // When the project changes, this filters tabs + creates a default if none exist.
+  useEffect(() => {
+    if (activeProjectId !== storeActiveProjectId) {
+      storeSetActiveProject(activeProjectId);
+    }
+  }, [activeProjectId, storeActiveProjectId, storeSetActiveProject]);
+
+  // Filter tabs to only show the active project's tabs
+  const projectTabs = storeTabs.filter((t) => t.projectId === activeProjectId);
 
   // Cast to local AgentTab type (pendingDiffs is unknown[] in the store,
   // ParsedDiff[] here — same shape, just typed differently to avoid import cycle)
-  const tabs = storeTabs as AgentTab[];
+  const tabs = projectTabs as AgentTab[];
   const activeTabId = storeActiveTabId;
 
   // Wrapper: accepts either an array or an updater function, matches the
-  // old useState pattern so existing setTabs((prev) => ...) calls work.
+  // old useState pattern. Operates on the PROJECT's tabs only.
   const setTabs = (updater: AgentTab[] | ((prev: AgentTab[]) => AgentTab[])) => {
-    const newTabs = typeof updater === "function" ? (updater as (prev: AgentTab[]) => AgentTab[])(storeTabs as AgentTab[]) : updater;
-    storeSetTabs(newTabs);
+    const projectTabsLocal = storeTabs.filter((t) => t.projectId === activeProjectId) as AgentTab[];
+    const newProjectTabs = typeof updater === "function" ? (updater as (prev: AgentTab[]) => AgentTab[])(projectTabsLocal) : updater;
+    // Merge: keep tabs from other projects + replace this project's tabs
+    const otherTabs = storeTabs.filter((t) => t.projectId !== activeProjectId);
+    storeSetTabs([...otherTabs, ...newProjectTabs] as typeof storeTabs);
   };
 
   const setActiveTabId = (id: string) => storeSetActiveTabId(id);
@@ -81,7 +100,21 @@ export function AgentPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
   const allowAlways = useAIKeysStore((s) => s.allowAlways);
   const setAllowAlways = useAIKeysStore((s) => s.setAllowAlways);
 
-  const activeTab = tabs.find((t) => t.id === activeTabId)!;
+  const activeTab = tabs.find((t) => t.id === activeTabId) ?? tabs[0] ?? null;
+
+  // If no active tab (no project open or no tabs), show an empty state
+  if (!activeTab) {
+    return (
+      <div className="flex h-full flex-col">
+        <div className="flex-1 flex items-center justify-center p-4 text-center">
+          <div className="text-xs text-[var(--text-muted)]">
+            Open a project to start chatting with the AI agent.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   const scope = activeTab.scope;
 
   const { sendMessage, loading, error, lastTokenUsage, lastContextFiles, clearError } = useAIChat({
@@ -402,6 +435,7 @@ Do NOT just explain the error — output the actual fix as a diff.`;
 
   function addTab() {
     const id = `tab-${Date.now()}`;
+    const projectId = activeProjectId ?? "no-project";
     setTabs((prev) => [
       ...prev,
       {
@@ -410,6 +444,7 @@ Do NOT just explain the error — output the actual fix as a diff.`;
         scope: "general",
         messages: [],
         pendingDiffs: [],
+        projectId,
       },
     ]);
     setActiveTabId(id);

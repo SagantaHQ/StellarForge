@@ -442,6 +442,10 @@ export function IdeShell() {
         }}
         onCloseProject={() => {
           projectsClose().catch(() => {});
+          // Clear the agent chat's active project (hides chat tabs for the closed project)
+          import("@/stores/agent-tabs-store").then(({ useAgentTabsStore }) => {
+            useAgentTabsStore.getState().setActiveProject(null);
+          });
         }}
         onDeleteProject={(id) => {
           const target = projectsList.find((p) => p.id === id) ?? null;

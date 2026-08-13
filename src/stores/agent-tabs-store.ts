@@ -6,16 +6,15 @@ import { persist, createJSONStorage } from "zustand/middleware";
 /**
  * Agent chat tabs store — persists chat history across page reloads.
  *
- * Each tab has: id, name, scope, messages[], pendingDiffs[]
- * Messages have: role, content, timestamp
+ * Chat is PER-PROJECT: each tab has a projectId. When the user switches
+ * projects, the store filters tabs by the new project's ID. When a project
+ * is closed, its tabs remain in storage (so reopening the project restores
+ * them) but aren't shown.
  *
  * Stored in localStorage (not IDB) because:
  *   - Chat history is small (text only, no file content)
  *   - Needs to load synchronously on page mount (no async)
  *   - Tied to the browser, not the project
- *
- * The store is separate from the AIKeysStore (provider config) because
- * chat history is a different concern + can grow large.
  */
 
 export type AgentScope = "smart-contract" | "ui-frontend" | "general" | "custom";
@@ -33,37 +32,77 @@ export interface AgentTab {
   messages: AgentMessage[];
   pendingDiffs: unknown[]; // ParsedDiff[] — kept as unknown[] to avoid import cycle
   unread?: boolean;
+  /** Project ID this tab belongs to. Tabs are filtered by the active project. */
+  projectId: string;
 }
 
 interface AgentTabsState {
+  /** ALL tabs (across all projects). Filtered by activeProjectId for display. */
   tabs: AgentTab[];
   activeTabId: string;
+  /** The currently active project ID. Used to filter which tabs are shown. */
+  activeProjectId: string | null;
 
   setTabs: (tabs: AgentTab[]) => void;
   setActiveTabId: (id: string) => void;
+  /** Switch to a different project — filters tabs + creates a default if none exist. */
+  setActiveProject: (projectId: string | null) => void;
   addTab: (tab: AgentTab) => void;
   removeTab: (id: string) => void;
   updateTab: (id: string, updater: (tab: AgentTab) => AgentTab) => void;
   clearTabMessages: (id: string) => void;
+  /** Remove all tabs for a project (called when a project is deleted). */
+  clearProjectTabs: (projectId: string) => void;
+}
+
+function createDefaultTab(projectId: string): AgentTab {
+  return {
+    id: `tab-${Date.now()}`,
+    name: "Contract Work",
+    scope: "smart-contract",
+    messages: [],
+    pendingDiffs: [],
+    projectId,
+  };
 }
 
 export const useAgentTabsStore = create<AgentTabsState>()(
   persist(
-    (set) => ({
-      tabs: [
-        {
-          id: "tab-1",
-          name: "Contract Work",
-          scope: "smart-contract" as AgentScope,
-          messages: [],
-          pendingDiffs: [],
-        },
-      ],
+    (set, get) => ({
+      tabs: [],
       activeTabId: "tab-1",
+      activeProjectId: null,
 
       setTabs: (tabs) => set({ tabs }),
 
       setActiveTabId: (id) => set({ activeTabId: id }),
+
+      setActiveProject: (projectId) => {
+        if (!projectId) {
+          // Project closed — clear the active tab but keep all tabs in storage
+          set({ activeProjectId: null, activeTabId: "" });
+          return;
+        }
+
+        // Find tabs for this project
+        const projectTabs = get().tabs.filter((t) => t.projectId === projectId);
+
+        if (projectTabs.length === 0) {
+          // No tabs for this project — create a default one
+          const newTab = createDefaultTab(projectId);
+          set((s) => ({
+            tabs: [...s.tabs, newTab],
+            activeProjectId: projectId,
+            activeTabId: newTab.id,
+          }));
+        } else {
+          // Project has tabs — switch to the first one
+          set({
+            activeProjectId: projectId,
+            activeTabId: projectTabs[0].id,
+          });
+        }
+      },
 
       addTab: (tab) =>
         set((s) => ({
@@ -74,23 +113,17 @@ export const useAgentTabsStore = create<AgentTabsState>()(
       removeTab: (id) =>
         set((s) => {
           const newTabs = s.tabs.filter((t) => t.id !== id);
-          // If we removed the active tab, switch to the first remaining tab
+          // If we removed the active tab, switch to another tab in the same project
+          const projectTabs = newTabs.filter((t) => t.projectId === s.activeProjectId);
           const newActiveId = s.activeTabId === id
-            ? (newTabs[0]?.id ?? "tab-1")
+            ? (projectTabs[0]?.id ?? "")
             : s.activeTabId;
-          // If no tabs left, create a default one
-          if (newTabs.length === 0) {
+          // If no tabs left for the active project, create a default one
+          if (projectTabs.length === 0 && s.activeProjectId) {
+            const newTab = createDefaultTab(s.activeProjectId);
             return {
-              tabs: [
-                {
-                  id: "tab-1",
-                  name: "Contract Work",
-                  scope: "smart-contract" as AgentScope,
-                  messages: [],
-                  pendingDiffs: [],
-                },
-              ],
-              activeTabId: "tab-1",
+              tabs: [...newTabs, newTab],
+              activeTabId: newTab.id,
             };
           }
           return { tabs: newTabs, activeTabId: newActiveId };
@@ -107,11 +140,18 @@ export const useAgentTabsStore = create<AgentTabsState>()(
             t.id === id ? { ...t, messages: [], pendingDiffs: [] } : t
           ),
         })),
+
+      clearProjectTabs: (projectId) =>
+        set((s) => {
+          const newTabs = s.tabs.filter((t) => t.projectId !== projectId);
+          const newActiveId = newTabs.find((t) => t.projectId === s.activeProjectId)?.id ?? "";
+          return { tabs: newTabs, activeTabId: newActiveId };
+        }),
     }),
     {
       name: "soroban-build:agent-tabs",
       storage: createJSONStorage(() => localStorage),
-      // Persist everything — tabs + activeTabId
+      // Persist everything — tabs + activeTabId + activeProjectId
     }
   )
 );

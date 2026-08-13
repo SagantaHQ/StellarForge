@@ -51,6 +51,9 @@ interface ProjectsState {
   hydrated: boolean;
   /** True while a create/switch/delete operation is in flight */
   busy: boolean;
+  /** True while project files are being fetched from the cloud (server).
+   * Shown as a "Syncing project files…" indicator in the UI. */
+  syncingFromCloud: boolean;
 
   /** Load all local projects from IDB + active project id from meta */
   hydrate: () => Promise<void>;
@@ -100,6 +103,7 @@ export const useProjectsStore = create<ProjectsState>()(
       activeProjectId: null,
       hydrated: false,
       busy: false,
+      syncingFromCloud: false,
 
       hydrate: async () => {
         try {
@@ -146,7 +150,8 @@ export const useProjectsStore = create<ProjectsState>()(
               // Per-file IDB was empty — fall back to the project snapshot
               await loadFilesIntoFileSystem(activeStored.files);
             } else if (activeStored && activeStored.serverProjectId && !fsHasFiles) {
-              // Local stub with no cached files — try fetching from server
+              // Local stub with no cached files — fetch from server (cloud sync)
+              set({ syncingFromCloud: true });
               try {
                 const res = await fetch(`/api/projects/${activeStored.serverProjectId}`);
                 if (res.ok) {
@@ -168,6 +173,8 @@ export const useProjectsStore = create<ProjectsState>()(
                 }
               } catch {
                 // Network error — leave file system empty, welcome page shows
+              } finally {
+                set({ syncingFromCloud: false });
               }
             }
             // else: per-file IDB has newer files — DON'T overwrite them.
@@ -389,9 +396,10 @@ export const useProjectsStore = create<ProjectsState>()(
           // 2. Load incoming project's files
           const incoming = await projectGet(projectId);
           if (!incoming) {
-            // Maybe it's a server-only project — try to fetch
+            // Maybe it's a server-only project — try to fetch from cloud
             const meta = state.projects.find((p) => p.id === projectId);
             if (meta?.serverProjectId) {
+              set({ syncingFromCloud: true });
               try {
                 const res = await fetch(`/api/projects/${meta.serverProjectId}`);
                 if (res.ok) {
@@ -420,6 +428,8 @@ export const useProjectsStore = create<ProjectsState>()(
                 }
               } catch {
                 // Network error — fall through to empty
+              } finally {
+                set({ syncingFromCloud: false });
               }
             }
           } else {

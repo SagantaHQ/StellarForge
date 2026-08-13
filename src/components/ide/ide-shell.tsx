@@ -102,6 +102,7 @@ export function IdeShell() {
   const activeProjectId = useProjectsStore((s) => s.activeProjectId);
   const projectsBusy = useProjectsStore((s) => s.busy);
   const projectsHydrated = useProjectsStore((s) => s.hydrated);
+  const syncingFromCloud = useProjectsStore((s) => s.syncingFromCloud);
   const activeProject = activeProjectId
     ? projectsList.find((p) => p.id === activeProjectId) ?? null
     : null;
@@ -325,6 +326,14 @@ export function IdeShell() {
         variant="fullscreen"
         message="Loading your workspace…"
         submessage="Restoring projects from local storage"
+      />
+      {/* Cloud sync indicator — shown while project files are being fetched
+          from the server (e.g. opening a project on a new device) */}
+      <LoadingOverlay
+        visible={syncingFromCloud}
+        variant="fullscreen"
+        message="Syncing project files…"
+        submessage="Fetching from cloud"
       />
       <TopBar
         projectName={activeProject?.name ?? "No project"}

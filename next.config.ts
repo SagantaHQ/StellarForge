@@ -1,5 +1,11 @@
 import type { NextConfig } from "next";
 import path from "path";
+import MonacoWebpackPlugin from 'monaco-editor-webpack-plugin';
+
+const monacoEditorApi = path.resolve(
+  __dirname,
+  "node_modules/monaco-editor/esm/vs/editor/editor.api.js"
+);
 
 const nextConfig: NextConfig = {
   output: "standalone",
@@ -53,7 +59,7 @@ const nextConfig: NextConfig = {
       // monaco-editor's package.json exports map rewrites this to a
       // non-existent double path (./esm/vs/esm/vs/editor/editor.api.js).
       // Alias directly to the actual file on disk.
-      "monaco-editor/esm/vs/editor/editor.api.js": path.resolve(__dirname, "node_modules/monaco-editor/esm/vs/editor/editor.api.js"),
+      "monaco-editor/esm/vs/editor/editor.api.js": "monaco-editor",
     };
 
     // In dev mode, configure the file watcher to ignore non-source dirs.
@@ -83,6 +89,11 @@ const nextConfig: NextConfig = {
       };
     }
 
+    config.plugins = [
+      ...config.plugins,
+      new MonacoWebpackPlugin()
+    ]
+
     return config;
   },
   // Turbopack config — used by default in Next.js 16 dev mode.
@@ -96,6 +107,7 @@ const nextConfig: NextConfig = {
       "@trezor/transport-webusb": path.resolve(__dirname, "src/stubs/empty.ts"),
       "@trezor/transport-webhid": path.resolve(__dirname, "src/stubs/empty.ts"),
       "@trezor/hw-app-str": path.resolve(__dirname, "src/stubs/empty.ts"),
+      "monaco-editor/esm/vs/editor/editor.api.js": "monaco-editor",
     },
   },
   async rewrites() {

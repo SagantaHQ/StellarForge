@@ -45,6 +45,7 @@ export function useCollabEditing({ editor, model, filePath }: UseCollabEditingOp
         bindingRef.current.destroy();
         bindingRef.current = null;
       }
+      //@ts-ignore
       setIsCollabActive(false);
       return;
     }

@@ -600,8 +600,14 @@ function DeployPanel({ network }: { network: string }) {
       // ─── Get the appkit signing handle ───────────────────────────
       const appkit = await getAppKitForSigning();
       if (!appkit) {
+        // Diagnostic info is logged to the browser console (see
+        // getAppKitForSigning). Common causes:
+        //   1. WalletModalHost didn't mount yet (race condition right after
+        //      page load) — wait a moment + retry
+        //   2. Wallet got disconnected — open the wallet modal + reconnect
+        //   3. SDK version mismatch — appkit.signTransaction isn't a function
         setError(
-          "Wallet signing is not available. Make sure your wallet is connected and the stellar-appkit modal is loaded. Try reconnecting your wallet."
+          `Wallet signing isn't available. Open the browser console (F12) and look for the "[deploy] wallet signing unavailable" message — it shows exactly what's missing. Quick fixes: (1) reconnect your wallet via the top-bar wallet button, or (2) refresh the page (the WalletModalHost may not have initialized on this page load).`
         );
         setDeploying(false);
         setStatusMsg("");
@@ -986,33 +992,82 @@ function DeployPanel({ network }: { network: string }) {
 }
 
 // Helper to get the appkit instance for signing.
-// Reads from the global window.__appkitClient (set by the provider) so
-// any component can sign transactions without being inside the provider tree.
+//
+// Source of truth: `window.__appkit` — set by <WalletModalHost> in
+// src/lib/wallet/wallet-modal-host.tsx via:
+//
+//   const appkit = useAppKit();
+//   useEffect(() => {
+//     window.__appkit = appkit;
+//   }, [appkit]);
+//
+// `appkit` is the StellarAppKit instance (from @saganta/stellar-appkit),
+// which exposes `signTransaction(xdr, opts)` directly. See
+// node_modules/@saganta/stellar-appkit/src/client.ts:858
+//
+// Fallbacks (in case window.__appkit isn't set yet — e.g. <WalletModalHost>
+// hasn't mounted or the user navigated to the deploy panel before the
+// provider finished initializing):
+//   1. <stellar-appkit-modal> DOM element's .client property
+//   2. <saganta-appkit-modal> DOM element (legacy name)
 async function getAppKitForSigning(): Promise<{
   signTransaction: (xdr: string, opts?: Record<string, unknown>) => Promise<{ signedTxXdr?: string; signedXdr?: string }>;
 } | null> {
   try {
-    const profileState = (window as unknown as { __profileStore?: { profile: { address: string } | null } }).__profileStore;
-    if (!profileState?.profile?.address) return null;
+    // ─── Source 1: window.__appkit (preferred, set by WalletModalHost) ──
+    const appkit = (window as unknown as {
+      __appkit?: {
+        signTransaction: (xdr: string, opts?: Record<string, unknown>) => Promise<{ signedTxXdr?: string; signedXdr?: string }>;
+      } | null;
+    }).__appkit;
 
-    // Try the new <stellar-appkit-modal> element first
-    const modal = document.querySelector<HTMLElement & { client: unknown }>("stellar-appkit-modal");
-    if (modal?.client) {
+    if (appkit && typeof appkit.signTransaction === "function") {
+      return appkit;
+    }
+
+    // ─── Source 2: <stellar-appkit-modal> DOM element's .client ────────
+    // (Only useful if the modal has been mounted at least once — the
+    // .client property is set by the modal's lifecycle, so it may not
+    // be present until the modal opens.)
+    const modal = document.querySelector<HTMLElement & { client?: unknown }>("stellar-appkit-modal");
+    if (modal?.client && typeof (modal.client as { signTransaction?: unknown }).signTransaction === "function") {
       return modal.client as {
         signTransaction: (xdr: string, opts?: Record<string, unknown>) => Promise<{ signedTxXdr?: string; signedXdr?: string }>;
       };
     }
 
-    // Fallback: old element name (for backwards compat during migration)
-    const oldModal = document.querySelector<HTMLElement & { client: unknown }>("saganta-appkit-modal");
-    if (oldModal?.client) {
+    // ─── Source 3: legacy <saganta-appkit-modal> element name ──────────
+    const oldModal = document.querySelector<HTMLElement & { client?: unknown }>("saganta-appkit-modal");
+    if (oldModal?.client && typeof (oldModal.client as { signTransaction?: unknown }).signTransaction === "function") {
       return oldModal.client as {
         signTransaction: (xdr: string, opts?: Record<string, unknown>) => Promise<{ signedTxXdr?: string; signedXdr?: string }>;
       };
     }
 
+    // ─── Diagnostic: nothing found — log what's actually available ─────
+    // This helps the user/developer understand WHY signing isn't available
+    // without having to inspect window manually.
+    const profileState = (window as unknown as { __profileStore?: { profile: { address: string } | null } | null }).__profileStore;
+    const modalEls = Array.from(document.querySelectorAll("stellar-appkit-modal, saganta-appkit-modal"));
+    console.warn("[deploy] wallet signing unavailable — diagnostic info:", {
+      hasWindowAppkit: !!appkit,
+      appkitType: appkit ? typeof appkit : "undefined",
+      appkitHasSignTransaction: !!(appkit && typeof appkit.signTransaction === "function"),
+      hasProfileStore: !!profileState,
+      profileAddress: profileState?.profile?.address ?? null,
+      modalElementsFound: modalEls.length,
+      modalElementsWithClient: modalEls.filter((el) => !!(el as HTMLElement & { client?: unknown }).client).length,
+      hint:
+        !appkit
+          ? "window.__appkit is missing — WalletModalHost may not have mounted. Make sure <WalletModalHost/> is rendered in your layout."
+          : !profileState?.profile?.address
+          ? "Profile address missing — user may not be signed in via SIWS."
+          : "AppKit instance present but signTransaction is not a function — SDK version mismatch?",
+    });
+
     return null;
-  } catch {
+  } catch (err) {
+    console.error("[deploy] getAppKitForSigning threw:", err);
     return null;
   }
 }

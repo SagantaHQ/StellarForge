@@ -150,6 +150,12 @@ export async function POST(req: NextRequest) {
             // Transaction confirmed on-chain. For phase=create, extract
             // the contract ID from the result. For other phases, just
             // return the tx hash.
+            //
+            // Phases:
+            //   "upload"  — uploadContractWasm (Phase A of deploy): no extraction needed
+            //   "create"  — createCustomContract (Phase B): extract contract ID from result
+            //   "update"  — updateContractWasm (upgrade): contract ID already known
+            //   "invoke"  — invokeContractFunction (write call): just return tx hash
             let contractId: string | undefined;
 
             if (phase === "create") {
@@ -157,21 +163,46 @@ export async function POST(req: NextRequest) {
             } else if (phase === "update") {
               contractId = existingContractId;
             }
+            // For "upload" and "invoke" phases, contractId stays undefined —
+            // the caller doesn't need it (they already have the wasm hash
+            // for upload, or know the contract ID for invoke).
 
-            // Persist the deploy/upgrade to the database (best-effort)
+            // Persist the deploy/upgrade to the database
+            // The schema (DeployedContract + WasmVersion) ties the deploy
+            // to the project via projectId. We surface errors here so the
+            // user knows if their deploy record wasn't saved — they need
+            // it for the contract interaction panel to find the deployed
+            // contract on next page load.
             if (phase === "create" || phase === "update") {
-              await persistDeployRecord({
-                projectId,
-                network,
-                walletAddress,
-                wasmHash,
-                wasmSizeBytes,
-                wasmPath,
-                isUpgrade: phase === "update" || isUpgrade,
-                contractId: contractId ?? existingContractId ?? "",
-              }).catch((err) => {
-                console.warn("[submit] failed to persist deploy record:", err);
-              });
+              try {
+                await persistDeployRecord({
+                  projectId,
+                  network,
+                  walletAddress,
+                  wasmHash,
+                  wasmSizeBytes,
+                  wasmPath,
+                  isUpgrade: phase === "update" || isUpgrade,
+                  contractId: contractId ?? existingContractId ?? "",
+                });
+              } catch (dbErr) {
+                // DB save failure is NOT fatal — the contract is already
+                // deployed on-chain. But we DO need to surface it so the
+                // user knows the local DB record is stale (they'll need
+                // to manually import the contract ID later if they want
+                // the interaction panel to find it).
+                console.error("[submit] failed to persist deploy record:", dbErr);
+                // Include a warning in the response so the client can show it
+                return NextResponse.json({
+                  hash: txHash,
+                  status: "SUCCESS" as const,
+                  contractId,
+                  isUpgrade: phase === "update" || !!isUpgrade,
+                  warning: `Deploy succeeded on-chain but failed to save to local DB: ${
+                    dbErr instanceof Error ? dbErr.message : String(dbErr)
+                  }. The contract is live at ${contractId ?? "(unknown)"} but won't appear in this project's deploy list.`,
+                });
+              }
             }
 
             return NextResponse.json({
@@ -231,65 +262,114 @@ export async function POST(req: NextRequest) {
  * Extract the contract ID from a successful `createCustomContract`
  * transaction result.
  *
- * The Soroban transaction result contains a `resultMetaXdr` field with
- * the operation result. For `createCustomContract`, the inner result
- * value is a `Address` SCVal containing the new contract ID (C...).
+ * The `resultXdr` field from `rpc.Server.getTransaction()` is a
+ * **TransactionResult** XDR (the full tx result), NOT an OperationResult.
+ * The structure is:
  *
- * This is somewhat fragile because the XDR structure can vary between
- * SDK versions — wrap in try/catch and return undefined if extraction
- * fails (the caller can still use the tx hash to look it up on the
- * explorer).
+ *   TransactionResult
+ *     └── results(): OperationResult[]
+ *         └── [0] (first — and only — operation)
+ *             └── tr(): OperationResultTr
+ *                 └── invokeHostFunctionResult(): InvokeHostFunctionResult
+ *                                                  (= HostFunctionSuccess | HostFunctionFailure)
+ *                     └── value(): ScVal
+ *                         └── Address containing the new contract ID (C...)
+ *
+ * We use `Address.fromScVal()` to convert the ScVal to a contract strkey.
+ *
+ * Fallback: scan `resultMetaXdr` for any 56-char C... pattern in case the
+ * resultXdr path fails (SDK version differences, etc.).
  */
 function extractContractIdFromResult(response: {
   resultMetaXdr?: string;
   resultXdr?: string;
 }): string | undefined {
-  try {
-    // Dynamic import — can't use top-level import in server route
-    const StellarSdk = require("@stellar/stellar-sdk");
-    const { xdr, scValToNative } = StellarSdk;
+  const StellarSdk = require("@stellar/stellar-sdk");
+  const { xdr, Address, scValToNative } = StellarSdk;
 
-    // Try the operation result first (resultXdr) — that's where the
-    // createCustomContract result lives.
-    if (response.resultXdr) {
-      const result = xdr.OperationResult.fromXDR(response.resultXdr, "base64");
-      const innerResult = result?.tr()?.createCustomContractResult()?.innerResult();
-      if (innerResult) {
-        // The inner result is a CreateCustomContractResult containing
-        // a contractId Address. scValToNative converts to a plain string.
-        const val = innerResult.value();
-        if (val) {
-          const native = scValToNative(val);
-          if (typeof native === "string" && native.startsWith("C")) {
-            return native;
+  // ─── Path 1: parse resultXdr as TransactionResult ──────────────────
+  // resultXdr is the FULL TransactionResult (not a single OperationResult).
+  // Old code was parsing it as OperationResult, which silently returned
+  // garbage — that's why the contract ID was never extracted.
+  if (response.resultXdr) {
+    try {
+      const txResult = xdr.TransactionResult.fromXDR(response.resultXdr, "base64");
+      // results() may be undefined if the tx had no operations (impossible for
+      // a deploy, but be defensive)
+      const opResults = txResult.results?.() ?? [];
+
+      for (const opResult of opResults) {
+        try {
+          const tr = opResult.tr();
+          // For invokeHostFunction-type ops (covers uploadContractWasm,
+          // createCustomContract, invokeContractFunction, etc.), the
+          // result is an InvokeHostFunctionResult (= HostFunctionSuccess).
+          const invokeResult = tr.invokeHostFunctionResult();
+          if (!invokeResult) continue;
+
+          // HostFunctionSuccess has .value() returning ScVal
+          let scVal;
+          try {
+            scVal = invokeResult.value();
+          } catch {
+            // HostFunctionFailure has no .value() — skip
+            continue;
           }
-          // Sometimes the result is an object with .address()
-          if (typeof native === "object" && native !== null && "address" in native) {
-            const addr = (native as { address: () => string }).address();
-            if (typeof addr === "string" && addr.startsWith("C")) return addr;
+          if (!scVal) continue;
+
+          // Try Address.fromScVal first — this is the canonical way
+          // to convert an Address ScVal to a strkey
+          try {
+            const addr = Address.fromScVal(scVal);
+            if (addr && addr.toString().startsWith("C")) {
+              return addr.toString();
+            }
+          } catch {
+            // not an Address — fall through to other strategies
           }
+
+          // Fallback: scValToNative — sometimes returns the strkey string
+          try {
+            const native = scValToNative(scVal);
+            if (typeof native === "string" && native.startsWith("C") && native.length === 56) {
+              return native;
+            }
+            // Or as an Address-like object with .toString()
+            if (native && typeof native === "object" && "toString" in native) {
+              const str = String(native.toString());
+              if (str.startsWith("C") && str.length === 56) return str;
+            }
+          } catch {}
+        } catch {
+          // wrong operation type — continue to next
         }
       }
+    } catch (err) {
+      console.warn("[submit] failed to parse resultXdr as TransactionResult:", err);
     }
-
-    // Fall back to scanning the resultMetaXdr for any created contract ID.
-    // This is more expensive but catches cases where the operation result
-    // structure differs from what we expect.
-    if (response.resultMetaXdr) {
-      const meta = xdr.TransactionMeta.fromXDR(response.resultMetaXdr, "base64");
-      const metaJson = meta.toObject ? meta.toObject() : JSON.stringify(meta);
-      // Look for any C... pattern (Stellar contract IDs are 56 chars: C + 55 base32)
-      const match = JSON.stringify(metaJson).match(/"C[A-Z2-7]{55}"/);
-      if (match) {
-        return match[0].replace(/"/g, "");
-      }
-    }
-
-    return undefined;
-  } catch (err) {
-    console.warn("[submit] failed to extract contract ID from result:", err);
-    return undefined;
   }
+
+  // ─── Path 2: scan resultMetaXdr for any C... pattern ───────────────
+  // Brute-force fallback. The TransactionMeta contains all effects of the
+  // tx — including the new contract ID. Slower but catches SDK differences.
+  if (response.resultMetaXdr) {
+    try {
+      const meta = xdr.TransactionMeta.fromXDR(response.resultMetaXdr, "base64");
+      // Convert to a string representation and search for any C[A-Z2-7]{55}
+      // pattern (Stellar contract IDs are 56 chars: 'C' + 55 base32 chars)
+      const metaStr = JSON.stringify(meta, (_, v) =>
+        typeof v === "bigint" ? v.toString() : v
+      );
+      const match = metaStr.match(/C[A-Z2-7]{55}/);
+      if (match) {
+        return match[0];
+      }
+    } catch (err) {
+      console.warn("[submit] failed to parse resultMetaXdr:", err);
+    }
+  }
+
+  return undefined;
 }
 
 /**

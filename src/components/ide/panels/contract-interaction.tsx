@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { Play, Copy, Check, FunctionSquare } from "lucide-react";
+import { Play, Copy, Check, FunctionSquare, Eye, Send, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -11,18 +11,34 @@ import {
   type ContractFunction,
 } from "@/lib/soroban/spec-parser";
 import { useFileSystemStore } from "@/stores/file-system-store";
+import { useProfileStore } from "@/stores/profile-store";
 import { findFile } from "@/lib/soroban/sample-project";
 
 interface ContractInteractionPanelProps {
   contractId?: string;
+  network?: string;
 }
 
-export function ContractInteractionPanel({ contractId }: ContractInteractionPanelProps) {
+type InvokeMode = "read" | "write";
+type InvokeState = {
+  loading: boolean;
+  result?: unknown;
+  error?: string;
+  txHash?: string;
+  pendingSign?: boolean; // true when waiting for wallet signature
+};
+
+export function ContractInteractionPanel({
+  contractId,
+  network = "testnet",
+}: ContractInteractionPanelProps) {
   const tree = useFileSystemStore((s) => s.tree);
-  const [results, setResults] = useState<Record<string, unknown>>({});
-  const [loading, setLoading] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
+  const profile = useProfileStore((s) => s.profile);
+  const walletConnected = useProfileStore((s) => s.walletConnected);
+
+  // Per-function state: arg values + invoke state (loading/result/error)
   const [argValues, setArgValues] = useState<Record<string, Record<string, string>>>({});
+  const [invokeStates, setInvokeStates] = useState<Record<string, InvokeState>>({});
 
   // Find the active Rust file and parse its contract spec
   const functions = useMemo(() => {
@@ -46,7 +62,7 @@ export function ContractInteractionPanel({ contractId }: ContractInteractionPane
     return (
       <div className="p-3 text-center">
         <p className="text-xs text-[var(--text-muted)]">
-          No contract functions found in src/lib.rs.
+          No contract functions found in <code className="font-mono">src/lib.rs</code>.
         </p>
       </div>
     );
@@ -63,113 +79,269 @@ export function ContractInteractionPanel({ contractId }: ContractInteractionPane
     }));
   }
 
-  async function handleInvoke(fn: ContractFunction) {
-    setLoading(fn.name);
+  function setInvokeState(fnName: string, partial: Partial<InvokeState>) {
+    setInvokeStates((prev) => ({
+      ...prev,
+      [fnName]: { loading: false, ...(prev[fnName] ?? {}), ...partial },
+    }));
+  }
+
+  /**
+   * Parse a string arg value into the right native type for the SDK.
+   * Basic heuristic — user types are passed as strings and the SDK infers.
+   * Numbers become Number/bigint, true/false become boolean, etc.
+   */
+  function parseArgValue(value: string, type: string): unknown {
+    const t = type.trim();
+    // Numeric types
+    if (/^(u\d+|i\d+)$/.test(t)) {
+      // Use bigint for u64/i64/u128/i128, Number for u32/i32
+      if (t.endsWith("64") || t.endsWith("128")) {
+        return BigInt(value);
+      }
+      return Number(value);
+    }
+    // Boolean
+    if (t === "bool") {
+      return value === "true" || value === "1";
+    }
+    // Address — the SDK's nativeToScVal doesn't auto-convert strings to
+    // Address type, so we wrap it in a new Address() on the server side.
+    // For now, pass the string and let the server handle it via a special
+    // __type marker. (Future: extend nativeToScVal wrapper.)
+    if (t === "Address") {
+      return { __type: "address", value };
+    }
+    // Bytes — parse as hex
+    if (t === "Bytes" || t.startsWith("BytesN<")) {
+      const hex = value.startsWith("0x") ? value.slice(2) : value;
+      return Buffer.from(hex, "hex");
+    }
+    // Vec/Map — try JSON parse, fall back to string
+    if (t.startsWith("Vec<") || t.startsWith("Map<")) {
+      try {
+        return JSON.parse(value);
+      } catch {
+        return value;
+      }
+    }
+    // Default: string (covers String, Symbol, custom types)
+    return value;
+  }
+
+  /**
+   * QUERY mode — read-only simulation, no wallet signing.
+   * Uses /api/contracts/invoke?mode=read
+   */
+  async function handleQuery(fn: ContractFunction) {
+    if (!contractId) return;
+    setInvokeState(fn.name, { loading: true, error: undefined, result: undefined });
+
     try {
-      const args = fn.args
-        .filter((a) => a.name !== "env" && a.name !== "_env")
-        .map((a) => getArgValue(fn.name, a.name) || defaultValueForType(a.type));
+      const visibleArgs = fn.args.filter((a) => a.name !== "env" && a.name !== "_env");
+      const args = visibleArgs.map((a) => {
+        const val = getArgValue(fn.name, a.name) || defaultValueForType(a.type);
+        return parseArgValue(val, a.type);
+      });
 
-      // Call the terminal API to run stellar contract invoke
-      const { useFileSystemStore } = await import("@/stores/file-system-store");
-      const { flattenFiles } = await import("@/lib/soroban/sample-project");
-      const tree = useFileSystemStore.getState().tree;
-      const files = flattenFiles(tree).map((f) => ({ path: f.path, content: f.content }));
-
-      const argFlags = args.flatMap((val) => ["--arg", val]);
-      const command = [
-        "stellar", "contract", "invoke",
-        "--id", contractId!,
-        "--fn", fn.name,
-        ...argFlags,
-        "--network", "testnet",
-      ].join(" ");
-
-      const res = await fetch("/api/terminal", {
+      const res = await fetch("/api/contracts/invoke", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          projectId: "local-project",
-          command,
-          files,
+          contractId,
+          network,
+          function: fn.name,
+          args,
+          mode: "read",
         }),
       });
 
-      const data = await res.json() as {
-        exitCode: number;
-        stdout: string;
-        stderr: string;
-      };
-
-      if (data.exitCode === 0 && data.stdout.trim()) {
-        // Parse the result from stellar CLI output (last line is usually the result)
-        const result = data.stdout.trim().split("\n").pop() ?? data.stdout.trim();
-        setResults((prev) => ({ ...prev, [fn.name]: result }));
-      } else if (data.stderr) {
-        setResults((prev) => ({
-          ...prev,
-          [fn.name]: `Error: ${data.stderr.trim()}`,
-        }));
-      } else {
-        setResults((prev) => ({
-          ...prev,
-          [fn.name]: "(no output — the function may have returned void)",
-        }));
+      const data = await res.json();
+      if (!res.ok) {
+        setInvokeState(fn.name, {
+          loading: false,
+          error: data.detail ? `${data.error}: ${data.detail}` : data.error,
+        });
+        return;
       }
+
+      setInvokeState(fn.name, {
+        loading: false,
+        result: data.result,
+        error: data.error, // may be present even on 200 (decode failure)
+      });
     } catch (err) {
-      setResults((prev) => ({
-        ...prev,
-        [fn.name]: `Error: ${err instanceof Error ? err.message : String(err)}`,
-      }));
-    } finally {
-      setLoading(null);
+      setInvokeState(fn.name, {
+        loading: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
-  function handleCopyContractId() {
-    if (contractId) {
-      navigator.clipboard.writeText(contractId);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+  /**
+   * TRANSACT mode — write transaction, requires wallet signing.
+   * Uses /api/contracts/invoke?mode=write to build the tx, then signs
+   * via appkit.signTransaction, then submits via /api/contracts/submit.
+   */
+  async function handleTransact(fn: ContractFunction) {
+    if (!contractId) return;
+
+    if (!profile?.address || !walletConnected) {
+      setInvokeState(fn.name, {
+        loading: false,
+        error: "Wallet not connected. Click the wallet button in the top bar to connect.",
+      });
+      // Open the wallet modal
+      const handle = (window as unknown as { __walletModal?: { open: () => void } }).__walletModal;
+      handle?.open();
+      return;
+    }
+
+    setInvokeState(fn.name, {
+      loading: true,
+      error: undefined,
+      result: undefined,
+      pendingSign: true,
+    });
+
+    try {
+      const visibleArgs = fn.args.filter((a) => a.name !== "env" && a.name !== "_env");
+      const args = visibleArgs.map((a) => {
+        const val = getArgValue(fn.name, a.name) || defaultValueForType(a.type);
+        return parseArgValue(val, a.type);
+      });
+
+      // Step 1: build the unsigned invoke tx (server simulates + prepares)
+      const buildRes = await fetch("/api/contracts/invoke", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contractId,
+          network,
+          function: fn.name,
+          args,
+          mode: "write",
+          walletAddress: profile.address,
+        }),
+      });
+
+      const buildData = await buildRes.json();
+      if (!buildRes.ok) {
+        setInvokeState(fn.name, {
+          loading: false,
+          pendingSign: false,
+          error: buildData.detail ? `${buildData.error}: ${buildData.detail}` : buildData.error,
+        });
+        return;
+      }
+
+      // Step 2: get the appkit signing handle
+      const appkit = await getAppKitForSigning();
+      if (!appkit) {
+        setInvokeState(fn.name, {
+          loading: false,
+          pendingSign: false,
+          error: "Wallet signing unavailable. Reconnect your wallet and try again.",
+        });
+        return;
+      }
+
+      // Step 3: sign the tx with the wallet
+      setInvokeState(fn.name, { loading: true, pendingSign: true, error: "Please sign the transaction in your wallet…" });
+      let signedXdr: string;
+      try {
+        const signResult = await appkit.signTransaction(buildData.unsignedXdr, {
+          network: network.toUpperCase(),
+          networkPassphrase: buildData.networkPassphrase,
+        });
+        signedXdr = signResult.signedTxXdr || signResult.signedXdr || "";
+        if (!signedXdr) {
+          throw new Error("Wallet did not return a signed transaction");
+        }
+      } catch (signErr) {
+        const msg = signErr instanceof Error ? signErr.message : String(signErr);
+        const isReject = /reject|cancel|denied/i.test(msg);
+        setInvokeState(fn.name, {
+          loading: false,
+          pendingSign: false,
+          error: isReject
+            ? "Transaction signing was rejected."
+            : `Wallet signing failed: ${msg}`,
+        });
+        return;
+      }
+
+      // Step 4: submit the signed tx
+      setInvokeState(fn.name, { loading: true, pendingSign: false, error: "Submitting to network…" });
+      const submitRes = await fetch("/api/contracts/submit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          signedXdr,
+          walletAddress: profile.address,
+          network,
+          projectId: "invoke-tx", // not tied to a project deploy record
+          phase: "invoke",
+        }),
+      });
+
+      const submitData = await submitRes.json();
+      if (!submitRes.ok) {
+        setInvokeState(fn.name, {
+          loading: false,
+          error: submitData.detail ? `${submitData.error}: ${submitData.detail}` : submitData.error,
+        });
+        return;
+      }
+
+      if (submitData.status === "FAILED") {
+        setInvokeState(fn.name, {
+          loading: false,
+          error: submitData.detail || "Transaction failed on-chain",
+        });
+        return;
+      }
+
+      setInvokeState(fn.name, {
+        loading: false,
+        result: { txHash: submitData.hash, status: submitData.status },
+        error: submitData.status === "PENDING" ? "Transaction submitted but not yet confirmed after 60s." : undefined,
+      });
+    } catch (err) {
+      setInvokeState(fn.name, {
+        loading: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
   return (
-    <div className="flex flex-col h-full overflow-hidden">
-      {/* Contract ID header */}
+    <div className="flex flex-col h-full overflow-hidden border-t border-[var(--border-subtle)]">
+      {/* Header */}
       <div className="border-b border-[var(--border-subtle)] p-3">
         <div className="text-[10px] uppercase tracking-wide text-[var(--text-muted)] mb-1">
-          Contract ID
+          Interact with deployed contract
         </div>
-        <div className="flex items-center gap-1.5">
-          <code className="flex-1 text-[11px] font-mono text-[var(--text-secondary)] truncate">
-            {contractId}
-          </code>
-          <button
-            onClick={handleCopyContractId}
-            className="shrink-0 text-[var(--text-muted)] hover:text-[var(--text-primary)]"
-            aria-label="Copy contract ID"
-          >
-            {copied ? <Check size={11} strokeWidth={2} /> : <Copy size={11} strokeWidth={1.75} />}
-          </button>
+        <div className="text-[11px] text-[var(--text-secondary)]">
+          <span className="text-[var(--text-muted)]">Network:</span>{" "}
+          <span className="font-medium capitalize">{network}</span>
+          <span className="mx-1.5 text-[var(--border-subtle)]">·</span>
+          <span className="text-[var(--text-muted)]">Functions:</span>{" "}
+          <span className="font-medium">{functions.length}</span>
         </div>
       </div>
 
-      {/* Functions */}
-      <div className="flex-1 overflow-y-auto p-3 space-y-3">
-        <h3 className="text-[11px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">
-          Functions ({functions.length})
-        </h3>
-
+      {/* Functions list */}
+      <div className="flex-1 overflow-y-auto p-3 space-y-2">
         {functions.map((fn) => (
           <FunctionInvoker
             key={fn.name}
             fn={fn}
-            loading={loading === fn.name}
-            result={results[fn.name]}
+            state={invokeStates[fn.name] ?? { loading: false }}
             argValues={argValues[fn.name] ?? {}}
             onArgChange={(argName, value) => setArgValue(fn.name, argName, value)}
-            onInvoke={() => handleInvoke(fn)}
+            onQuery={() => handleQuery(fn)}
+            onTransact={() => handleTransact(fn)}
           />
         ))}
       </div>
@@ -179,25 +351,26 @@ export function ContractInteractionPanel({ contractId }: ContractInteractionPane
 
 function FunctionInvoker({
   fn,
-  loading,
-  result,
+  state,
   argValues,
   onArgChange,
-  onInvoke,
+  onQuery,
+  onTransact,
 }: {
   fn: ContractFunction;
-  loading: boolean;
-  result?: unknown;
+  state: InvokeState;
   argValues: Record<string, string>;
   onArgChange: (argName: string, value: string) => void;
-  onInvoke: () => void;
+  onQuery: () => void;
+  onTransact: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const visibleArgs = fn.args.filter((a) => a.name !== "env" && a.name !== "_env");
+  const { loading, result, error, pendingSign } = state;
 
   return (
     <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface-sunken)] overflow-hidden">
-      {/* Function header */}
+      {/* Function header (click to expand) */}
       <button
         onClick={() => setExpanded((v) => !v)}
         className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-[var(--surface-hover)] transition-colors"
@@ -216,9 +389,10 @@ function FunctionInvoker({
         </span>
       </button>
 
-      {/* Expanded: args + invoke button */}
+      {/* Expanded: args + buttons + result */}
       {expanded && (
         <div className="border-t border-[var(--border-subtle)] p-2.5 space-y-2">
+          {/* Args */}
           {visibleArgs.length === 0 ? (
             <p className="text-[11px] text-[var(--text-muted)] italic">No arguments</p>
           ) : (
@@ -237,29 +411,87 @@ function FunctionInvoker({
             ))
           )}
 
-          <Button
-            size="sm"
-            onClick={onInvoke}
-            disabled={loading}
-            className="w-full h-7 gap-1.5 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)] text-[11px] disabled:opacity-50"
-          >
-            <Play size={10} strokeWidth={2} fill="currentColor" />
-            {loading ? "Invoking…" : `Invoke ${fn.name}()`}
-          </Button>
+          {/* Two action buttons: Query (read/simulate) + Transact (write/sign) */}
+          <div className="flex gap-1.5">
+            <Button
+              size="sm"
+              onClick={onQuery}
+              disabled={loading}
+              className="flex-1 h-7 gap-1.5 bg-[var(--surface-raised)] hover:bg-[var(--surface-hover)] border border-[var(--border-subtle)] text-[var(--text-primary)] text-[11px] disabled:opacity-50"
+              title="Read-only — simulate the call without submitting a transaction"
+            >
+              <Eye size={10} strokeWidth={1.75} />
+              {loading && !pendingSign ? "Querying…" : "Query"}
+            </Button>
+            <Button
+              size="sm"
+              onClick={onTransact}
+              disabled={loading}
+              className="flex-1 h-7 gap-1.5 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)] text-[11px] disabled:opacity-50"
+              title="Write — submit a transaction (requires wallet signing)"
+            >
+              {loading && pendingSign ? <AlertCircle size={10} strokeWidth={1.75} /> : <Send size={10} strokeWidth={1.75} />}
+              {loading && pendingSign ? "Sign…" : loading ? "Submitting…" : "Transact"}
+            </Button>
+          </div>
 
-          {/* Result */}
-          {result !== undefined && (
+          {/* Pending-sign message */}
+          {pendingSign && error && (
+            <div className="text-[10px] text-[var(--accent)] italic">{error}</div>
+          )}
+
+          {/* Result (Query mode) */}
+          {result !== undefined && !pendingSign && (
             <div className="mt-2">
               <div className="text-[9px] uppercase tracking-wide text-[var(--text-muted)] mb-0.5">
-                Result
+                {typeof result === "object" && result !== null && "txHash" in result
+                  ? "Transaction submitted"
+                  : "Result"}
               </div>
               <pre className="rounded bg-[var(--surface-app)] p-1.5 text-[11px] font-mono text-[var(--status-success)] overflow-x-auto whitespace-pre-wrap break-all">
                 {formatInvokeResult(result)}
               </pre>
+              {typeof result === "object" && result !== null && "txHash" in result && (
+                <div className="text-[9px] text-[var(--text-muted)] mt-1">
+                  Tx hash: <code className="font-mono">{String((result as { txHash: string }).txHash).substring(0, 16)}…</code>
+                  {typeof result === "object" && result !== null && "status" in result && (
+                    <span className="ml-1.5">({String((result as { status: string }).status)})</span>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Error */}
+          {error && !pendingSign && (
+            <div className="text-[11px] text-[var(--status-error)] break-all">
+              {error}
             </div>
           )}
         </div>
       )}
     </div>
   );
+}
+
+// Helper to get the appkit instance for signing.
+// Same as in right-panel.tsx — duplicated here to avoid coupling.
+// (Future: extract into a shared hook.)
+async function getAppKitForSigning(): Promise<{
+  signTransaction: (xdr: string, opts?: Record<string, unknown>) => Promise<{ signedTxXdr?: string; signedXdr?: string }>;
+} | null> {
+  try {
+    const appkit = (window as unknown as {
+      __appkit?: {
+        signTransaction: (xdr: string, opts?: Record<string, unknown>) => Promise<{ signedTxXdr?: string; signedXdr?: string }>;
+      } | null;
+    }).__appkit;
+
+    if (appkit && typeof appkit.signTransaction === "function") {
+      return appkit;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }

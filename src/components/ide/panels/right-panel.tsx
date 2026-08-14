@@ -792,7 +792,16 @@ function DeployPanel({ network }: { network: string }) {
       });
       setStatusMsg("");
 
-      // Refresh the existing contract info
+      // Surface any DB-persistence warning from the server (the deploy
+      // succeeded on-chain, but the local DB record may be stale).
+      if (createResult.warning) {
+        console.warn("[deploy] server warning:", createResult.warning);
+        // Show as a transient error banner alongside the success card so
+        // the user sees BOTH the success and the warning.
+        setError(createResult.warning);
+      }
+
+      // Refresh the existing contract info (pulls the new contract from DB)
       await checkExistingContract();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Deploy failed");
@@ -933,15 +942,19 @@ function DeployPanel({ network }: { network: string }) {
             {success.hash}
           </div>
           <a
-            href={network === "testnet"
-              ? `https://stellar.expert/explorer/testnet/contract/${success.contractId}`
-              : `https://stellar.expert/explorer/public/contract/${success.contractId}`}
+            href={
+              network === "testnet"
+                ? `https://testnet.stellarchain.io/contracts/${success.contractId}`
+                : network === "futurenet"
+                ? `https://futurenet.stellarchain.io/contracts/${success.contractId}`
+                : `https://stellarchain.io/contracts/${success.contractId}`
+            }
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1 mt-1.5 text-[10px] text-[var(--accent)] hover:underline"
           >
             <ExternalLink size={10} strokeWidth={1.75} />
-            View on explorer
+            View on stellarchain.io
           </a>
         </div>
       )}
@@ -953,9 +966,17 @@ function DeployPanel({ network }: { network: string }) {
         </div>
       )}
 
-      {/* Contract interaction — after deploy */}
+      {/* Contract interaction — after deploy (Remix-style forms for
+          calling/querying the deployed contract's functions) */}
       {success?.contractId && success.contractId.startsWith("C") && (
-        <ContractInteractionPanel contractId={success.contractId} />
+        <ContractInteractionPanel contractId={success.contractId} network={network} />
+      )}
+
+      {/* Also show the interaction panel for an existing deployed contract
+          (so the user can interact without redeploying). Only show if we
+          don't have a freshly-deployed success card (avoid duplicate). */}
+      {!success?.contractId && existingContract?.contractId && existingContract.contractId.startsWith("C") && (
+        <ContractInteractionPanel contractId={existingContract.contractId} network={network} />
       )}
 
       {/* WASM version history */}

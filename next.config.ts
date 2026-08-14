@@ -49,6 +49,11 @@ const nextConfig: NextConfig = {
       "@trezor/transport-webusb": stubPath,
       "@trezor/transport-webhid": stubPath,
       "@trezor/hw-app-str": stubPath,
+      // y-monaco imports 'monaco-editor/esm/vs/editor/editor.api.js' but
+      // monaco-editor's package.json exports map rewrites this to a
+      // non-existent double path (./esm/vs/esm/vs/editor/editor.api.js).
+      // Alias directly to the actual file on disk.
+      "monaco-editor/esm/vs/editor/editor.api.js": path.resolve(__dirname, "node_modules/monaco-editor/esm/vs/editor/editor.api.js"),
     };
 
     // In dev mode, configure the file watcher to ignore non-source dirs.

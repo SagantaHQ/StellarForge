@@ -304,110 +304,178 @@ function extractContractIdFromResult(response: {
   const triedPaths: string[] = [];
   const rawFields: Record<string, string> = {};
 
-  // Save raw XDR strings for debugging
-  for (const field of ["resultXdr", "resultMetaXdr", "envelopeXdr"]) {
-    const val = response[field];
-    if (typeof val === "string" && val.length > 0) {
-      rawFields[field] = val.substring(0, 200) + (val.length > 200 ? "…" : "");
+  // ─── LOG the response object shape for debugging ─────────────────
+  // The SDK's GetTransactionResponse may have different field names
+  // depending on version. Log ALL keys so we can see what's available.
+  const responseKeys = Object.keys(response);
+  console.log("[submit] getTransaction response keys:", responseKeys);
+  for (const key of responseKeys) {
+    const val = (response as Record<string, unknown>)[key];
+    const type = typeof val;
+    const preview = type === "string"
+      ? val.substring(0, 100) + (val.length > 100 ? "…" : "")
+      : type === "object" && val !== null
+      ? `[object: ${Object.keys(val).join(",")}]`
+      : String(val);
+    console.log(`[submit]   ${key}: ${type} = ${preview}`);
+    if (type === "string" && val.length > 20) {
+      rawFields[key] = val.substring(0, 200) + (val.length > 200 ? "…" : "");
     }
   }
 
-  // ─── Path 1: resultMetaXdr → TransactionMeta → v3 → sorobanMeta → returnValue ──
-  // For createCustomContract, the SorobanTransactionMeta contains a
-  // returnValue which is an ScVal of type scvAddress containing the
-  // new contract ID. This is the MOST RELIABLE path.
-  if (response.resultMetaXdr) {
-    triedPaths.push("resultMetaXdr → sorobanMeta.returnValue");
-    try {
-      const meta = xdr.TransactionMeta.fromXDR(response.resultMetaXdr, "base64");
-      const contractId = tryExtractFromTransactionMeta(meta, xdr, Address, StrKey, scValToNative, triedPaths);
-      if (contractId) {
-        console.log(`[submit] extracted contract ID from TransactionMeta: ${contractId}`);
-        return { contractId, debug: { triedPaths, rawFields } };
-      }
-    } catch (err) {
-      triedPaths.push(`resultMetaXdr parse failed: ${err instanceof Error ? err.message : String(err)}`);
+  // ─── Try ALL possible field names for XDR strings ─────────────────
+  // The SDK has changed field names across versions. Try every possible
+  // combination to find the XDR data.
+  const possibleResultXdrFields = [
+    "resultXdr", "result_xdr", "txResultXdr", "txResult",
+  ];
+  const possibleMetaXdrFields = [
+    "resultMetaXdr", "result_meta_xdr", "txMetaXdr", "metaXdr", "meta",
+  ];
+  const possibleEnvelopeFields = [
+    "envelopeXdr", "envelope_xdr", "txEnvelopeXdr", "envelope",
+  ];
+
+  // Collect all candidate XDR strings
+  const xdrCandidates: { field: string; xdrStr: string }[] = [];
+  for (const field of [...possibleResultXdrFields, ...possibleMetaXdrFields, ...possibleEnvelopeFields]) {
+    const val = (response as Record<string, unknown>)[field];
+    if (typeof val === "string" && val.length > 10) {
+      xdrCandidates.push({ field, xdrStr: val });
     }
   }
 
-  // ─── Path 2: resultXdr → TransactionResult → results[0] → invokeHostFunctionResult ──
-  // The OperationResult for createCustomContract contains an
-  // InvokeHostFunctionResult. For success, the inner value is an ScVal
-  // (scvAddress) containing the contract ID.
-  if (response.resultXdr) {
-    triedPaths.push("resultXdr → results[0].tr.invokeHostFunctionResult");
-    try {
-      const txResult = xdr.TransactionResult.fromXDR(response.resultXdr, "base64");
-      const opResults = txResult.results?.() ?? [];
-      for (const opResult of opResults) {
-        try {
-          const tr = opResult.tr();
-          const invokeResult = tr.invokeHostFunctionResult();
-          if (!invokeResult) continue;
-
-          // The success arm — try to get the returnValue (ScVal)
-          let scVal;
-          try {
-            scVal = invokeResult.success();
-          } catch {
-            continue; // not a success — skip
-          }
-          if (!scVal) continue;
-
-          // Try Address.fromScVal — the canonical conversion
-          try {
-            const addr = Address.fromScVal(scVal);
-            if (addr && addr.toString().startsWith("C") && addr.toString().length === 56) {
-              console.log(`[submit] extracted contract ID from resultXdr success ScVal: ${addr.toString()}`);
-              return { contractId: addr.toString(), debug: { triedPaths, rawFields } };
-            }
-          } catch {}
-
-          // Fallback: scValToNative might return the strkey as a string
-          try {
-            const native = scValToNative(scVal);
-            if (typeof native === "string" && native.startsWith("C") && native.length === 56) {
-              console.log(`[submit] extracted contract ID from scValToNative: ${native}`);
-              return { contractId: native, debug: { triedPaths, rawFields } };
-            }
-          } catch {}
-        } catch {
-          // wrong operation type — continue
+  // Also check nested objects — some SDK versions nest the XDR under
+  // response.result, response.meta, response.envelope, etc.
+  for (const nestedKey of ["result", "meta", "envelope", "tx", "transaction"]) {
+    const nested = (response as Record<string, unknown>)[nestedKey];
+    if (nested && typeof nested === "object") {
+      for (const field of [...possibleResultXdrFields, ...possibleMetaXdrFields, ...possibleEnvelopeFields]) {
+        const val = (nested as Record<string, unknown>)[field];
+        if (typeof val === "string" && val.length > 10) {
+          xdrCandidates.push({ field: `${nestedKey}.${field}`, xdrStr: val });
         }
       }
-    } catch (err) {
-      triedPaths.push(`resultXdr parse failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
-  // ─── Path 3: Last-resort brute-force scan for strkey pattern ──
-  // This catches the rare case where the contract ID appears as a strkey
-  // string somewhere in the JSON-serialized XDR (some SDK versions
-  // serialize Hash fields as strkeys in their toJSON method).
-  triedPaths.push("brute-force strkey scan (last resort)");
-  const CONTRACT_ID_RE = /\bC[A-Z2-7]{55}\b/g;
-  for (const field of ["resultMetaXdr", "resultXdr", "envelopeXdr"]) {
-    const val = response[field];
-    if (typeof val !== "string" || val.length === 0) continue;
-    try {
-      const parsed = xdr.TransactionMeta.fromXDR(val, "base64");
-      const jsonStr = safeStringify(parsed);
-      CONTRACT_ID_RE.lastIndex = 0;
-      const m = CONTRACT_ID_RE.exec(jsonStr);
-      if (m) {
-        try {
-          const addr = new Address(m[0]);
-          if (addr.toString() === m[0]) {
-            console.log(`[submit] extracted contract ID via brute-force scan in ${field}: ${m[0]}`);
-            return { contractId: m[0], debug: { triedPaths, rawFields } };
-          }
-        } catch {}
+  // Also try the response itself as an XDR string (some SDK versions return
+  // the raw XDR directly as the response body)
+  if (typeof response === "string" && response.length > 20) {
+    xdrCandidates.push({ field: "(response as string)", xdrStr: response });
+  }
+
+  console.log(`[submit] found ${xdrCandidates.length} XDR candidate(s):`, xdrCandidates.map((c) => c.field));
+
+  // ─── Try to parse each XDR candidate ──────────────────────────────
+  for (const { field, xdrStr } of xdrCandidates) {
+    // Try as TransactionResult
+    if (field.includes("result") || field.includes("Result")) {
+      try {
+        const txResult = xdr.TransactionResult.fromXDR(xdrStr, "base64");
+        triedPaths.push(`parsed ${field} as TransactionResult`);
+        const id = tryExtractFromResult(txResult, xdr, Address, StrKey, scValToNative, triedPaths);
+        if (id) {
+          console.log(`[submit] extracted contract ID from ${field}: ${id}`);
+          return { contractId: id, debug: { triedPaths, rawFields } };
+        }
+      } catch (err) {
+        triedPaths.push(`failed to parse ${field} as TransactionResult: ${err instanceof Error ? err.message.substring(0, 100) : String(err)}`);
       }
-    } catch {}
+    }
+
+    // Try as TransactionMeta
+    if (field.includes("meta") || field.includes("Meta")) {
+      try {
+        const meta = xdr.TransactionMeta.fromXDR(xdrStr, "base64");
+        triedPaths.push(`parsed ${field} as TransactionMeta`);
+        const id = tryExtractFromTransactionMeta(meta, xdr, Address, StrKey, scValToNative, triedPaths);
+        if (id) {
+          console.log(`[submit] extracted contract ID from ${field}: ${id}`);
+          return { contractId: id, debug: { triedPaths, rawFields } };
+        }
+      } catch (err) {
+        triedPaths.push(`failed to parse ${field} as TransactionMeta: ${err instanceof Error ? err.message.substring(0, 100) : String(err)}`);
+      }
+    }
+  }
+
+  // ─── Last resort: try ALL candidates as BOTH types ────────────────
+  for (const { field, xdrStr } of xdrCandidates) {
+    for (const [typeName, xdrClass] of [
+      ["TransactionResult", xdr.TransactionResult],
+      ["TransactionMeta", xdr.TransactionMeta],
+      ["TransactionEnvelope", xdr.TransactionEnvelope],
+    ] as const) {
+      try {
+        const parsed = xdrClass.fromXDR(xdrStr, "base64");
+        const id = tryExtractFromTransactionMeta(parsed, xdr, Address, StrKey, scValToNative, triedPaths);
+        if (id) {
+          triedPaths.push(`last-resort: ${field} as ${typeName} → contract ID`);
+          console.log(`[submit] extracted contract ID via last-resort ${field} as ${typeName}: ${id}`);
+          return { contractId: id, debug: { triedPaths, rawFields } };
+        }
+        // Also try as TransactionResult
+        const id2 = tryExtractFromResult(parsed, xdr, Address, StrKey, scValToNative, triedPaths);
+        if (id2) {
+          triedPaths.push(`last-resort: ${field} as ${typeName} (via result) → contract ID`);
+          console.log(`[submit] extracted contract ID via last-resort ${field} as ${typeName}: ${id2}`);
+          return { contractId: id2, debug: { triedPaths, rawFields } };
+        }
+      } catch {}
+    }
   }
 
   console.warn("[submit] contract ID extraction failed. Tried paths:", triedPaths);
   return { contractId: undefined, debug: { triedPaths, rawFields } };
+}
+
+/**
+ * Try to extract a contract ID from a parsed TransactionResult.
+ * Walks results[0].tr.invokeHostFunctionResult → success → ScVal → Address.
+ */
+function tryExtractFromResult(
+  txResult: any,
+  xdr: any,
+  Address: any,
+  StrKey: any,
+  scValToNative: any,
+  triedPaths: string[]
+): string | undefined {
+  try {
+    const opResults = txResult.results?.() ?? [];
+    for (const opResult of opResults) {
+      try {
+        const tr = opResult.tr();
+        const invokeResult = tr.invokeHostFunctionResult();
+        if (!invokeResult) continue;
+
+        let scVal;
+        try {
+          scVal = invokeResult.success();
+        } catch {
+          continue;
+        }
+        if (!scVal) continue;
+
+        try {
+          const addr = Address.fromScVal(scVal);
+          if (addr && addr.toString().startsWith("C") && addr.toString().length === 56) {
+            return addr.toString();
+          }
+        } catch {}
+
+        try {
+          const native = scValToNative(scVal);
+          if (typeof native === "string" && native.startsWith("C") && native.length === 56) {
+            return native;
+          }
+        } catch {}
+      } catch {}
+    }
+  } catch {}
+
+  return undefined;
 }
 
 /**

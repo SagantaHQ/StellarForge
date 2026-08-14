@@ -18,6 +18,7 @@ import {
   RefreshCw,
   RotateCcw,
   Wrench,
+  Copy,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -744,23 +745,53 @@ function EmptyAgentState({ hasProvider, onOpenSettings }: { hasProvider: boolean
   );
 }
 
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={() => {
+        navigator.clipboard.writeText(text).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 2000);
+        }).catch(() => {});
+      }}
+      className="flex items-center gap-1 text-[10px] text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
+      aria-label="Copy message"
+      title="Copy message"
+    >
+      {copied ? (
+        <>
+          <Check size={10} strokeWidth={2} className="text-[var(--status-success)]" />
+          <span className="text-[var(--status-success)]">Copied</span>
+        </>
+      ) : (
+        <Copy size={10} strokeWidth={1.75} />
+      )}
+    </button>
+  );
+}
+
 function MessageView({ role, content, timestamp }: { role: string; content: string; timestamp: number }) {
   if (role === "system") {
     return (
-      <div className="rounded border border-[var(--border-subtle)] bg-[var(--surface-sunken)] px-2.5 py-1.5 text-[11px] italic text-[var(--text-muted)] break-words whitespace-pre-wrap overflow-hidden">
-        {content}
+      <div className="space-y-1">
+        <div className="rounded border border-[var(--border-subtle)] bg-[var(--surface-sunken)] px-2.5 py-1.5 text-[11px] italic text-[var(--text-muted)] break-words whitespace-pre-wrap overflow-hidden">
+          {content}
+        </div>
+        <CopyButton text={content} />
       </div>
     );
   }
   if (role === "user") {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[85%] min-w-0">
+        <div className="max-w-[85%] min-w-0 space-y-1">
           <div className="rounded-md bg-[var(--accent)] px-2.5 py-1.5 text-[13px] text-[var(--accent-contrast)] break-words whitespace-pre-wrap overflow-hidden">
             {content}
           </div>
-          <div className="mt-0.5 text-right text-[10px] text-[var(--text-muted)]">
-            {new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+          <div className="flex items-center justify-end gap-2 text-[10px] text-[var(--text-muted)]">
+            <CopyButton text={content} />
+            <span>{new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
           </div>
         </div>
       </div>
@@ -768,7 +799,7 @@ function MessageView({ role, content, timestamp }: { role: string; content: stri
   }
   return (
     <div className="flex justify-start">
-      <div className="max-w-[90%] min-w-0">
+      <div className="max-w-[90%] min-w-0 space-y-1">
         <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface-raised)] px-2.5 py-1.5 text-[13px] text-[var(--text-primary)] overflow-hidden">
           <div className="mb-1 flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-[var(--text-muted)]">
             <Bot size={10} strokeWidth={1.75} />
@@ -776,8 +807,9 @@ function MessageView({ role, content, timestamp }: { role: string; content: stri
           </div>
           <div className="whitespace-pre-wrap break-words overflow-hidden">{content}</div>
         </div>
-        <div className="mt-0.5 text-[10px] text-[var(--text-muted)]">
-          {new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+        <div className="flex items-center gap-2 text-[10px] text-[var(--text-muted)]">
+          <CopyButton text={content} />
+          <span>{new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
         </div>
       </div>
     </div>

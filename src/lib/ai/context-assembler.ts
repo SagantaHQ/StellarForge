@@ -398,7 +398,11 @@ export function parseDiffFromResponse(content: string, knownFiles?: string[]): P
       }
     }
 
-    const hunkPattern = /@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@\n([\s\S]*?)(?=\n@@|\n```|$)/g;
+    // Hunk pattern: @@ -oldStart,count +newStart,count @@ optional_context\n lines
+    // The optional context after @@ (e.g. "impl HelloWorld {") is common in
+    // AI-generated diffs — the regex must allow text after the second @@.
+    // Also handles \r\n line endings.
+    const hunkPattern = /@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@[^\n]*\r?\n([\s\S]*?)(?=\r?\n@@|\r?\n```|$)/g;
     const hunks: ParsedDiff["hunks"] = [];
     let h: RegExpExecArray | null;
     while ((h = hunkPattern.exec(raw)) !== null) {

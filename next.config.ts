@@ -49,11 +49,6 @@ const nextConfig: NextConfig = {
       "@trezor/transport-webusb": stubPath,
       "@trezor/transport-webhid": stubPath,
       "@trezor/hw-app-str": stubPath,
-      // y-monaco imports 'monaco-editor/esm/vs/editor/editor.api.js' but
-      // @monaco-editor/react loads Monaco from CDN — the ESM path doesn't
-      // exist in node_modules. Alias it to the main monaco-editor entry.
-      "monaco-editor/esm/vs/editor/editor.api.js": "monaco-editor",
-      "monaco-editor/esm/vs/editor/editor.api": "monaco-editor",
     };
 
     // In dev mode, configure the file watcher to ignore non-source dirs.

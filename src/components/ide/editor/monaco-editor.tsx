@@ -78,6 +78,11 @@ export function MonacoEditor({
   // @monaco-editor/react loads Monaco from CDN, while import("monaco-editor")
   // loads from node_modules — they're different instances and don't share
   // language providers. So we MUST use the Monaco from onMount.
+  //
+  // We also keep a global window.__sorobanAutocomplete reference so HMR
+  // (Hot Module Replacement) doesn't register multiple providers when the
+  // module re-loads — the previous registration is disposed first.
+  // (Qwen AI flagged this as a common cause of duplicate suggestions.)
   const autocompleteProviderRef = useRef<{ dispose: () => void } | null>(null);
 
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
@@ -115,23 +120,39 @@ export function MonacoEditor({
       monaco.editor.setModelLanguage(model, monacoLanguage(language));
     }
 
-    // Register the completion provider using THIS Monaco instance.
-    // Mode is determined by the server config (src/lib/config/server-config.ts)
-    // — NOT user-configurable. Only admins can change it.
+    // ─── Register the completion provider (with HMR guard) ──────────
+    // Two layers of protection against duplicate registration:
+    //   1. autocompleteProviderRef — handles React StrictMode double-mount
+    //   2. window.__sorobanAutocomplete — handles HMR (module reload loses
+    //      the ref, but the global survives)
+    // Both must be disposed before registering a new provider.
     if (autocompleteProviderRef.current) {
       autocompleteProviderRef.current.dispose();
+      autocompleteProviderRef.current = null;
     }
+    const globalAutocomplete = (window as unknown as {
+      __sorobanAutocomplete?: { dispose: () => void } | null;
+    }).__sorobanAutocomplete;
+    if (globalAutocomplete) {
+      globalAutocomplete.dispose();
+      (window as unknown as { __sorobanAutocomplete?: null }).__sorobanAutocomplete = null;
+    }
+
     const workspaceId = "local-project";
     // Fetch server config to determine autocomplete mode
     fetch("/api/config")
       .then(r => r.ok ? r.json() : null)
       .then(config => {
         const mode = config?.autocompleteMode || "simple";
-        autocompleteProviderRef.current = registerCompletionProvider(monaco, workspaceId, mode);
+        const provider = registerCompletionProvider(monaco, workspaceId, mode);
+        autocompleteProviderRef.current = provider;
+        (window as unknown as { __sorobanAutocomplete?: typeof provider }).__sorobanAutocomplete = provider;
       })
       .catch(() => {
         // Fallback to simple mode if config fetch fails
-        autocompleteProviderRef.current = registerCompletionProvider(monaco, workspaceId, "simple");
+        const provider = registerCompletionProvider(monaco, workspaceId, "simple");
+        autocompleteProviderRef.current = provider;
+        (window as unknown as { __sorobanAutocomplete?: typeof provider }).__sorobanAutocomplete = provider;
       });
 
     // §6.1 — Add "Add Comment" to the editor context menu

@@ -369,9 +369,27 @@ function ensureRustdocLoaded() {
 export function registerAutocompleteProvider(monaco: typeof Monaco): { dispose: () => void } {
   ensureRustdocLoaded();
 
+  // ─── Per-model request-id tracking ──────────────────────────────
+  // Each completion request bumps a counter for the model. When an async
+  // operation resolves, we check the counter — if it doesn't match, a
+  // newer request has started and we discard the stale result.
+  // (This prevents the "old suggestions appear after typing" race
+  // condition that Qwen AI flagged.)
+  const requestIds = new Map<string, number>();
+
+  // ─── Short-lived completion cache ────────────────────────────────
+  // Keyed by `${filePath}:${languageId}:${prefix}`. Cached for 15s so
+  // rapid typing (which re-triggers the provider on every keystroke)
+  // doesn't re-iterate the entire rustdoc index every time.
+  const CACHE_TTL_MS = 15_000;
+  const completionCache = new Map<string, { at: number; items: Monaco.languages.CompletionItem[] }>();
+
   let currentItems: CompletionItem[] = useAutocompleteStore.getState().items;
   const unsubscribe = useAutocompleteStore.subscribe((state) => {
     currentItems = state.items;
+    // Invalidate the cache when the source-parsed items change — the cached
+    // suggestions would otherwise be stale until the TTL expires.
+    completionCache.clear();
   });
 
   const kindMap: Record<string, number> = {
@@ -390,8 +408,19 @@ export function registerAutocompleteProvider(monaco: typeof Monaco): { dispose: 
   };
 
   const provider = monaco.languages.registerCompletionItemProvider("rust", {
-    triggerCharacters: [".", ":", "u", "p", "f", "s", "e", "m", "c", "t", "v", "a", "b"],
-    provideCompletionItems: (model, position) => {
+    // Structural trigger characters only — NOT single letters.
+    // Single-letter triggers (the old `u/p/f/s/e/m/c/t/v/a/b`) caused
+    // the completion widget to fire on EVERY keystroke of those letters,
+    // which combined with no async + no cache made typing feel laggy.
+    // Monaco already shows suggestions on identifier characters by default
+    // when quickSuggestions.other === true (set in editor options).
+    triggerCharacters: [".", ":", "::", "@", "#", '"', "/", "_", "-"],
+    // async so we can await the cancellation token + future AI fetches
+    provideCompletionItems: async (model, position, _context, token) => {
+      const modelKey = model.uri.toString();
+      const requestId = (requestIds.get(modelKey) ?? 0) + 1;
+      requestIds.set(modelKey, requestId);
+
       const lineUntilPosition = model.getValueInRange({
         startLineNumber: position.lineNumber,
         startColumn: 1,
@@ -404,26 +433,12 @@ export function registerAutocompleteProvider(monaco: typeof Monaco): { dispose: 
       const isAfterDoubleColon = lineUntilPosition.endsWith("::");
       const isAfterUse = trimmed.startsWith("use ") || trimmed === "use";
 
-      // Detect "Type::" or "Type::partial" — Monaco re-calls the provider on
-      // every keystroke, so when the user types `String::f` to filter for
-      // `from_str`, `isAfterDoubleColon` is false (line ends with `f`). We
-      // need to recognize the broader "in a Type:: path" pattern so auto-import
-      // of `Type` still fires when the user accepts `from_str`.
-      //
-      // Match: identifier, optional whitespace, `::`, optional partial
-      // identifier at end of line. e.g. `String::`, `String::f`, `String::from_str`.
-      // (Doesn't match `::foo` with no type before — that's a different context.)
       const typePathMatch = lineUntilPosition.match(/([A-Za-z_][A-Za-z0-9_]*)\s*::\s*[A-Za-z0-9_]*$/);
       const typeBeforeColonsName = typePathMatch ? typePathMatch[1] : null;
       const isInTypePath = typeBeforeColonsName !== null;
 
-      // When after `::` or `.`, the word at cursor is empty (Monaco doesn't
-      // treat : or . as word characters). Use the cursor position directly
-      // as the range so Monaco shows the completion widget.
       let range: Monaco.IRange;
       if (isAfterDoubleColon || isAfterDot) {
-        // Empty range at cursor position — Monaco will show all suggestions
-        // and filter as the user types
         range = {
           startLineNumber: position.lineNumber,
           endLineNumber: position.lineNumber,
@@ -440,34 +455,32 @@ export function registerAutocompleteProvider(monaco: typeof Monaco): { dispose: 
         };
       }
 
-      // Detect the type before `::` for context-aware completion.
-      // Uses the broader `typePathMatch` (works for both `String::` and
-      // `String::from_str`) — see comment above for why this matters.
+      // ─── Cache lookup ────────────────────────────────────────────
+      // Cache key includes the file path + the prefix being completed.
+      // Hit → return cached items with refreshed range (range depends on
+      // cursor position, which changes per keystroke even for the same
+      // prefix).
+      const prefix = (lineUntilPosition.match(/[A-Za-z0-9_$.@#:"'/\\:-]+$/) ?? [""])[0];
+      const cacheKey = `${model.uri.path}:rust:${prefix}`;
+      const cached = completionCache.get(cacheKey);
+      if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
+        // Refresh range on every hit — same prefix can be at a different
+        // cursor position if the user moved around.
+        return {
+          suggestions: cached.items.map((item) => ({ ...item, range })),
+        };
+      }
+
+      // ─── Compute suggestions (CPU work — sync, but cached after) ─
       const typeName = typeBeforeColonsName;
-
-      const suggestions: Monaco.languages.CompletionItem[] = [];
-      const seenLabels = new Set<string>();
-
-      // Cache the file source once per completion request — auto-import
-      // scans it to detect existing `use` statements.
       const source = model.getValue();
 
-      // When the user is in a `Type::` path (whether `Type::` or
-      // `Type::partial`), the thing that needs importing is `Type` itself
-      // (not the method they pick). Look up `Type` in the rustdoc index ONCE
-      // here, then attach the same auto-import edit to every suggestion in
-      // the `::` branch.
-      //
-      // We use `isInTypePath` (broader) rather than `isAfterDoubleColon`
-      // because Monaco re-calls the provider on every keystroke — when the
-      // user types `String::f`, `isAfterDoubleColon` is false but
-      // `isInTypePath` is still true.
+      // Pre-compute the auto-import edit for the type-before-`::` ONCE
+      // per request (was previously called per-suggestion inside the
+      // add() helper — O(N) calls to buildAutoImportEdit per keystroke).
       let typeBeforeColonsImport: { crate: string; symbol: string; kind: string } | undefined;
+      let typeBeforeColonsEdit: Monaco.languages.TextEdit[] | undefined;
       if (isInTypePath && typeName && rustdocSymbols) {
-        // Find the first type-like symbol matching `typeName` in the index.
-        // (soroban_sdk symbols come first in the merged index, so they win
-        // over std/alloc duplicates — which is the right priority for a
-        // Soroban contract.)
         for (const sym of rustdocSymbols) {
           const s = sym as { name: string; kind: string; module?: string };
           if (s.name === typeName && s.module && (
@@ -475,10 +488,26 @@ export function registerAutocompleteProvider(monaco: typeof Monaco): { dispose: 
             s.kind === "type_alias" || s.kind === "typeAlias" || s.kind === "module"
           )) {
             typeBeforeColonsImport = { crate: s.module, symbol: s.name, kind: s.kind };
+            // Pre-compute the edit ONCE — reuse for every suggestion in this request
+            const result = buildAutoImportEdit(source, typeBeforeColonsImport);
+            if (result) {
+              typeBeforeColonsEdit = [result.edit as Monaco.languages.TextEdit];
+            }
             break;
           }
         }
       }
+
+      // Pre-compute the auto-import edit for symbols in the "normal" context
+      // (not after `.` / `::` / `use`). We can't pre-compute this because
+      // each symbol has a different crate+symbol name — but we can cache
+      // the per-(crate,symbol) result so we don't recompute for duplicates.
+      // (The `add` helper already deduplicates by label, so this cache
+      // only kicks in if the same symbol appears under different crates.)
+      const autoImportCache = new Map<string, Monaco.languages.TextEdit[] | undefined>();
+
+      const suggestions: Monaco.languages.CompletionItem[] = [];
+      const seenLabels = new Set<string>();
 
       const add = (
         label: string,
@@ -492,14 +521,17 @@ export function registerAutocompleteProvider(monaco: typeof Monaco): { dispose: 
         if (seenLabels.has(label)) return;
         seenLabels.add(label);
 
-        // Build auto-import edit (if applicable) — attached as
-        // `additionalTextEdits` so Monaco applies it atomically with the
-        // symbol insert. This is exactly how VS Code does auto-import.
+        // Look up the auto-import edit in the per-request cache first;
+        // fall back to computing + caching it.
         let additionalTextEdits: Monaco.languages.TextEdit[] | undefined;
         if (autoImport) {
-          const result = buildAutoImportEdit(source, autoImport);
-          if (result) {
-            additionalTextEdits = [result.edit as Monaco.languages.TextEdit];
+          const aiKey = `${autoImport.crate}::${autoImport.symbol}`;
+          if (autoImportCache.has(aiKey)) {
+            additionalTextEdits = autoImportCache.get(aiKey);
+          } else {
+            const result = buildAutoImportEdit(source, autoImport);
+            additionalTextEdits = result ? [result.edit as Monaco.languages.TextEdit] : undefined;
+            autoImportCache.set(aiKey, additionalTextEdits);
           }
         }
 
@@ -516,37 +548,47 @@ export function registerAutocompleteProvider(monaco: typeof Monaco): { dispose: 
       // Layer 1: Rustdoc symbols
       if (rustdocSymbols) {
         for (const sym of rustdocSymbols) {
+          // Check cancellation periodically — if the user has typed more
+          // characters since this request started, abort early.
+          // (For sync iteration this is unlikely to trigger, but if the
+          // rustdoc index grows to 10k+ symbols, it could.)
+          if ((suggestions.length & 0xff) === 0 && token.isCancellationRequested) {
+            return { suggestions: [] };
+          }
+
           const s = sym as { name: string; kind: string; detail?: string; docs?: string; module?: string };
-          // Only attach auto-import in "normal" context (not after `.` or `::`
-          // or `use`). After `.` / `::` the user is qualifying a path; after
-          // `use` they're already writing the import.
-          // EXCEPTION: after `::`, we attach `typeBeforeColonsImport` (the
-          // type before `::`) to every suggestion — see above.
           const canAutoImport = !isAfterDot && !isAfterDoubleColon && !isAfterUse && !!s.module;
           const ai = canAutoImport ? { crate: s.module!, symbol: s.name, kind: s.kind } : undefined;
 
           if (isAfterDot) {
-            // After `.` → show functions + macros (method completion)
             if (s.kind === "function" || s.kind === "macro") {
               add(s.name, kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Function, s.detail, s.docs, undefined, "1");
             }
           } else if (isInTypePath) {
-            // In a `Type::` path (covers both `Type::` and `Type::partial`).
-            // Show ALL symbols so the user can pick an associated item.
-            // Attach `typeBeforeColonsImport` so that whatever they pick, the
-            // type before `::` gets imported if it isn't already.
-            //
-            // NOTE: this branch MUST come before the `isAfterUse` / normal
-            // branches because `Type::partial` doesn't trip `isAfterDoubleColon`
-            // (the line doesn't end with `::`). Without this, `String::from_str`
-            // would fall through to "normal context" and try to auto-import
-            // `from_str` instead of `String`.
-            add(s.name, kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Text, s.detail, s.docs, undefined, "1", typeBeforeColonsImport);
+            // Pass the pre-computed typeBeforeColonsEdit (already calculated above).
+            // We still pass autoImport so the `add` helper attaches the edit —
+            // but we override by reusing the pre-computed value.
+            if (typeBeforeColonsEdit) {
+              // Bypass the per-symbol cache — we already have the edit.
+              if (!seenLabels.has(s.name)) {
+                seenLabels.add(s.name);
+                suggestions.push({
+                  label: s.name,
+                  kind: kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Text,
+                  detail: s.detail,
+                  documentation: s.docs ? { value: s.docs } : undefined,
+                  insertText: s.name,
+                  range,
+                  sortText: "1",
+                  additionalTextEdits: typeBeforeColonsEdit,
+                });
+              }
+            } else {
+              add(s.name, kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Text, s.detail, s.docs, undefined, "1", typeBeforeColonsImport);
+            }
           } else if (isAfterUse) {
-            // After `use ` → show modules + types
             add(s.name, kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Text, s.detail, s.docs, undefined, "1");
           } else {
-            // Normal context → show types + constants + modules (skip functions)
             if (s.kind === "function" || s.kind === "macro") continue;
             add(s.name, kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Text, s.detail, s.docs, undefined, "1", ai);
           }
@@ -561,16 +603,34 @@ export function registerAutocompleteProvider(monaco: typeof Monaco): { dispose: 
         }
       }
 
+      // ─── Stale-response check ────────────────────────────────────
+      // If a newer request has started for this model (user typed more),
+      // discard our results — Monaco already moved on to the newer
+      // request and would show stale suggestions if we returned ours.
+      if (requestIds.get(modelKey) !== requestId || token.isCancellationRequested) {
+        return { suggestions: [] };
+      }
+
+      // ─── Cache the result ────────────────────────────────────────
+      // Store without the range (range is cursor-position-dependent and
+      // gets re-applied on cache hit above).
+      completionCache.set(cacheKey, {
+        at: Date.now(),
+        items: suggestions.map(({ range: _r, ...rest }) => rest as Monaco.languages.CompletionItem),
+      });
+
       return { suggestions };
     },
   });
 
-  console.log("[autocomplete] completion provider registered for 'rust' language");
+  console.log("[autocomplete] completion provider registered for 'rust' language (async + cached + race-protected)");
 
   return {
     dispose: () => {
       provider.dispose();
       unsubscribe();
+      completionCache.clear();
+      requestIds.clear();
     },
   };
 }
@@ -863,6 +923,12 @@ export function registerLspProvider(monaco: typeof Monaco, workspaceId: string):
   });
   currentItems = useAutocompleteStore.getState().items;
 
+  // Per-model request-id tracking — discards stale LSP responses if the
+  // user has typed more characters since the request was sent.
+  // (LSP round-trip can take 100-500ms; without this, old suggestions
+  // would appear after typing — Qwen AI flagged this race condition.)
+  const lspRequestIds = new Map<string, number>();
+
   const kindMap: Record<string, number> = {
     function: monaco.languages.CompletionItemKind.Function,
     struct: monaco.languages.CompletionItemKind.Struct,
@@ -879,8 +945,19 @@ export function registerLspProvider(monaco: typeof Monaco, workspaceId: string):
   };
 
   const provider = monaco.languages.registerCompletionItemProvider("rust", {
-    triggerCharacters: [".", ":", "a", "b", "c", "d", "e", "f", "g", "h", "i", "l", "m", "p", "r", "s", "t", "u", "v", "w"],
-    provideCompletionItems: async (model, position) => {
+    // Structural trigger characters only — single letters caused the
+    // completion widget to fire on every keystroke, which combined with
+    // the async LSP round-trip made typing feel laggy.
+    // (Same fix as registerAutocompleteProvider — Qwen AI flagged this.)
+    triggerCharacters: [".", ":", "::", "@", "#", '"', "/", "_", "-"],
+    provideCompletionItems: async (model, position, _context, token) => {
+      const modelKey = model.uri.toString();
+      const requestId = (lspRequestIds.get(modelKey) ?? 0) + 1;
+      lspRequestIds.set(modelKey, requestId);
+
+      // If cancelled before we even start, bail out
+      if (token.isCancellationRequested) return { suggestions: [] };
+
       const source = model.getValue();
       const uri = `file:///tmp/soroban-builds/${workspaceId}/${model.uri.path.split("/").pop() === "lib.rs" ? "src/lib.rs" : model.uri.path.replace("/", "")}`;
 
@@ -895,12 +972,24 @@ export function registerLspProvider(monaco: typeof Monaco, workspaceId: string):
           await lspClient.didChange(source).catch(() => {});
         }
 
+        // Check cancellation after async didOpen/didChange
+        if (token.isCancellationRequested) return { suggestions: [] };
+
         // Request completion from rust-analyzer
         const lspItems = await lspClient.getCompletion(
           uri,
           position.lineNumber - 1,  // LSP is 0-based
           position.column - 1
         );
+
+        // ─── Stale-response check ──────────────────────────────────
+        // If a newer request has started for this model (user typed more),
+        // discard our results. This is critical for LSP because the
+        // round-trip to rust-analyzer can take 100-500ms — by then the
+        // user may have typed 5+ more characters.
+        if (lspRequestIds.get(modelKey) !== requestId || token.isCancellationRequested) {
+          return { suggestions: [] };
+        }
 
         if (lspItems.length > 0) {
           const word = model.getWordUntilPosition(position);
@@ -1007,6 +1096,7 @@ export function registerLspProvider(monaco: typeof Monaco, workspaceId: string):
       provider.dispose();
       fallback.dispose();
       unsubscribe();
+      lspRequestIds.clear();
       if (lspClient) {
         lspClient.dispose();
         lspClient = null;

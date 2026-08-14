@@ -95,6 +95,10 @@ export function AgentPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
   // Track the last sent message + its errorContext so we can retry on failure.
   // Stored as a ref (not state) so it doesn't trigger re-renders.
   const lastSentRef = useRef<{ message: string; errorContext?: string } | null>(null);
+  // Track whether a diff was accepted in the current chat session.
+  // Using a ref + state combo: the ref for logic, the state for re-render.
+  const diffAcceptedRef = useRef(false);
+  const [, forceRerender] = useState(0);
 
   const activeProviderId = useAIKeysStore((s) => s.activeProviderId);
   const providers = useAIKeysStore((s) => s.providers);
@@ -196,6 +200,8 @@ Do NOT just explain the error — output the actual fix as a diff.`;
     // So the AI sees: error + file contents + Cargo.toml + user request.
     sendMessage(fixMessage, [], undefined, { errorContext: pendingFix.errorOutput }).then(({ response }) => {
       if (response) {
+        // Reset diffAccepted when a new fix response comes in
+        diffAcceptedRef.current = false;
         setTabs((prev) =>
           prev.map((t) =>
             t.id === activeTabId
@@ -264,6 +270,8 @@ Do NOT just explain the error — output the actual fix as a diff.`;
 
     sendMessage(userInput, history).then(({ response, diffs }) => {
       if (response) {
+        // Reset diffAccepted when a new response comes in
+        diffAcceptedRef.current = false;
         setTabs((prev) =>
           prev.map((t) =>
             t.id === activeTabId
@@ -413,11 +421,14 @@ Do NOT just explain the error — output the actual fix as a diff.`;
           ? {
               ...t,
               pendingDiffs: t.pendingDiffs.filter((d) => d !== diff),
-              diffAccepted: true, // a file was actually changed — show "Build to verify"
             }
           : t
       )
     );
+
+    // Set the ref + force re-render so the "Build to verify" button appears
+    diffAcceptedRef.current = true;
+    forceRerender((n) => n + 1);
 
     // NOTE: Auto-build after AI edit was removed because it caused OOM crashes.
     // The dev server accumulates memory over time (Next.js dev mode doesn't GC
@@ -572,7 +583,7 @@ Do NOT just explain the error — output the actual fix as a diff.`;
             change). Not shown for assistant messages that didn't include a diff,
             or when there are still pending diffs waiting for approval. */}
         {activeTab.pendingDiffs.length === 0 &&
-         activeTab.diffAccepted &&
+         diffAcceptedRef.current &&
          activeTab.messages.length > 0 &&
          activeTab.messages[activeTab.messages.length - 1].role === "assistant" &&
          !loading && (

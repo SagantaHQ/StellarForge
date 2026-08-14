@@ -34,6 +34,9 @@ export interface AgentTab {
   unread?: boolean;
   /** Project ID this tab belongs to. Tabs are filtered by the active project. */
   projectId: string;
+  /** True if a diff was accepted in the last assistant response.
+   * Used to show the "Build to verify" button only after an actual file change. */
+  diffAccepted?: boolean;
 }
 
 interface AgentTabsState {

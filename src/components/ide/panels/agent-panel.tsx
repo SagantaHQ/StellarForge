@@ -595,12 +595,12 @@ Do NOT just explain the error — output the actual fix as a diff.`;
 
         {/* Error + Retry button */}
         {error && (
-          <div className="rounded border border-[var(--status-error)] bg-[color-mix(in_srgb,var(--status-error)_12%,transparent)] px-2.5 py-1.5 text-xs text-[var(--status-error)]">
-            <div className="flex items-start gap-2">
+          <div className="rounded border border-[var(--status-error)] bg-[color-mix(in_srgb,var(--status-error)_12%,transparent)] px-2.5 py-1.5 text-xs text-[var(--status-error)] overflow-hidden">
+            <div className="flex items-start gap-2 min-w-0">
               <AlertCircle size={12} strokeWidth={2} className="mt-0.5 shrink-0" />
-              <div className="flex-1">
+              <div className="flex-1 min-w-0">
                 <div className="font-medium">Request failed</div>
-                <div className="mt-0.5 text-[11px] opacity-90">{error}</div>
+                <div className="mt-0.5 text-[11px] opacity-90 break-words whitespace-pre-wrap overflow-wrap-anywhere">{error}</div>
               </div>
               <button
                 onClick={handleRetry}
@@ -728,7 +728,7 @@ function EmptyAgentState({ hasProvider, onOpenSettings }: { hasProvider: boolean
 function MessageView({ role, content, timestamp }: { role: string; content: string; timestamp: number }) {
   if (role === "system") {
     return (
-      <div className="rounded border border-[var(--border-subtle)] bg-[var(--surface-sunken)] px-2.5 py-1.5 text-[11px] italic text-[var(--text-muted)]">
+      <div className="rounded border border-[var(--border-subtle)] bg-[var(--surface-sunken)] px-2.5 py-1.5 text-[11px] italic text-[var(--text-muted)] break-words whitespace-pre-wrap overflow-hidden">
         {content}
       </div>
     );
@@ -736,8 +736,8 @@ function MessageView({ role, content, timestamp }: { role: string; content: stri
   if (role === "user") {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[85%]">
-          <div className="rounded-md bg-[var(--accent)] px-2.5 py-1.5 text-[13px] text-[var(--accent-contrast)]">
+        <div className="max-w-[85%] min-w-0">
+          <div className="rounded-md bg-[var(--accent)] px-2.5 py-1.5 text-[13px] text-[var(--accent-contrast)] break-words whitespace-pre-wrap overflow-hidden">
             {content}
           </div>
           <div className="mt-0.5 text-right text-[10px] text-[var(--text-muted)]">
@@ -749,13 +749,13 @@ function MessageView({ role, content, timestamp }: { role: string; content: stri
   }
   return (
     <div className="flex justify-start">
-      <div className="max-w-[90%]">
-        <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface-raised)] px-2.5 py-1.5 text-[13px] text-[var(--text-primary)]">
+      <div className="max-w-[90%] min-w-0">
+        <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface-raised)] px-2.5 py-1.5 text-[13px] text-[var(--text-primary)] overflow-hidden">
           <div className="mb-1 flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-[var(--text-muted)]">
             <Bot size={10} strokeWidth={1.75} />
             <span>Agent</span>
           </div>
-          <div className="whitespace-pre-wrap break-words">{content}</div>
+          <div className="whitespace-pre-wrap break-words overflow-hidden">{content}</div>
         </div>
         <div className="mt-0.5 text-[10px] text-[var(--text-muted)]">
           {new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}

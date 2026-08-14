@@ -72,6 +72,13 @@ When you propose a code change:
   (e.g. \`src/lib.rs:10:5\`), then output a diff that fixes the error. Do NOT
   just explain the error — ALWAYS output an actionable diff that can be
   applied directly. The user clicks "Accept" to apply your diff.
+- When the user asks for a CODE CHANGE (e.g. "add a burn function",
+  "refactor this", "add mint function"): ALWAYS output a GitHub-style
+  diff block with the proposed changes. Do NOT just show the code —
+  show it as a diff so it can be applied directly.
+- When the user asks for a NEW FEATURE (e.g. "add a vault contract"):
+  output the new code as a diff block (with /dev/null as the old file
+  if the file doesn't exist yet).
 - Your edits will be attributed in the audit log as "{user} via AI agent ({provider}/{model})"
 
 When you respond:
@@ -429,17 +436,82 @@ export function parseDiffFromResponse(content: string, knownFiles?: string[]): P
 }
 
 /**
- * Apply a parsed diff to file content using the `diff` library's applyPatch.
+ * Apply a parsed diff to file content.
+ *
+ * First tries the `diff` library's applyPatch (robust, handles context).
+ * If that fails (returns false), falls back to a line-by-line hunk
+ * application that replaces the old lines with new lines based on the
+ * hunk's oldStart line number.
+ *
  * Returns the updated content, or null if the patch couldn't be applied.
  */
 export function applyParsedDiff(content: string, diff: ParsedDiff): string | null {
+  const lines = content.split("\n");
+  let applied = false;
+
+  // Apply each hunk
+  for (const hunk of diff.hunks) {
+    // Separate hunk lines into old (context + deletions) and new (context + additions)
+    const oldLines: string[] = [];
+    const newLines: string[] = [];
+    for (const line of hunk.lines) {
+      if (line.startsWith("+++") || line.startsWith("---")) continue;
+      if (line.startsWith("-")) {
+        oldLines.push(line.substring(1));
+      } else if (line.startsWith("+")) {
+        newLines.push(line.substring(1));
+      } else if (line.startsWith(" ")) {
+        // Context line
+        oldLines.push(line.substring(1));
+        newLines.push(line.substring(1));
+      } else {
+        // No prefix — treat as context
+        oldLines.push(line);
+        newLines.push(line);
+      }
+    }
+
+    // Find the old lines in the file starting from oldStart - 1 (0-indexed)
+    const startIdx = Math.max(0, hunk.oldStart - 1);
+    let matchIdx = -1;
+
+    // Try to find the old lines at the expected position first
+    const expectedSlice = lines.slice(startIdx, startIdx + oldLines.length).join("\n");
+    if (expectedSlice === oldLines.join("\n")) {
+      matchIdx = startIdx;
+    } else {
+      // Search nearby (±10 lines) for a fuzzy match
+      for (let offset = -10; offset <= 10; offset++) {
+        const idx = startIdx + offset;
+        if (idx < 0 || idx + oldLines.length > lines.length) continue;
+        if (lines.slice(idx, idx + oldLines.length).join("\n") === oldLines.join("\n")) {
+          matchIdx = idx;
+          break;
+        }
+      }
+    }
+
+    if (matchIdx === -1) {
+      // Can't find the old lines — try the diff library's applyPatch as fallback
+      continue;
+    }
+
+    // Replace old lines with new lines
+    lines.splice(matchIdx, oldLines.length, ...newLines);
+    applied = true;
+  }
+
+  if (applied) {
+    return lines.join("\n");
+  }
+
+  // Fallback: try the diff library's applyPatch
   try {
     const { applyPatch } = require("diff") as typeof import("diff");
-    // Reconstruct a patch string from our ParsedDiff format
     const patchStr = `--- a/${diff.filePath}\n+++ b/${diff.filePath}\n${diff.hunks
       .map((h) => {
-        const oldCount = h.lines.filter((l) => !l.startsWith("+")).length;
-        const newCount = h.lines.filter((l) => !l.startsWith("-")).length;
+        const oldCount = h.lines.filter((l) => !l.startsWith("+") && !l.startsWith("+++")).length;
+        const newCount = h.lines.filter((l) => !l.startsWith("-") && !l.startsWith("---")).length;
         return `@@ -${h.oldStart},${oldCount} +${h.newStart},${newCount} @@\n${h.lines.join("\n")}`;
       })
       .join("\n")}`;

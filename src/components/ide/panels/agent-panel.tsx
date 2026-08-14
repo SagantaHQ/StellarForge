@@ -269,7 +269,24 @@ Do NOT just explain the error — output the actual fix as a diff.`;
       content: m.content,
     }));
 
-    sendMessage(userInput, history).then(({ response, diffs }) => {
+    // Detect if the user's message involves a code change request.
+    // If so, append a behind-the-scenes instruction to output a GitHub-style
+    // diff so our parser can detect + apply it.
+    const codeChangeKeywords = [
+      "add", "create", "implement", "refactor", "modify", "change", "update",
+      "fix", "remove", "delete", "rename", "move", "extract", "inline",
+      "burn", "mint", "transfer", "approve", "deploy", "function", "method",
+      "struct", "enum", "trait", "impl", "test", "contract", "storage",
+    ];
+    const isCodeChangeRequest = codeChangeKeywords.some((kw) =>
+      userInput.toLowerCase().includes(kw)
+    );
+
+    const finalMessage = isCodeChangeRequest
+      ? `${userInput}\n\n[SYSTEM: If this involves code changes, output the changes as GitHub-style unified diff blocks with diff --git headers. Each file should have its own diff block. Use the exact file paths from the project file list.]`
+      : userInput;
+
+    sendMessage(finalMessage, history).then(({ response, diffs }) => {
       if (response) {
         // Reset diffAccepted when a new response comes in
         diffAcceptedRef.current = false;

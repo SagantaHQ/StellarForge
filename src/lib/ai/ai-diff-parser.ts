@@ -140,33 +140,139 @@ function extractAllCandidates(text: string): { source: AIDiff["source"]; text: s
 // ============================================================
 
 /**
- * Try to parse a text block as a unified diff using parsePatch().
+ * Fix the line counts in @@ hunk headers to match the actual body.
  *
- * Returns the parsed patches if valid (≥1 patch with ≥1 hunk),
- * or null if the block isn't a diff.
+ * LLMs are TERRIBLE at counting lines — they almost always get the
+ * oldLines/newLines in `@@ -oldStart,oldLines +newStart,newLines @@`
+ * wrong. parsePatch() throws "Added line count did not match" when
+ * the counts don't match the body, causing the ENTIRE diff to be
+ * rejected even though the content is correct.
  *
- * parsePatch (from jsdiff) is very lenient — it handles:
- *   - Missing diff --git headers
- *   - Wrong line counts in @@ headers
- *   - Missing --- / +++ headers
- *   - Trailing whitespace
- *   - Mixed line endings
- *   - Multiple file patches in one block
+ * This function rewrites every @@ header to match the actual body:
+ *   - Count context lines (start with " ")
+ *   - Count removed lines (start with "-")
+ *   - Count added lines (start with "+")
+ *   - oldLines = context + removed
+ *   - newLines = context + added
+ *   - Rewrite the @@ header with the corrected counts
+ *
+ * This is the #1 fix for "the parser sucks" — without it, ~50% of
+ * LLM-generated diffs fail to parse because of wrong line counts.
  */
-function tryParseAsDiff(text: string): ReturnType<typeof parsePatch> | null {
-  let patches: ReturnType<typeof parsePatch>;
-  try {
-    patches = parsePatch(text);
-  } catch {
-    return null;
+function fixHunkLineCounts(text: string): string {
+  const lines = text.split("\n");
+  const fixed: string[] = [];
+
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // Detect @@ hunk header
+    const hunkMatch = line?.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
+    if (!hunkMatch) {
+      fixed.push(line ?? "");
+      i++;
+      continue;
+    }
+
+    // Found a hunk header — collect the body lines until the next @@
+    // or --- / +++ header or end of patch
+    const oldStart = parseInt(hunkMatch[1], 10);
+    const newStart = parseInt(hunkMatch[3], 10);
+    const bodyLines: string[] = [];
+    i++;
+
+    while (i < lines.length) {
+      const bodyLine = lines[i];
+      // Stop at next hunk header or file header
+      if (bodyLine?.startsWith("@@") || bodyLine?.startsWith("--- ") || bodyLine?.startsWith("+++ ") || bodyLine?.startsWith("diff --git")) {
+        break;
+      }
+      // Stop at non-diff lines (prose after the diff)
+      // Diff lines start with: " " (context), "-" (removed), "+" (added),
+      // "\\" (no-newline marker), or are empty (blank context)
+      if (bodyLine && bodyLine.length > 0 && !bodyLine.startsWith(" ") && !bodyLine.startsWith("-") && !bodyLine.startsWith("+") && !bodyLine.startsWith("\\")) {
+        break;
+      }
+      bodyLines.push(bodyLine ?? "");
+      i++;
+    }
+
+    // Count the actual lines
+    let contextCount = 0;
+    let removedCount = 0;
+    let addedCount = 0;
+
+    for (const bodyLine of bodyLines) {
+      if (bodyLine.startsWith("-")) {
+        removedCount++;
+      } else if (bodyLine.startsWith("+")) {
+        addedCount++;
+      } else if (bodyLine.startsWith(" ") || bodyLine === "") {
+        // Context line (leading space) or empty line (LLMs often drop
+        // the leading space on blank context lines — treat as context)
+        contextCount++;
+      } else if (bodyLine.startsWith("\\")) {
+        // "\ No newline at end of file" — not counted
+      } else {
+        // Unknown line — treat as context (defensive)
+        contextCount++;
+      }
+    }
+
+    const oldLines = contextCount + removedCount;
+    const newLines = contextCount + addedCount;
+
+    // Rewrite the @@ header with corrected counts
+    const fixedHeader = `@@ -${oldStart},${oldLines} +${newStart},${newLines} @@`;
+    fixed.push(fixedHeader);
+    fixed.push(...bodyLines);
   }
 
-  // Filter: only accept patches with ≥1 hunk with ≥1 line
-  const validPatches = patches.filter(
-    (p) => p.hunks && p.hunks.length > 0 && p.hunks.some((h) => h.lines && h.lines.length > 0)
-  );
+  return fixed.join("\n");
+}
 
-  return validPatches.length > 0 ? validPatches : null;
+/**
+ * Try to parse a text block as a unified diff using parsePatch().
+ *
+ * Two-pass strategy:
+ *   1. Try parsePatch() directly — if it works, great
+ *   2. If it throws (usually "Added line count did not match"), fix
+ *      the hunk line counts and try again
+ *
+ * This handles the #1 LLM diff error: wrong line counts in @@ headers.
+ */
+function tryParseAsDiff(text: string): ReturnType<typeof parsePatch> | null {
+  // Pass 1: try parsePatch directly
+  try {
+    const patches = parsePatch(text);
+    const validPatches = patches.filter(
+      (p) => p.hunks && p.hunks.length > 0 && p.hunks.some((h) => h.lines && h.lines.length > 0)
+    );
+    if (validPatches.length > 0) return validPatches;
+  } catch {
+    // Fall through to pass 2
+  }
+
+  // Pass 2: fix hunk line counts and try again
+  try {
+    const fixedText = fixHunkLineCounts(text);
+    // Only try if the fix actually changed something
+    if (fixedText !== text) {
+      const patches = parsePatch(fixedText);
+      const validPatches = patches.filter(
+        (p) => p.hunks && p.hunks.length > 0 && p.hunks.some((h) => h.lines && h.lines.length > 0)
+      );
+      if (validPatches.length > 0) {
+        console.log("[ai-diff-parser] parsePatch succeeded after fixing hunk line counts");
+        return validPatches;
+      }
+    }
+  } catch {
+    // Both passes failed
+  }
+
+  return null;
 }
 
 // ============================================================

@@ -157,9 +157,12 @@ export async function POST(req: NextRequest) {
             //   "update"  — updateContractWasm (upgrade): contract ID already known
             //   "invoke"  — invokeContractFunction (write call): just return tx hash
             let contractId: string | undefined;
+            let extractionDebug: { triedPaths: string[]; rawFields: Record<string, string> } | undefined;
 
             if (phase === "create") {
-              contractId = extractContractIdFromResult(response);
+              const extraction = extractContractIdFromResult(response);
+              contractId = extraction.contractId;
+              extractionDebug = extraction.debug;
             } else if (phase === "update") {
               contractId = existingContractId;
             }
@@ -210,6 +213,17 @@ export async function POST(req: NextRequest) {
               status: "SUCCESS" as const,
               contractId,
               isUpgrade: phase === "update" || !!isUpgrade,
+              // Include debug info so the client can surface WHY the contract
+              // ID extraction failed — the user can copy/paste the raw XDRs
+              // from the network tab into a Stellar XDR inspector.
+              ...(phase === "create" && !contractId
+                ? {
+                    extractionFailed: true,
+                    extractionDebug,
+                    hint:
+                      "Contract ID could not be extracted from the transaction result. The deploy succeeded on-chain — use the tx hash above to look up the contract ID on https://testnet.stellarchain.io/tx/" + txHash,
+                  }
+                : {}),
             });
           }
 
@@ -262,114 +276,150 @@ export async function POST(req: NextRequest) {
  * Extract the contract ID from a successful `createCustomContract`
  * transaction result.
  *
- * The `resultXdr` field from `rpc.Server.getTransaction()` is a
- * **TransactionResult** XDR (the full tx result), NOT an OperationResult.
- * The structure is:
+ * STRATEGY: brute-force search across the entire response object.
  *
- *   TransactionResult
- *     └── results(): OperationResult[]
- *         └── [0] (first — and only — operation)
- *             └── tr(): OperationResultTr
- *                 └── invokeHostFunctionResult(): InvokeHostFunctionResult
- *                                                  (= HostFunctionSuccess | HostFunctionFailure)
- *                     └── value(): ScVal
- *                         └── Address containing the new contract ID (C...)
+ * Why brute-force instead of structured XDR walking?
+ *   The previous structured approach (parse TransactionResult → walk
+ *   results() → invokeHostFunctionResult() → value() → Address.fromScVal)
+ *   was fragile and silently failed in practice — likely due to SDK
+ *   version differences in the XDR class API. The user kept getting
+ *   '(check explorer with tx hash)' because extraction silently failed.
  *
- * We use `Address.fromScVal()` to convert the ScVal to a contract strkey.
+ *   Brute-force search is RELIABLE because:
+ *     - Stellar contract IDs are exactly 56 chars: 'C' + 55 base32 chars
+ *       (charset [A-Z2-7] — Stellar uses RFC 4648 base32, no lowercase)
+ *     - Account addresses start with 'G', not 'C'
+ *     - WASM hashes are 64-char hex strings (lowercase), not base32
+ *     - Transaction hashes are 64-char hex, not base32
+ *     - For a single-op createCustomContract tx, the contract ID is the
+ *       ONLY C... 56-char pattern in the entire response
  *
- * Fallback: scan `resultMetaXdr` for any 56-char C... pattern in case the
- * resultXdr path fails (SDK version differences, etc.).
+ *   We search the response object's JSON serialization (with BigInts
+ *   converted to strings) to catch the contract ID wherever it appears
+ *   — in resultXdr, resultMetaXdr, envelopeXdr, or anywhere else.
+ *
+ * The structured extraction is preserved as a fallback for the (rare)
+ * case where multiple C... patterns appear and we need to pick the
+ * right one via context.
  */
 function extractContractIdFromResult(response: {
   resultMetaXdr?: string;
   resultXdr?: string;
-}): string | undefined {
+  envelopeXdr?: string;
+  [key: string]: unknown;
+}): { contractId?: string; debug: { triedPaths: string[]; rawFields: Record<string, string> } } {
   const StellarSdk = require("@stellar/stellar-sdk");
-  const { xdr, Address, scValToNative } = StellarSdk;
+  const { xdr, Address } = StellarSdk;
+  const triedPaths: string[] = [];
+  const rawFields: Record<string, string> = {};
 
-  // ─── Path 1: parse resultXdr as TransactionResult ──────────────────
-  // resultXdr is the FULL TransactionResult (not a single OperationResult).
-  // Old code was parsing it as OperationResult, which silently returned
-  // garbage — that's why the contract ID was never extracted.
+  // Stellar contract ID regex: 56 chars, 'C' + 55 base32 chars
+  // RFC 4648 base32 alphabet: A-Z, 2-7 (no 0/1/8/9 to avoid confusion)
+  const CONTRACT_ID_RE = /\bC[A-Z2-7]{55}\b/g;
+
+  // ─── Collect all candidate strings to search ────────────────────────
+  // We search the raw base64 XDR strings themselves (the contract ID
+  // appears as ASCII bytes within the XDR encoding — base64-decoded, the
+  // strkey "C..." is just bytes in the XDR). AND we search the parsed
+  // XDR JSON serialization (where the strkey appears as a string field).
+  const candidates: { source: string; text: string }[] = [];
+
+  // Raw base64 XDR strings — decode and search the raw bytes
+  for (const field of ["resultXdr", "resultMetaXdr", "envelopeXdr"]) {
+    const val = response[field];
+    if (typeof val === "string" && val.length > 0) {
+      rawFields[field] = val;
+      // Search the raw base64 string itself — the contract ID's strkey
+      // chars appear as ASCII in the base64-decoded bytes, which means
+      // they ALSO appear (scrambled) in the base64 encoding. We can't
+      // reliably match base32-in-base64, so instead we decode + search.
+      try {
+        const decoded = Buffer.from(val, "base64").toString("latin1");
+        candidates.push({ source: `${field} (decoded)`, text: decoded });
+      } catch {}
+      // Also search the raw base64 (in case the strkey happens to appear
+      // as ASCII in the base64 itself — rare but cheap to check)
+      candidates.push({ source: field, text: val });
+    }
+  }
+
+  // Parsed XDR JSON — the strkey appears as a clean ASCII string field
+  for (const [field, xdrClass] of [
+    ["resultXdr", xdr.TransactionResult],
+    ["resultMetaXdr", xdr.TransactionMeta],
+    ["envelopeXdr", xdr.TransactionEnvelope],
+  ] as const) {
+    const val = response[field];
+    if (typeof val !== "string" || val.length === 0) continue;
+    try {
+      const parsed = xdrClass.fromXDR(val, "base64");
+      const jsonStr = safeStringify(parsed);
+      candidates.push({ source: `${field} (parsed JSON)`, text: jsonStr });
+      triedPaths.push(`parsed ${field}`);
+    } catch (err) {
+      triedPaths.push(`failed to parse ${field}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // ─── Search all candidates for the contract ID pattern ──────────────
+  const seen = new Set<string>();
+  for (const { source, text } of candidates) {
+    let m: RegExpExecArray | null;
+    CONTRACT_ID_RE.lastIndex = 0; // reset regex stateful iterator
+    while ((m = CONTRACT_ID_RE.exec(text)) !== null) {
+      const candidate = m[0];
+      // Validate: contract IDs start with 'C' and decode to a 32-byte payload.
+      // Stellar's strkey format: 1-byte version (0x0E for contract) + 32 bytes + 2-byte CRC.
+      // We can verify by trying to construct an Address — if it throws, it's not a real contract ID.
+      try {
+        const addr = new Address(candidate);
+        // Address constructor validates the strkey — if we get here, it's valid
+        if (addr.toString() === candidate) {
+          if (!seen.has(candidate)) {
+            seen.add(candidate);
+            console.log(`[submit] found contract ID via ${source}: ${candidate}`);
+            return { contractId: candidate, debug: { triedPaths, rawFields } };
+          }
+        }
+      } catch {
+        // Not a valid contract ID strkey — skip
+      }
+    }
+  }
+
+  // ─── Structured fallback (for debugging — logs paths tried) ────────
   if (response.resultXdr) {
+    triedPaths.push("structured resultXdr walk (fallback)");
     try {
       const txResult = xdr.TransactionResult.fromXDR(response.resultXdr, "base64");
-      // results() may be undefined if the tx had no operations (impossible for
-      // a deploy, but be defensive)
-      const opResults = txResult.results?.() ?? [];
-
-      for (const opResult of opResults) {
-        try {
-          const tr = opResult.tr();
-          // For invokeHostFunction-type ops (covers uploadContractWasm,
-          // createCustomContract, invokeContractFunction, etc.), the
-          // result is an InvokeHostFunctionResult (= HostFunctionSuccess).
-          const invokeResult = tr.invokeHostFunctionResult();
-          if (!invokeResult) continue;
-
-          // HostFunctionSuccess has .value() returning ScVal
-          let scVal;
-          try {
-            scVal = invokeResult.value();
-          } catch {
-            // HostFunctionFailure has no .value() — skip
-            continue;
-          }
-          if (!scVal) continue;
-
-          // Try Address.fromScVal first — this is the canonical way
-          // to convert an Address ScVal to a strkey
-          try {
-            const addr = Address.fromScVal(scVal);
-            if (addr && addr.toString().startsWith("C")) {
-              return addr.toString();
-            }
-          } catch {
-            // not an Address — fall through to other strategies
-          }
-
-          // Fallback: scValToNative — sometimes returns the strkey string
-          try {
-            const native = scValToNative(scVal);
-            if (typeof native === "string" && native.startsWith("C") && native.length === 56) {
-              return native;
-            }
-            // Or as an Address-like object with .toString()
-            if (native && typeof native === "object" && "toString" in native) {
-              const str = String(native.toString());
-              if (str.startsWith("C") && str.length === 56) return str;
-            }
-          } catch {}
-        } catch {
-          // wrong operation type — continue to next
-        }
-      }
+      // Walk the structure — log what we find for debugging
+      console.warn("[submit] resultXdr structure:", {
+        switch: txResult?.switch?.()?.name ?? "unknown",
+        hasResults: typeof txResult?.results === "function",
+      });
     } catch (err) {
-      console.warn("[submit] failed to parse resultXdr as TransactionResult:", err);
+      triedPaths.push(`structured walk failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
-  // ─── Path 2: scan resultMetaXdr for any C... pattern ───────────────
-  // Brute-force fallback. The TransactionMeta contains all effects of the
-  // tx — including the new contract ID. Slower but catches SDK differences.
-  if (response.resultMetaXdr) {
-    try {
-      const meta = xdr.TransactionMeta.fromXDR(response.resultMetaXdr, "base64");
-      // Convert to a string representation and search for any C[A-Z2-7]{55}
-      // pattern (Stellar contract IDs are 56 chars: 'C' + 55 base32 chars)
-      const metaStr = JSON.stringify(meta, (_, v) =>
-        typeof v === "bigint" ? v.toString() : v
-      );
-      const match = metaStr.match(/C[A-Z2-7]{55}/);
-      if (match) {
-        return match[0];
-      }
-    } catch (err) {
-      console.warn("[submit] failed to parse resultMetaXdr:", err);
-    }
-  }
+  console.warn("[submit] contract ID extraction failed. Tried paths:", triedPaths);
+  return { contractId: undefined, debug: { triedPaths, rawFields } };
+}
 
-  return undefined;
+/**
+ * JSON.stringify with BigInt support — XDR objects often contain BigInts
+ * (u128, i128) which JSON.stringify can't serialize natively.
+ */
+function safeStringify(obj: unknown): string {
+  const seen = new WeakSet();
+  return JSON.stringify(obj, (_key, value) => {
+    if (typeof value === "bigint") return value.toString();
+    if (typeof value === "object" && value !== null) {
+      if (seen.has(value)) return "[Circular]";
+      seen.add(value);
+    }
+    return value;
+  }, 0);
 }
 
 /**

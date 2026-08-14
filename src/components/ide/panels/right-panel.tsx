@@ -15,10 +15,21 @@ import {
   FileText,
   ExternalLink,
   Wallet,
+  AlertTriangle,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogCancel,
+  AlertDialogAction,
+} from "@/components/ui/alert-dialog";
 import { AgentPanel } from "./agent-panel";
 import { ContractInteractionPanel } from "./contract-interaction";
 import { ContractInspectPanel } from "./contract-inspect-panel";
@@ -510,6 +521,11 @@ function DeployPanel({ network }: { network: string }) {
   } | null>(null);
   const [statusMsg, setStatusMsg] = useState<string>("");
   const [checkingExisting, setCheckingExisting] = useState(false);
+  // Upgrade confirmation modal — shown when the user clicks Deploy on a
+  // project that's already deployed to the selected network. The deploy
+  // won't proceed until the user explicitly confirms they understand
+  // this is a contract UPGRADE (replace WASM, keep contract ID).
+  const [showUpgradeConfirm, setShowUpgradeConfirm] = useState(false);
 
   // Fetch existing deployed contracts when project changes
   useEffect(() => {
@@ -559,6 +575,32 @@ function DeployPanel({ network }: { network: string }) {
       return;
     }
 
+    // ─── Upgrade check ───────────────────────────────────────────────
+    // If this project is already deployed to the selected network, show
+    // a confirmation modal BEFORE proceeding. The deploy will perform a
+    // contract UPGRADE (replace the WASM, keep the contract ID) — that's
+    // a destructive action that warrants explicit confirmation.
+    if (existingContract) {
+      setShowUpgradeConfirm(true);
+      return;
+    }
+
+    // No existing contract → fresh deploy, proceed immediately.
+    await performDeploy();
+  }
+
+  /**
+   * performDeploy — the actual two-phase deploy flow.
+   *
+   * Called from handleDeploy (fresh deploy) or from the upgrade
+   * confirmation modal's "Proceed with upgrade" action (existing deploy).
+   *
+   * Two phases, each requiring its own wallet signature:
+   *   Phase A — uploadContractWasm (builds, signs, submits)
+   *   Phase B — createCustomContract (new) or updateContractWasm (upgrade)
+   */
+  async function performDeploy() {
+    setShowUpgradeConfirm(false); // dismiss modal if it was open
     setDeploying(true);
     setError(null);
     setSuccess(null);
@@ -571,9 +613,6 @@ function DeployPanel({ network }: { network: string }) {
       const buildStatus = useBuildStore.getState().status;
       if (buildStatus !== "success" || !useBuildStore.getState().wasmInfo) {
         setStatusMsg("Building contract…");
-        // Switch the right panel view to "compile" so the user can see
-        // build progress while we wait. (They can switch back to deploy
-        // while the build runs — we just give them visual feedback.)
         const result = await awaitBuildCompletion(undefined, (status, err) => {
           if (status === "failed") {
             setError(err ? `Build failed: ${err}` : "Build failed");
@@ -600,12 +639,6 @@ function DeployPanel({ network }: { network: string }) {
       // ─── Get the appkit signing handle ───────────────────────────
       const appkit = await getAppKitForSigning();
       if (!appkit) {
-        // Diagnostic info is logged to the browser console (see
-        // getAppKitForSigning). Common causes:
-        //   1. WalletModalHost didn't mount yet (race condition right after
-        //      page load) — wait a moment + retry
-        //   2. Wallet got disconnected — open the wallet modal + reconnect
-        //   3. SDK version mismatch — appkit.signTransaction isn't a function
         setError(
           `Wallet signing isn't available. Open the browser console (F12) and look for the "[deploy] wallet signing unavailable" message — it shows exactly what's missing. Quick fixes: (1) reconnect your wallet via the top-bar wallet button, or (2) refresh the page (the WalletModalHost may not have initialized on this page load).`
         );
@@ -685,8 +718,6 @@ function DeployPanel({ network }: { network: string }) {
         return;
       }
       if (uploadResult.status === "PENDING") {
-        // Upload didn't confirm in 60s — abort the deploy flow because
-        // we can't create the contract without a confirmed WASM hash.
         setError("Upload transaction is still pending after 60s. Check the explorer and try again once it confirms.");
         setDeploying(false);
         setStatusMsg("");
@@ -694,7 +725,6 @@ function DeployPanel({ network }: { network: string }) {
       }
 
       // ─── Phase B: Create / Update Contract ─────────────────────
-      // The WASM hash from Phase A is what we use to create (or update) the contract.
       setStatusMsg("Building create-contract transaction (step 2/2)…");
 
       const createTxRes = await fetch("/api/contracts/create-tx", {
@@ -704,20 +734,8 @@ function DeployPanel({ network }: { network: string }) {
           projectId: activeProject.serverProjectId,
           walletAddress: profile.address,
           network,
-          wasmHash: uploadTx.wasmHash,  // SHA-256 hex from Phase A
+          wasmHash: uploadTx.wasmHash,
           existingContractId: uploadTx.contractId,
-          // constructorArgs: native JS array for __constructor method.
-          // Currently null because the deploy UI doesn't have a constructor
-          // args input yet. When the contract has no __constructor (most
-          // Soroban contracts), null/[] is correct — Soroban uses a no-op
-          // constructor.
-          //
-          // Future: detect __constructor from the contract spec via
-          // /api/contracts/list (which returns the function signatures) and
-          // show a dynamic form for the user to fill in the args.
-          // Per https://stellar.github.io/js-stellar-sdk/reference/contracts-client/#clientdeployargs-options
-          // the SDK's Client.deploy(args, options) takes args for the
-          // __constructor method — we mirror that pattern here.
           constructorArgs: null,
         }),
       });
@@ -733,7 +751,6 @@ function DeployPanel({ network }: { network: string }) {
         return;
       }
 
-      // Sign the create/update tx
       setStatusMsg(
         createTx.isUpgrade
           ? "Please sign the upgrade transaction in your wallet (step 2/2)…"
@@ -747,7 +764,6 @@ function DeployPanel({ network }: { network: string }) {
         return;
       }
 
-      // Submit the signed create/update tx
       setStatusMsg(createTx.isUpgrade ? "Upgrading contract on network (step 2/2)…" : "Creating contract on network (step 2/2)…");
       const createSubmitRes = await fetch("/api/contracts/submit", {
         method: "POST",
@@ -785,23 +801,37 @@ function DeployPanel({ network }: { network: string }) {
 
       // ─── Done ──────────────────────────────────────────────────
       const contractId = createResult.contractId || createTx.contractId || "";
+      const extractionFailed = createResult.extractionFailed === true;
       setSuccess({
-        contractId: contractId || "(check explorer with tx hash)",
+        contractId: extractionFailed ? "" : (contractId || ""),
         hash: createResult.hash,
         isUpgrade: createResult.isUpgrade || createTx.isUpgrade,
       });
       setStatusMsg("");
 
-      // Surface any DB-persistence warning from the server (the deploy
-      // succeeded on-chain, but the local DB record may be stale).
+      if (extractionFailed) {
+        console.warn(
+          "[deploy] contract ID extraction failed on server. Debug info:",
+          createResult.extractionDebug
+        );
+        const txExplorerUrl =
+          network === "testnet"
+            ? `https://testnet.stellarchain.io/tx/${createResult.hash}`
+            : network === "futurenet"
+            ? `https://futurenet.stellarchain.io/tx/${createResult.hash}`
+            : `https://stellarchain.io/tx/${createResult.hash}`;
+        setError(
+          `Deploy succeeded on-chain but we couldn't auto-extract the contract ID. ` +
+          `Open ${txExplorerUrl} to find your new contract ID, then come back here ` +
+          `to interact with it. (Server debug info logged to console — F12.)`
+        );
+      }
+
       if (createResult.warning) {
         console.warn("[deploy] server warning:", createResult.warning);
-        // Show as a transient error banner alongside the success card so
-        // the user sees BOTH the success and the warning.
         setError(createResult.warning);
       }
 
-      // Refresh the existing contract info (pulls the new contract from DB)
       await checkExistingContract();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Deploy failed");
@@ -933,10 +963,33 @@ function DeployPanel({ network }: { network: string }) {
               {success.isUpgrade ? "Contract upgraded!" : "Contract deployed!"}
             </span>
           </div>
-          <div className="text-[10px] text-[var(--text-muted)]">Contract ID</div>
-          <div className="font-mono text-[11px] text-[var(--text-primary)] break-all">
-            {success.contractId}
-          </div>
+          {success.contractId ? (
+            <>
+              <div className="text-[10px] text-[var(--text-muted)]">Contract ID</div>
+              <div className="font-mono text-[11px] text-[var(--text-primary)] break-all">
+                {success.contractId}
+              </div>
+              <a
+                href={
+                  network === "testnet"
+                    ? `https://testnet.stellarchain.io/contracts/${success.contractId}`
+                    : network === "futurenet"
+                    ? `https://futurenet.stellarchain.io/contracts/${success.contractId}`
+                    : `https://stellarchain.io/contracts/${success.contractId}`
+                }
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 mt-1.5 text-[10px] text-[var(--accent)] hover:underline"
+              >
+                <ExternalLink size={10} strokeWidth={1.75} />
+                View contract on stellarchain.io
+              </a>
+            </>
+          ) : (
+            <div className="text-[10px] text-[var(--text-muted)] italic">
+              Contract ID not yet available — see the tx link below to find it.
+            </div>
+          )}
           <div className="text-[10px] text-[var(--text-muted)] mt-1">Transaction hash</div>
           <div className="font-mono text-[10px] text-[var(--text-secondary)] break-all">
             {success.hash}
@@ -944,17 +997,17 @@ function DeployPanel({ network }: { network: string }) {
           <a
             href={
               network === "testnet"
-                ? `https://testnet.stellarchain.io/contracts/${success.contractId}`
+                ? `https://testnet.stellarchain.io/tx/${success.hash}`
                 : network === "futurenet"
-                ? `https://futurenet.stellarchain.io/contracts/${success.contractId}`
-                : `https://stellarchain.io/contracts/${success.contractId}`
+                ? `https://futurenet.stellarchain.io/tx/${success.hash}`
+                : `https://stellarchain.io/tx/${success.hash}`
             }
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1 mt-1.5 text-[10px] text-[var(--accent)] hover:underline"
           >
             <ExternalLink size={10} strokeWidth={1.75} />
-            View on stellarchain.io
+            View transaction on stellarchain.io
           </a>
         </div>
       )}
@@ -1008,6 +1061,56 @@ function DeployPanel({ network }: { network: string }) {
           </div>
         </div>
       )}
+
+      {/* Upgrade confirmation modal — shown when the user clicks Deploy
+          on a project that's already deployed to the selected network.
+          The deploy will replace the contract's WASM (contract ID stays
+          the same). We require explicit confirmation because:
+            - The new WASM is immediately live on-chain (no rollback)
+            - State migrations depend on the contract's __upgrade logic
+            - Users may have clicked Deploy by mistake
+
+          Also show when a fresh build exists but the user wants to
+          redeploy (covered by the same modal). */}
+      <AlertDialog open={showUpgradeConfirm} onOpenChange={setShowUpgradeConfirm}>
+        <AlertDialogContent className="max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2 text-base">
+              <AlertTriangle size={16} strokeWidth={2} className="text-[var(--status-warning)]" />
+              Contract already deployed
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-sm text-[var(--text-secondary)] space-y-2">
+              <span className="block">
+                This project is already deployed to{" "}
+                <span className="font-medium text-[var(--text-primary)] capitalize">{network}</span>:
+              </span>
+              <code className="block font-mono text-[11px] text-[var(--text-primary)] bg-[var(--surface-sunken)] rounded p-2 break-all">
+                {existingContract?.contractId}
+              </code>
+              <span className="block">
+                Clicking <span className="font-medium text-[var(--text-primary)]">Proceed with upgrade</span> will
+                replace the contract's WASM bytecode on-chain. The contract ID stays the same,
+                but the new code will be live immediately.
+              </span>
+              <span className="block text-[var(--text-muted)]">
+                Current upgrade count: {existingContract?.upgradeCount ?? 0}.
+                Make sure your new code is backward-compatible with the existing contract state.
+              </span>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="text-[var(--text-secondary)]">
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => performDeploy()}
+              className="bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)]"
+            >
+              Proceed with upgrade
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

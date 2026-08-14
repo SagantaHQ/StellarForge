@@ -13,21 +13,22 @@ const submitCode = fs.readFileSync(
   "utf8"
 );
 checks.push([
-  "submit uses TransactionResult.fromXDR (not OperationResult.fromXDR)",
-  submitCode.includes("xdr.TransactionResult.fromXDR") &&
-    !submitCode.includes("xdr.OperationResult.fromXDR(response.resultXdr"),
+  "submit uses brute-force CONTRACT_ID_RE regex (replaces structured walk)",
+  submitCode.includes("CONTRACT_ID_RE") && submitCode.includes("C[A-Z2-7]{55}"),
 ]);
 checks.push([
-  "submit uses invokeHostFunctionResult()",
-  submitCode.includes(".invokeHostFunctionResult()"),
+  "submit validates candidates via new Address(strkey)",
+  submitCode.includes("new Address(candidate)"),
 ]);
 checks.push([
-  "submit uses Address.fromScVal",
-  submitCode.includes("Address.fromScVal(scVal)"),
+  "submit searches decoded base64 XDR bytes",
+  submitCode.includes('Buffer.from(val, "base64")'),
 ]);
 checks.push([
-  "submit falls back to resultMetaXdr C... scan",
-  submitCode.includes("C[A-Z2-7]{55}"),
+  "submit searches parsed XDR JSON (TransactionResult + TransactionMeta + TransactionEnvelope)",
+  submitCode.includes("xdr.TransactionResult") &&
+  submitCode.includes("xdr.TransactionMeta") &&
+  submitCode.includes("xdr.TransactionEnvelope"),
 ]);
 checks.push([
   "submit surfaces DB persistence errors (was silently caught)",
@@ -38,6 +39,14 @@ checks.push([
 checks.push([
   "submit handles phase='invoke'",
   submitCode.includes('"invoke"') && submitCode.includes("phase"),
+]);
+checks.push([
+  "submit returns debug info when extraction fails",
+  submitCode.includes("extractionFailed: true") && submitCode.includes("extractionDebug"),
+]);
+checks.push([
+  "submit includes hint with tx-hash explorer link when extraction fails",
+  submitCode.includes("stellarchain.io/tx/") && submitCode.includes("hint"),
 ]);
 
 // Check 2: invoke endpoint exists with the right shape
@@ -117,6 +126,54 @@ checks.push([
 checks.push([
   "right-panel surfaces DB warning from server",
   rightPanelCode.includes("createResult.warning"),
+]);
+
+// Check 5: upgrade confirmation modal
+checks.push([
+  "right-panel has showUpgradeConfirm state",
+  rightPanelCode.includes("showUpgradeConfirm"),
+]);
+checks.push([
+  "right-panel shows AlertDialog modal when re-deploying existing contract",
+  rightPanelCode.includes("<AlertDialog") &&
+  rightPanelCode.includes("AlertDialogContent") &&
+  rightPanelCode.includes("AlertDialogAction"),
+]);
+checks.push([
+  "right-panel handleDeploy checks existingContract before proceeding",
+  rightPanelCode.includes("if (existingContract)") &&
+  rightPanelCode.includes("setShowUpgradeConfirm(true)"),
+]);
+checks.push([
+  "right-panel extracts performDeploy() from handleDeploy",
+  rightPanelCode.includes("async function performDeploy()"),
+]);
+checks.push([
+  "right-panel modal calls performDeploy on confirm",
+  rightPanelCode.includes('onClick={() => performDeploy()}'),
+]);
+checks.push([
+  "right-panel modal shows existing contract ID",
+  rightPanelCode.includes("existingContract?.contractId"),
+]);
+checks.push([
+  "right-panel modal warns about WASM replacement + contract ID stability",
+  rightPanelCode.includes("replace the contract's WASM") &&
+  rightPanelCode.includes("contract ID stays the same"),
+]);
+checks.push([
+  "right-panel success card shows tx-hash explorer link (always, even if contract ID missing)",
+  rightPanelCode.includes("View transaction on stellarchain.io"),
+]);
+checks.push([
+  "right-panel success card conditionally shows contract explorer link (only when contractId is present)",
+  rightPanelCode.includes("success.contractId ? (") &&
+  rightPanelCode.includes("Contract ID not yet available"),
+]);
+checks.push([
+  "right-panel imports AlertDialog from shadcn/ui",
+  rightPanelCode.includes('AlertDialog') &&
+  rightPanelCode.includes('from "@/components/ui/alert-dialog"'),
 ]);
 
 let pass = 0, fail = 0;

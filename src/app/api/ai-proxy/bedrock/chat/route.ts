@@ -163,9 +163,12 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     console.error("[bedrock-proxy] error:", err);
     const message = err instanceof Error ? err.message : String(err);
+    // Return the actual error message as a 400 (not 500) so the client
+    // shows the real error instead of a generic "proxy: 400"
+    const status = message.includes("Missing") || message.includes("Invalid") ? 400 : 500;
     return NextResponse.json(
-      { error: "Bedrock proxy failed", detail: message },
-      { status: 500 }
+      { error: message },
+      { status }
     );
   }
 }

@@ -398,7 +398,10 @@ export const PROVIDERS: Record<ProviderId, Provider> = {
     listModels: async () => {
       // Bedrock model IDs are region-specific and signed — proxy returns a curated list
       const res = await fetch("/api/ai-proxy/bedrock/models");
-      if (!res.ok) throw new Error("Bedrock models require proxy");
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(err.error || `Bedrock models proxy: ${res.status}`);
+      }
       return res.json();
     },
     chat: async (apiKey, model, messages, opts) => {
@@ -409,7 +412,10 @@ export const PROVIDERS: Record<ProviderId, Provider> = {
         body: JSON.stringify({ apiKey, model, messages, opts }),
         signal: opts?.signal,
       });
-      if (!res.ok) throw new Error(`Bedrock proxy: ${res.status}`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(err.error || err.detail || `Bedrock proxy: ${res.status}`);
+      }
       return res.json();
     },
   },

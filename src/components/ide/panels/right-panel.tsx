@@ -22,7 +22,7 @@ import { Button } from "@/components/ui/button";
 import { AgentPanel } from "./agent-panel";
 import { ContractInteractionPanel } from "./contract-interaction";
 import { ContractInspectPanel } from "./contract-inspect-panel";
-import { useBuildStore } from "@/stores/build-store";
+import { useBuildStore, awaitBuildCompletion } from "@/stores/build-store";
 import { useTestStore } from "@/stores/test-store";
 import { useFileSystemStore } from "@/stores/file-system-store";
 import { useProfileStore } from "@/stores/profile-store";
@@ -543,9 +543,8 @@ function DeployPanel({ network }: { network: string }) {
   }
 
   async function handleDeploy() {
-    // Check if wallet is connected — if not, open the wallet modal automatically
+    // ─── Pre-flight checks ──────────────────────────────────────────
     if (!profile?.address || !walletConnected) {
-      // Open the wallet modal so the user can connect
       const handle = (window as unknown as { __walletModal?: { open: () => void } }).__walletModal;
       if (handle) {
         setError("Wallet not connected. Opening wallet picker…");
@@ -559,46 +558,46 @@ function DeployPanel({ network }: { network: string }) {
       setError("No active project. Open or create a project first.");
       return;
     }
-    if (!wasmInfo) {
-      setError("No WASM file. Build the contract first.");
-      return;
-    }
 
     setDeploying(true);
     setError(null);
     setSuccess(null);
-    setStatusMsg("Building deploy transaction…");
 
     try {
-      // Step 1: Build the unsigned deploy/upgrade transaction
-      const buildTxRes = await fetch("/api/contracts/deploy-tx", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          projectId: activeProject.serverProjectId,
-          walletAddress: profile.address,
-          network,
-          wasmPath: wasmInfo?.path,
-        }),
-      });
+      // ─── Auto-build if not built ─────────────────────────────────
+      // If the build status isn't "success" OR we don't have wasmInfo,
+      // kick off a build and await its completion. The user clicked
+      // Deploy — they expect us to make sure there's a WASM to deploy.
+      const buildStatus = useBuildStore.getState().status;
+      if (buildStatus !== "success" || !useBuildStore.getState().wasmInfo) {
+        setStatusMsg("Building contract…");
+        // Switch the right panel view to "compile" so the user can see
+        // build progress while we wait. (They can switch back to deploy
+        // while the build runs — we just give them visual feedback.)
+        const result = await awaitBuildCompletion(undefined, (status, err) => {
+          if (status === "failed") {
+            setError(err ? `Build failed: ${err}` : "Build failed");
+          }
+        });
+        if (result !== "success") {
+          setDeploying(false);
+          setStatusMsg("");
+          return;
+        }
+        // After a successful build, re-read the new wasmInfo
+        // (the build store's wasmInfo was updated by pollStatus)
+      }
 
-      const txData = await buildTxRes.json();
-      if (!buildTxRes.ok) {
-        // Show the FULL error detail (not just the generic message) so the
-        // user knows exactly what went wrong without digging in the network tab
-        const errMsg = txData.detail
-          ? `${txData.error}: ${txData.detail}`
-          : txData.error || "Failed to build deploy transaction";
-        setError(errMsg);
+      // Re-read wasmInfo after the (possible) build
+      const wasmInfoNow = useBuildStore.getState().wasmInfo;
+      if (!wasmInfoNow) {
+        setError("Build finished but no WASM file was produced. Check the build output for errors.");
         setDeploying(false);
         setStatusMsg("");
         return;
       }
 
-      // Step 2: Sign the transaction with the wallet
-      setStatusMsg("Please sign the transaction in your wallet…");
-
-      // Get the appkit instance to sign the transaction
+      // ─── Get the appkit signing handle ───────────────────────────
       const appkit = await getAppKitForSigning();
       if (!appkit) {
         setError(
@@ -609,60 +608,168 @@ function DeployPanel({ network }: { network: string }) {
         return;
       }
 
-      let signedXdr: string;
-      try {
-        const signResult = await appkit.signTransaction(txData.unsignedXdr, {
-          network: network.toUpperCase(),
-          networkPassphrase: txData.networkPassphrase,
-        });
-        signedXdr = signResult.signedTxXdr || signResult.signedXdr || "";
-        if (!signedXdr) {
-          throw new Error("Wallet did not return a signed transaction");
-        }
-      } catch (signErr) {
-        // User rejected the sign request, or wallet threw an error
-        const msg = signErr instanceof Error ? signErr.message : String(signErr);
-        if (msg.toLowerCase().includes("reject") || msg.toLowerCase().includes("cancel") || msg.toLowerCase().includes("denied")) {
-          setError("Transaction signing was rejected. Please approve the transaction in your wallet to deploy.");
-        } else {
-          setError(`Wallet signing failed: ${msg}`);
-        }
-        setDeploying(false);
-        setStatusMsg("");
-        return;
-      }
+      // ─── Phase A: Upload WASM ───────────────────────────────────
+      setStatusMsg("Building upload transaction (step 1/2)…");
 
-      // Step 3: Submit the signed transaction
-      setStatusMsg("Submitting to the network…");
-
-      const submitRes = await fetch("/api/contracts/submit", {
+      const uploadTxRes = await fetch("/api/contracts/deploy-tx", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          signedXdr,
+          projectId: activeProject.serverProjectId,
           walletAddress: profile.address,
           network,
-          projectId: activeProject.serverProjectId,
-          wasmHash: txData.wasmHash,
-          wasmSizeBytes: txData.wasmSizeBytes,
-          wasmPath: txData.wasmPath ?? wasmInfo?.path ?? "",
-          isUpgrade: txData.isUpgrade,
-          existingContractId: txData.contractId,
+          wasmPath: wasmInfoNow.path,
         }),
       });
 
-      const submitData = await submitRes.json();
-      if (!submitRes.ok) {
-        setError(submitData.error || "Failed to submit transaction");
+      const uploadTx = await uploadTxRes.json();
+      if (!uploadTxRes.ok) {
+        const errMsg = uploadTx.detail
+          ? `${uploadTx.error}: ${uploadTx.detail}`
+          : uploadTx.error || "Failed to build upload transaction";
+        setError(errMsg);
         setDeploying(false);
         setStatusMsg("");
         return;
       }
 
+      // Sign the upload tx with the wallet
+      setStatusMsg("Please sign the upload transaction in your wallet (step 1/2)…");
+      const uploadSigned = await signWithWallet(appkit, uploadTx.unsignedXdr, network, uploadTx.networkPassphrase);
+      if (!uploadSigned.ok) {
+        setError(uploadSigned.error);
+        setDeploying(false);
+        setStatusMsg("");
+        return;
+      }
+
+      // Submit the signed upload tx
+      setStatusMsg("Uploading WASM to the network (step 1/2)…");
+      const uploadSubmitRes = await fetch("/api/contracts/submit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          signedXdr: uploadSigned.signedXdr,
+          walletAddress: profile.address,
+          network,
+          projectId: activeProject.serverProjectId,
+          wasmHash: uploadTx.wasmHash,
+          wasmSizeBytes: uploadTx.wasmSizeBytes,
+          wasmPath: uploadTx.wasmPath ?? wasmInfoNow.path,
+          phase: "upload",
+          isUpgrade: uploadTx.isUpgrade,
+          existingContractId: uploadTx.contractId,
+        }),
+      });
+
+      const uploadResult = await uploadSubmitRes.json();
+      if (!uploadSubmitRes.ok) {
+        const errMsg = uploadResult.detail
+          ? `${uploadResult.error}: ${uploadResult.detail}`
+          : uploadResult.error || "Failed to upload WASM";
+        setError(errMsg);
+        setDeploying(false);
+        setStatusMsg("");
+        return;
+      }
+      if (uploadResult.status === "FAILED") {
+        setError(uploadResult.detail || "Upload transaction failed on-chain");
+        setDeploying(false);
+        setStatusMsg("");
+        return;
+      }
+      if (uploadResult.status === "PENDING") {
+        // Upload didn't confirm in 60s — abort the deploy flow because
+        // we can't create the contract without a confirmed WASM hash.
+        setError("Upload transaction is still pending after 60s. Check the explorer and try again once it confirms.");
+        setDeploying(false);
+        setStatusMsg("");
+        return;
+      }
+
+      // ─── Phase B: Create / Update Contract ─────────────────────
+      // The WASM hash from Phase A is what we use to create (or update) the contract.
+      setStatusMsg("Building create-contract transaction (step 2/2)…");
+
+      const createTxRes = await fetch("/api/contracts/create-tx", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: activeProject.serverProjectId,
+          walletAddress: profile.address,
+          network,
+          wasmHash: uploadTx.wasmHash,  // SHA-256 hex from Phase A
+          existingContractId: uploadTx.contractId,
+        }),
+      });
+
+      const createTx = await createTxRes.json();
+      if (!createTxRes.ok) {
+        const errMsg = createTx.detail
+          ? `${createTx.error}: ${createTx.detail}`
+          : createTx.error || "Failed to build create-contract transaction";
+        setError(errMsg);
+        setDeploying(false);
+        setStatusMsg("");
+        return;
+      }
+
+      // Sign the create/update tx
+      setStatusMsg(
+        createTx.isUpgrade
+          ? "Please sign the upgrade transaction in your wallet (step 2/2)…"
+          : "Please sign the create-contract transaction in your wallet (step 2/2)…"
+      );
+      const createSigned = await signWithWallet(appkit, createTx.unsignedXdr, network, createTx.networkPassphrase);
+      if (!createSigned.ok) {
+        setError(createSigned.error);
+        setDeploying(false);
+        setStatusMsg("");
+        return;
+      }
+
+      // Submit the signed create/update tx
+      setStatusMsg(createTx.isUpgrade ? "Upgrading contract on network (step 2/2)…" : "Creating contract on network (step 2/2)…");
+      const createSubmitRes = await fetch("/api/contracts/submit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          signedXdr: createSigned.signedXdr,
+          walletAddress: profile.address,
+          network,
+          projectId: activeProject.serverProjectId,
+          wasmHash: uploadTx.wasmHash,
+          wasmSizeBytes: uploadTx.wasmSizeBytes,
+          wasmPath: uploadTx.wasmPath ?? wasmInfoNow.path,
+          phase: createTx.isUpgrade ? "update" : "create",
+          isUpgrade: createTx.isUpgrade,
+          existingContractId: createTx.contractId,
+        }),
+      });
+
+      const createResult = await createSubmitRes.json();
+      if (!createSubmitRes.ok) {
+        const errMsg = createResult.detail
+          ? `${createResult.error}: ${createResult.detail}`
+          : createResult.error || "Failed to create contract";
+        setError(errMsg);
+        setDeploying(false);
+        setStatusMsg("");
+        return;
+      }
+      if (createResult.status === "FAILED") {
+        setError(createResult.detail || "Create transaction failed on-chain");
+        setDeploying(false);
+        setStatusMsg("");
+        return;
+      }
+
+      // ─── Done ──────────────────────────────────────────────────
+      const contractId = createResult.contractId || createTx.contractId || "";
       setSuccess({
-        contractId: submitData.contractId,
-        hash: submitData.hash,
-        isUpgrade: submitData.isUpgrade,
+        contractId: contractId || "(check explorer with tx hash)",
+        hash: createResult.hash,
+        isUpgrade: createResult.isUpgrade || createTx.isUpgrade,
       });
       setStatusMsg("");
 
@@ -677,9 +784,10 @@ function DeployPanel({ network }: { network: string }) {
   }
 
   const isUpgrade = !!existingContract;
-  // canDeploy allows clicking the button even without a wallet — handleDeploy
-  // will open the wallet modal if the wallet isn't connected.
-  const canDeploy = activeProject?.serverProjectId && wasmInfo && !deploying;
+  // canDeploy allows clicking the button even without a WASM (we'll auto-build)
+  // or without a wallet connected (handleDeploy opens the wallet picker).
+  // The only hard requirement is having an active server-side project.
+  const canDeploy = !!activeProject?.serverProjectId && !deploying;
 
   return (
     <div className="flex h-full flex-col p-3 gap-3 overflow-y-auto">
@@ -722,7 +830,9 @@ function DeployPanel({ network }: { network: string }) {
           </>
         ) : (
           <div className="text-xs text-[var(--text-muted)] italic">
-            {buildStatus === "building" ? "Building…" : "No build yet. Run Build first."}
+            {buildStatus === "building"
+              ? "Building…"
+              : "Not built yet — will build automatically when you click Deploy."}
           </div>
         )}
       </div>
@@ -773,7 +883,9 @@ function DeployPanel({ network }: { network: string }) {
           ? "Processing…"
           : isUpgrade
           ? `Upgrade Contract${existingContract ? ` (v${existingContract.upgradeCount + 2})` : ""}`
-          : `Deploy to ${network}`}
+          : wasmInfo
+          ? `Deploy to ${network}`
+          : `Build & Deploy to ${network}`}
       </Button>
 
       {/* Status message */}
@@ -889,6 +1001,50 @@ async function getAppKitForSigning(): Promise<{
     return null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Sign an unsigned transaction XDR using the connected wallet.
+ * Wraps appkit.signTransaction with friendly error messages for the
+ * common failure modes (rejection, wallet not responding, etc.).
+ *
+ * Returns:
+ *   { ok: true, signedXdr }  on success
+ *   { ok: false, error }     on failure (error message is user-friendly)
+ */
+async function signWithWallet(
+  appkit: { signTransaction: (xdr: string, opts?: Record<string, unknown>) => Promise<{ signedTxXdr?: string; signedXdr?: string }> },
+  unsignedXdr: string,
+  network: string,
+  networkPassphrase: string
+): Promise<{ ok: true; signedXdr: string } | { ok: false; error: string }> {
+  try {
+    const signResult = await appkit.signTransaction(unsignedXdr, {
+      network: network.toUpperCase(),
+      networkPassphrase,
+    });
+    const signedXdr = signResult.signedTxXdr || signResult.signedXdr || "";
+    if (!signedXdr) {
+      return {
+        ok: false,
+        error: "Wallet did not return a signed transaction. Please try again.",
+      };
+    }
+    return { ok: true, signedXdr };
+  } catch (signErr) {
+    const msg = signErr instanceof Error ? signErr.message : String(signErr);
+    const lower = msg.toLowerCase();
+    if (lower.includes("reject") || lower.includes("cancel") || lower.includes("denied") || lower.includes("user")) {
+      return {
+        ok: false,
+        error: "Transaction signing was rejected. Please approve the transaction in your wallet to continue.",
+      };
+    }
+    return {
+      ok: false,
+      error: `Wallet signing failed: ${msg}`,
+    };
   }
 }
 

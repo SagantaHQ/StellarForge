@@ -143,6 +143,67 @@ export const useBuildStore = create<BuildState>((set, get) => ({
   clearOutput: () => set({ lines: [] }),
 }));
 
+/**
+ * Wait for the build store to reach a terminal state (success | failed).
+ *
+ * Used by the deploy flow ("auto-build before deploy" path) so the deploy
+ * handler can `await` a build that was just kicked off, instead of polling
+ * the store from the component.
+ *
+ * Returns:
+ *   - "success" if the build finished with status "success"
+ *   - "failed"  if the build finished with status "failed" (or never started)
+ *
+ * Resolves immediately if the build is already in a terminal state when called.
+ * If the build hasn't started yet (status === "idle"), starts one with the
+ * provided opts and awaits it.
+ *
+ * Optional `onStatus` callback fires whenever the build status changes —
+ * useful for surfacing "Building…" → "Uploading WASM…" transitions in the UI.
+ */
+export function awaitBuildCompletion(
+  opts?: Parameters<BuildState["startBuild"]>[0],
+  onStatus?: (status: BuildStatus, error?: string) => void
+): Promise<"success" | "failed"> {
+  return new Promise((resolve) => {
+    let unsub: (() => void) | null = null;
+
+    const finish = (result: "success" | "failed", error?: string) => {
+      if (unsub) unsub();
+      onStatus?.(result === "success" ? "success" : "failed", error);
+      resolve(result);
+    };
+
+    const check = () => {
+      const state = useBuildStore.getState();
+      if (state.status === "success") {
+        finish("success");
+      } else if (state.status === "failed") {
+        finish("failed", state.error);
+      }
+    };
+
+    // If idle, kick off a build first
+    if (useBuildStore.getState().status === "idle") {
+      useBuildStore.getState().startBuild(opts).catch((err) => {
+        finish("failed", err instanceof Error ? err.message : String(err));
+      });
+    }
+
+    // Subscribe to status changes — resolves on first terminal state
+    unsub = useBuildStore.subscribe((state) => {
+      if (state.status === "success") {
+        finish("success");
+      } else if (state.status === "failed") {
+        finish("failed", state.error);
+      }
+    });
+
+    // In case the build already finished before we subscribed
+    check();
+  });
+}
+
 async function pollStatus(
   buildId: string,
   set: (fn: (s: BuildState) => Partial<BuildState>) => void,

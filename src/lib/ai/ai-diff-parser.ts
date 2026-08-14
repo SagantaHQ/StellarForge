@@ -205,10 +205,37 @@ function resolveFilePath(
   if (knownFiles && knownFiles.length > 0 && !knownFiles.includes(filePath)) {
     const basename = filePath.split("/").pop();
     if (basename) {
-      const match = knownFiles.find(
+      const matches = knownFiles.filter(
         (f) => f === filePath || f.endsWith("/" + basename) || f === basename
       );
-      if (match) filePath = match;
+      if (matches.length === 1) {
+        filePath = matches[0];
+      } else if (matches.length > 1) {
+        // Ambiguous basename — e.g. multiple lib.rs/mod.rs across workspace
+        // crates. Picking matches[0] blindly (the old behavior) can silently
+        // patch the wrong crate while the file the user actually cares about
+        // is untouched. Try to disambiguate using shared trailing directory
+        // segments with the AI-provided path; if it's still a tie, give up
+        // rather than guess — the caller's "file not found" flow will ask
+        // the user to clarify instead of editing the wrong file.
+        const aiDirs = filePath.split("/").slice(0, -1);
+        const scored = matches
+          .map((f) => {
+            const fDirs = f.split("/").slice(0, -1);
+            let shared = 0;
+            for (let i = 1; i <= Math.min(aiDirs.length, fDirs.length); i++) {
+              if (aiDirs[aiDirs.length - i] === fDirs[fDirs.length - i]) shared++;
+              else break;
+            }
+            return { f, shared };
+          })
+          .sort((a, b) => b.shared - a.shared);
+        if (scored[0].shared > 0 && scored[0].shared > (scored[1]?.shared ?? -1)) {
+          filePath = scored[0].f;
+        } else {
+          return null;
+        }
+      }
     }
   }
 
@@ -391,81 +418,126 @@ export function getMonacoEditsFromDiff(
   return allEdits;
 }
 
+export interface DiffApplyResult {
+  content: string;
+  appliedHunks: number;
+  failedHunks: number;
+}
+
+function splitHunkLines(hunk: { lines: string[] }): { oldLines: string[]; newLines: string[] } {
+  const oldLines: string[] = [];
+  const newLines: string[] = [];
+  for (const line of hunk.lines) {
+    if (line.startsWith("+++") || line.startsWith("---")) continue;
+    if (line.startsWith("@@")) continue;
+    if (line.startsWith("-")) {
+      oldLines.push(line.substring(1));
+    } else if (line.startsWith("+")) {
+      newLines.push(line.substring(1));
+    } else if (line.startsWith(" ")) {
+      const ctx = line.substring(1);
+      oldLines.push(ctx);
+      newLines.push(ctx);
+    } else if (line === "") {
+      oldLines.push("");
+      newLines.push("");
+    } else if (line.startsWith("\\")) {
+      continue;
+    } else {
+      oldLines.push(line);
+      newLines.push(line);
+    }
+  }
+  return { oldLines, newLines };
+}
+
+/**
+ * Search the WHOLE file (not a fixed window around the AI's claimed line
+ * number) for a contiguous run of lines matching `oldLines`.
+ *
+ * Tries an EXACT match everywhere first. If none exists anywhere in the
+ * file, retries with each line's leading/trailing whitespace trimmed
+ * before comparing — LLMs very often reproduce context lines with
+ * slightly different indentation or tabs-vs-spaces than what's actually
+ * in the file. An exact-only comparison silently drops the hunk in that
+ * case (the file just doesn't get edited), which is the #1 cause of "the
+ * AI said it fixed it but the file didn't change."
+ *
+ * We search the full file rather than a fixed window because the AI's
+ * `oldStart` line number is only as accurate as its read of the file at
+ * response time — on a long file, or after any prior edit, it can drift
+ * well past a ±15/±20 line window even though the content is still
+ * findable. Ties (e.g. repeated boilerplate) are broken by proximity to
+ * the AI's claimed position.
+ */
+function findHunkPosition(lines: string[], oldLines: string[], hintIdx: number): number {
+  if (oldLines.length === 0) return -1;
+  for (const mode of ["exact", "trimmed"] as const) {
+    let best = -1;
+    let bestDist = Infinity;
+    for (let idx = 0; idx + oldLines.length <= lines.length; idx++) {
+      let ok = true;
+      for (let k = 0; k < oldLines.length; k++) {
+        const a = lines[idx + k];
+        const b = oldLines[k];
+        if (mode === "exact" ? a !== b : a.trim() !== b.trim()) {
+          ok = false;
+          break;
+        }
+      }
+      if (ok) {
+        const dist = Math.abs(idx - hintIdx);
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = idx;
+        }
+      }
+    }
+    if (best !== -1) return best;
+  }
+  return -1;
+}
+
 /**
  * Applies a diff to file content as a string (non-Monaco).
- * Graceful per-hunk failure: skip failing hunks, apply the rest.
+ * Graceful per-hunk failure: skip failing hunks, apply the rest — but
+ * unlike the old version, the caller gets told exactly how many hunks
+ * applied vs. failed instead of a single opaque string. A caller that
+ * ignores this and just writes `.content` back regardless will silently
+ * "succeed" even when zero hunks applied, which is exactly the bug this
+ * type change is meant to make impossible to write by accident.
  */
-export function applyDiffToContent(content: string, diff: AIDiff): string | null {
+export function applyDiffToContent(content: string, diff: AIDiff): DiffApplyResult | null {
   const lines = content.split("\n");
-  let applied = false;
+  let appliedHunks = 0;
+  let failedHunks = 0;
 
   const sortedHunks = [...diff.hunks].sort((a, b) => b.oldStart - a.oldStart);
 
   for (const hunk of sortedHunks) {
-    const oldLines: string[] = [];
-    const newLines: string[] = [];
+    const { oldLines, newLines } = splitHunkLines(hunk);
+    const hintIdx = Math.max(0, hunk.oldStart - 1);
 
-    for (const line of hunk.lines) {
-      if (line.startsWith("+++") || line.startsWith("---")) continue;
-      if (line.startsWith("@@")) continue;
-      if (line.startsWith("-")) {
-        oldLines.push(line.substring(1));
-      } else if (line.startsWith("+")) {
-        newLines.push(line.substring(1));
-      } else if (line.startsWith(" ")) {
-        const ctx = line.substring(1);
-        oldLines.push(ctx);
-        newLines.push(ctx);
-      } else if (line === "") {
-        oldLines.push("");
-        newLines.push("");
-      } else if (line.startsWith("\\")) {
-        continue;
-      } else {
-        oldLines.push(line);
-        newLines.push(line);
-      }
-    }
-
-    const startIdx = Math.max(0, hunk.oldStart - 1);
-    let matchIdx = -1;
-
-    if (
-      oldLines.length > 0 &&
-      startIdx + oldLines.length <= lines.length &&
-      lines.slice(startIdx, startIdx + oldLines.length).join("\n") === oldLines.join("\n")
-    ) {
-      matchIdx = startIdx;
-    }
-
-    if (matchIdx === -1 && oldLines.length > 0) {
-      for (let offset = -15; offset <= 15; offset++) {
-        const idx = startIdx + offset;
-        if (idx < 0 || idx + oldLines.length > lines.length) continue;
-        if (lines.slice(idx, idx + oldLines.length).join("\n") === oldLines.join("\n")) {
-          matchIdx = idx;
-          break;
-        }
-      }
-    }
-
-    if (matchIdx === -1 && oldLines.length === 0 && newLines.length > 0) {
-      lines.splice(startIdx, 0, ...newLines);
-      applied = true;
+    if (oldLines.length === 0 && newLines.length > 0) {
+      lines.splice(Math.min(hintIdx, lines.length), 0, ...newLines);
+      appliedHunks++;
       continue;
     }
 
+    const matchIdx = findHunkPosition(lines, oldLines, hintIdx);
     if (matchIdx === -1) {
       console.error(
         `[ai-diff-parser] could not apply hunk @@ -${hunk.oldStart} +${hunk.newStart} @@ ` +
-        `for ${diff.filePath} — context not found. Skipping.`
+        `for ${diff.filePath} — context not found anywhere in the file. Skipping.`
       );
+      failedHunks++;
       continue;
     }
 
     lines.splice(matchIdx, oldLines.length, ...newLines);
-    applied = true;
+    appliedHunks++;
   }
 
-  return applied ? lines.join("\n") : null;
+  if (appliedHunks === 0) return null;
+  return { content: lines.join("\n"), appliedHunks, failedHunks };
 }

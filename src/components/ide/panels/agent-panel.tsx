@@ -232,6 +232,21 @@ Do NOT just explain the error — output the actual fix as a diff.`;
     consumeFix();
   }, [pendingFix, loading, hasProvider, activeTabId, sendMessage, consumeFix]);
 
+  // Auto-apply pending diffs when "Allow always" is on. Previously this
+  // flag was purely cosmetic — it only changed the footer label and the
+  // DiffApprovalCard still rendered and waited for a manual Accept click
+  // every single time, regardless of the setting. handleAcceptDiff is a
+  // hoisted function declaration defined later in this component, so it's
+  // safe to reference here even before its textual definition — by the
+  // time this effect actually runs (after the full render commits), the
+  // enclosing render pass has already executed past that point.
+  useEffect(() => {
+    if (!allowAlways || !activeTab || activeTab.pendingDiffs.length === 0) return;
+    for (const diff of activeTab.pendingDiffs) {
+      handleAcceptDiff(diff);
+    }
+  }, [allowAlways, activeTab?.id, activeTab?.pendingDiffs]);
+
   // If no active tab (no project open or no tabs), show an empty state.
   // This MUST come after ALL hook calls above (including useEffects).
   if (!activeTab) {
@@ -399,11 +414,62 @@ Do NOT just explain the error — output the actual fix as a diff.`;
 
     // Apply the diff using the `diff` library's applyPatch (robust, handles
     // context lines, fuzz matching, etc.)
-    let newContent = applyParsedDiff(file.content, diff);
-    if (newContent === null) {
-      // Fallback: if applyPatch fails (e.g. context mismatch), try the old
-      // line-by-line approach as a last resort
-      newContent = applyDiffToFile(file.content, diff);
+    const primaryResult = applyParsedDiff(file.content, diff);
+    // Fallback: if applyPatch fails to match ANY hunk (e.g. context
+    // mismatch), try the legacy line-by-line approach as a last resort.
+    const result = primaryResult ?? applyDiffToFile(file.content, diff);
+
+    if (!result || result.appliedHunks === 0) {
+      // Neither strategy could match a single hunk against the current
+      // file content — do NOT write anything back and silently pretend
+      // this worked (that was the bug: the file stayed byte-identical
+      // while the UI reported success). Tell the user instead.
+      console.error("[agent] could not apply any hunks for", diff.filePath);
+      setTabs((prev) =>
+        prev.map((t) =>
+          t.id === activeTabId
+            ? {
+                ...t,
+                messages: [
+                  ...t.messages,
+                  {
+                    role: "assistant" as const,
+                    content: `⚠️ I proposed a change to \`${diff.filePath}\` but couldn't match it against the file's current content, so nothing was changed. This usually means the file has drifted since I read it, or my diff's context lines weren't exact. Ask me to look at \`${diff.filePath}\` again and I'll regenerate the fix.`,
+                    timestamp: Date.now(),
+                  },
+                ],
+                pendingDiffs: t.pendingDiffs.filter((d) => d !== diff),
+              }
+            : t
+        )
+      );
+      return;
+    }
+
+    const newContent = result.content;
+
+    if (result.failedHunks > 0) {
+      // Partial application — some hunks matched and were applied, others
+      // didn't. Still write the partial fix (better than nothing) but say
+      // so explicitly rather than reporting this as a clean success.
+      const total = result.appliedHunks + result.failedHunks;
+      setTabs((prev) =>
+        prev.map((t) =>
+          t.id === activeTabId
+            ? {
+                ...t,
+                messages: [
+                  ...t.messages,
+                  {
+                    role: "assistant" as const,
+                    content: `⚠️ Applied ${result.appliedHunks} of ${total} change(s) to \`${diff.filePath}\` — ${result.failedHunks} didn't match the current file and were skipped. The build may still fail on those; let me know if it does and I'll take another look.`,
+                    timestamp: Date.now(),
+                  },
+                ],
+              }
+            : t
+        )
+      );
     }
 
     // §9.9 — Single-step undo: use Monaco's pushUndoStop + executeEdits
@@ -1158,8 +1224,61 @@ function ProviderPicker({ onClose, onOpenSettings }: { onClose: () => void; onOp
  *   - Skip failing hunks instead of corrupting the file.
  */
 
-function applyDiffToFile(content: string, diff: ParsedDiff): string {
+interface LegacyApplyResult {
+  content: string;
+  appliedHunks: number;
+  failedHunks: number;
+}
+
+/**
+ * Find a contiguous run of `oldLines` anywhere in `lines`. Exact match
+ * first, across the WHOLE file (not a fixed window — the AI's claimed
+ * line number is only as good as its read of the file at response time).
+ * Falls back to a whitespace-trimmed comparison if no exact match exists
+ * anywhere, since LLMs very often reproduce context with slightly
+ * different indentation than what's actually on disk. Ties are broken by
+ * proximity to the AI's claimed position.
+ */
+function findLegacyMatch(lines: string[], oldLines: string[], hintIdx: number): number {
+  if (oldLines.length === 0) return -1;
+  for (const mode of ["exact", "trimmed"] as const) {
+    let best = -1;
+    let bestDist = Infinity;
+    for (let idx = 0; idx + oldLines.length <= lines.length; idx++) {
+      let ok = true;
+      for (let k = 0; k < oldLines.length; k++) {
+        const a = lines[idx + k];
+        const b = oldLines[k];
+        if (mode === "exact" ? a !== b : a.trim() !== b.trim()) {
+          ok = false;
+          break;
+        }
+      }
+      if (ok) {
+        const dist = Math.abs(idx - hintIdx);
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = idx;
+        }
+      }
+    }
+    if (best !== -1) return best;
+  }
+  return -1;
+}
+
+/**
+ * Last-resort fallback when applyParsedDiff() can't match a hunk either.
+ * Returns how many hunks actually applied vs. failed instead of a bare
+ * string — the old version always returned `lines.join("\n")` even when
+ * EVERY hunk failed, which meant handleAcceptDiff would silently write
+ * back the unmodified file and still report success (diff card cleared,
+ * "Build to verify" shown) with no visible sign anything went wrong.
+ */
+function applyDiffToFile(content: string, diff: ParsedDiff): LegacyApplyResult {
   const lines = content.split("\n");
+  let appliedHunks = 0;
+  let failedHunks = 0;
   // Process hunks in REVERSE order of oldStart so earlier hunks' line
   // numbers don't get shifted when later hunks are applied.
   const sortedHunks = [...diff.hunks].sort((a, b) => b.oldStart - a.oldStart);
@@ -1189,59 +1308,34 @@ function applyDiffToFile(content: string, diff: ParsedDiff): string {
       }
     }
 
-    // Strategy 1: Apply at hunk.oldStart (1-indexed → 0-indexed).
     const expectedStart = Math.max(0, hunk.oldStart - 1);
-    let matchesAtPosition =
-      oldLines.length > 0 &&
-      expectedStart + oldLines.length <= lines.length;
-    if (matchesAtPosition) {
-      for (let i = 0; i < oldLines.length; i++) {
-        if (lines[expectedStart + i] !== oldLines[i]) {
-          matchesAtPosition = false;
-          break;
-        }
-      }
-    }
-    if (matchesAtPosition) {
-      lines.splice(expectedStart, oldLines.length, ...newLines);
-      continue;
-    }
 
-    // Strategy 2: Fuzzy search ±20 lines around the expected position.
-    if (oldLines.length > 0) {
-      const searchStart = Math.max(0, expectedStart - 20);
-      const searchEnd = Math.min(lines.length - oldLines.length, expectedStart + 20);
-      let foundIdx = -1;
-      for (let i = searchStart; i <= searchEnd; i++) {
-        let allMatch = true;
-        for (let j = 0; j < oldLines.length; j++) {
-          if (lines[i + j] !== oldLines[j]) { allMatch = false; break; }
-        }
-        if (allMatch) { foundIdx = i; break; }
-      }
-      if (foundIdx >= 0) {
-        console.warn(
-          `[agent] legacy fallback applied hunk @@ -${hunk.oldStart} +${hunk.newStart} @@ ` +
-          `at line ${foundIdx + 1} (offset ${foundIdx + 1 - hunk.oldStart})`
-        );
-        lines.splice(foundIdx, oldLines.length, ...newLines);
-        continue;
-      }
-    }
-
-    // Strategy 3: Pure insertion (no context, no removed lines).
+    // Pure insertion (no context, no removed lines) — always safe to apply.
     if (oldLines.length === 0 && newLines.length > 0) {
-      lines.splice(expectedStart, 0, ...newLines);
+      lines.splice(Math.min(expectedStart, lines.length), 0, ...newLines);
+      appliedHunks++;
       continue;
     }
 
-    // Strategy 4: Skip the hunk — log so dev/user can see it failed.
-    // Don't corrupt the file with a wrong-position splice.
-    console.error(
-      `[agent] legacy fallback could not apply hunk @@ -${hunk.oldStart} +${hunk.newStart} @@ ` +
-      `— context not found. Skipping.`
-    );
+    const foundIdx = findLegacyMatch(lines, oldLines, expectedStart);
+    if (foundIdx === -1) {
+      console.error(
+        `[agent] legacy fallback could not apply hunk @@ -${hunk.oldStart} +${hunk.newStart} @@ ` +
+        `— context not found anywhere in the file. Skipping.`
+      );
+      failedHunks++;
+      continue;
+    }
+
+    if (foundIdx !== expectedStart) {
+      console.warn(
+        `[agent] legacy fallback applied hunk @@ -${hunk.oldStart} +${hunk.newStart} @@ ` +
+        `at line ${foundIdx + 1} (offset ${foundIdx + 1 - hunk.oldStart})`
+      );
+    }
+    lines.splice(foundIdx, oldLines.length, ...newLines);
+    appliedHunks++;
   }
 
-  return lines.join("\n");
+  return { content: lines.join("\n"), appliedHunks, failedHunks };
 }

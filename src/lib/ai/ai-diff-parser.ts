@@ -1,16 +1,51 @@
 import { parsePatch } from "diff";
+import { unified } from "unified";
+import remarkParse from "remark-parse";
 import type * as Monaco from "monaco-editor";
 
 /**
  * AI Diff Parser — extracts GitHub-style unified diffs from AI responses
  * and converts them into Monaco editor edit operations.
  *
- * Two-stage approach:
- *   1. Extract all code blocks that look like diffs
- *   2. Parse with parsePatch() from the `diff` library
+ * Pipeline (following ChatGPT's recommendation for handling LLM uncertainty):
  *
- * Then convert to Monaco IIdentifiedSingleEditOperation[] for
- * undo-preserving application via model.pushEditOperations().
+ *   ┌─────────────────────┐
+ *   │  LLM response text  │
+ *   └──────────┬──────────┘
+ *              │
+ *              ▼
+ *   ┌──────────────────────────┐
+ *   │ Markdown parser (remark) │   ← reliably identifies fenced code blocks
+ *   └──────────┬───────────────┘
+ *              │
+ *              ▼
+ *   ┌──────────────────────────────────────┐
+ *   │ Validation: try parsePatch() on each │ ← accept only if it parses
+ *   └──────────┬───────────────────────────┘   AND returns ≥1 hunk
+ *              │
+ *              ▼
+ *   ┌─────────────────────────────────────┐
+ *   │ Raw-text fallback (if no fenced     │ ← scan prose for unfenced
+ *   │ diff was successfully parsed)       │   `diff --git` / `--- /+++`
+ *   └──────────┬──────────────────────────┘
+ *              │
+ *              ▼
+ *   ┌─────────────────────────┐
+ *   │ Merge by filePath       │ ← N diff blocks → 1 AIDiff per file
+ *   └─────────────────────────┘
+ *
+ * Why this matters:
+ *   - Markdown parsing handles all fence variants (```, ~~~, trailing
+ *     whitespace, missing language tag, missing closing fence, nested
+ *     fences, CRLF) — no custom regex can match the coverage of a real
+ *     CommonMark parser.
+ *   - parsePatch() is the validation gate: it doesn't matter what the
+ *     fence language says ('diff', 'patch', 'rust', or empty) — if the
+ *     content parses as a unified diff with hunks, we accept it. If it
+ *     doesn't parse, we reject it. No more false positives on plain code
+ *     blocks that happen to contain `---` comments.
+ *   - The raw-text fallback catches the "AI didn't use a code fence"
+ *     case (some models just emit the diff inline in prose).
  */
 
 export interface AIDiff {
@@ -19,96 +54,298 @@ export interface AIDiff {
   raw: string;
   isNewFile: boolean;
   isDeletedFile: boolean;
+  /**
+   * Provenance — where did this diff come from?
+   *   "fenced": extracted from a fenced code block in the Markdown response
+   *   "raw":    extracted from raw prose (no fence around it)
+   * Useful for debugging + telemetry — raw-source diffs are lower trust
+   * because they're more likely to include prose contamination.
+   */
+  source: "fenced" | "raw";
+}
+
+// ============================================================
+// Stage 1: Markdown extraction (uses remark-parse, CommonMark-compliant)
+// ============================================================
+
+interface CodeBlock {
+  /** The fence language tag (lowercase), e.g. "diff", "patch", "rust", or null */
+  lang: string | null;
+  /** The raw text inside the fence (no fence markers, no lang line) */
+  value: string;
 }
 
 /**
- * Extracts and parses GitHub-style unified diffs from an AI response.
- * Handles cases where the AI wraps the diff in ```text, ```patch, or
- * misses the language tag entirely.
- *
- * Robustness notes (learned from real LLM outputs):
- *   - Normalize CRLF → LF first (some providers normalize to CRLF,
- *     which breaks the fence regex's `\n` anchors).
- *   - Tolerate missing closing fence (LLMs sometimes forget on long
- *     responses — block runs to end of string).
- *   - Merge multiple diff blocks targeting the SAME file into a single
- *     AIDiff. Without this, an LLM that emits 3 blocks for src/lib.rs
- *     produces 3 separate approval cards — confusing UX. After merge,
- *     user sees ONE card per file with all hunks grouped.
+ * Lazily-initialized Markdown parser. Calling `.use(remarkParse)` on every
+ * request is wasteful — reuse the processor instance. (The processor is
+ * stateless after `.parse()` is called; re-running it is safe.)
  */
-export function extractAndParseDiffs(aiResponse: string, knownFiles?: string[]): AIDiff[] {
-  // Normalize CRLF → LF so all downstream regex + parsePatch see consistent
-  // line endings. Without this, blocks with `\r\n` won't match the fence
-  // regex (which uses `\n` anchors).
-  const normalized = aiResponse.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+let parser: ReturnType<typeof unified> | null = null;
+function getParser(): ReturnType<typeof unified> {
+  if (!parser) parser = unified().use(remarkParse);
+  return parser;
+}
 
-  // Stage 1: Extract all fenced code blocks.
-  // The fence regex matches ``` or ~~~ opening, optional language tag,
-  // optional trailing whitespace, then the body. The body is captured
-  // lazily until:
-  //   - A matching closing fence on its own line, OR
-  //   - Another opening fence (LLM forgot to close previous), OR
-  //   - End of string (unclosed fence — common on long responses).
-  const fenceRe = /(?:^|\n)(`{3}|~{3})[a-zA-Z0-9_+-]*[ \t]*\n([\s\S]*?)(?=\n`{3}[ \t]*(\n|$)|\n~{3}[ \t]*(\n|$)|$)/g;
-  const codeBlocks: string[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = fenceRe.exec(normalized)) !== null) {
-    codeBlocks.push(m[2].trim());
-    // Skip past any closing fence so we don't re-match it as an opener
-    const after = normalized.slice(m.index + m[0].length);
-    const closeMatch = after.match(/^[ \t]*(`{3}|~{3})[ \t]*\n?/);
-    if (closeMatch) {
-      fenceRe.lastIndex += closeMatch[0].length;
+/**
+ * Walk a Markdown AST (mdast) and collect all `code` nodes.
+ *
+ * CommonMark distinguishes between:
+ *   - indented code blocks (no language tag, no fence — four-space indented)
+ *   - fenced code blocks (with ``` or ~~~ and an optional info string)
+ *
+ * remark-parse marks both as `type: "code"`. For fenced blocks, `lang` is
+ * the info string (lowercased here); for indented blocks, `lang` is null.
+ * Both are surfaced here — the validation step (parsePatch) decides if
+ * they're actually diffs.
+ */
+function extractCodeBlocks(markdown: string): CodeBlock[] {
+  // Normalize CRLF → LF so the Markdown parser sees consistent line endings
+  // (remark handles \r\n, but normalizing keeps our downstream code simpler).
+  const normalized = markdown.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+
+  const tree = getParser().parse(normalized);
+  const blocks: CodeBlock[] = [];
+
+  function visit(node: unknown): void {
+    if (!node || typeof node !== "object") return;
+    const n = node as { type?: string; lang?: string | null; value?: string; children?: unknown[] };
+
+    if (n.type === "code") {
+      blocks.push({
+        // remark stores the original case in `lang`; we lowercase for case-insensitive matching later
+        lang: (n.lang ?? null)?.toLowerCase() ?? null,
+        value: n.value ?? "",
+      });
+    }
+    if (Array.isArray(n.children)) {
+      for (const child of n.children) visit(child);
     }
   }
+  visit(tree);
 
-  // Stage 2: Filter to blocks that look like diffs.
-  // Either it has a `diff --git` header, OR it has both `---` and `+++`
-  // headers. This filters out normal code blocks (e.g. ```rust) that don't
-  // represent diffs.
-  const patchTexts = codeBlocks.filter(
-    (block) =>
-      /^diff --git /m.test(block) ||
-      (/^--- /m.test(block) && /^\+\+\+ /m.test(block))
-  );
+  return blocks;
+}
 
-  if (patchTexts.length === 0) return [];
+// ============================================================
+// Stage 2: Validation via parsePatch()
+// ============================================================
 
-  // Stage 3: Parse each block with parsePatch and MERGE by filePath.
-  // Multiple diff blocks targeting the same file → ONE AIDiff with all
-  // hunks grouped. This is the fix for the "user wasn't prompted to
-  // accept all of them" bug — they were, but as N separate cards.
-  const byPath = new Map<string, AIDiff>();
+/**
+ * Result of attempting to parse a single text block as a unified diff.
+ * `ok: false` means the block wasn't a valid diff — caller should ignore it.
+ */
+interface ParsedPatchResult {
+  ok: boolean;
+  /** Raw text that was passed to parsePatch (for debugging + the `raw` field on AIDiff) */
+  text: string;
+  /** Source: where did this text come from? */
+  source: "fenced" | "raw";
+  /** Parsed patches (only present if ok=true) */
+  patches: ReturnType<typeof parsePatch>;
+}
 
-  for (const text of patchTexts) {
+/**
+ * Try to parse `text` as a unified diff.
+ *
+ * Returns ok=true ONLY if parsePatch() succeeds AND returns ≥1 patch with
+ * ≥1 hunk. parsePatch() is unfortunately very lenient — given a non-diff
+ * input it returns `[{ oldFileName: undefined, hunks: [] }]` instead of
+ * throwing. So we have to explicitly check for non-empty hunks.
+ *
+ * Also strips a leading "diff --git" line if present (parsePatch handles
+ * it directly, but if the block contains multiple `diff --git` sections,
+ * we split on them so each gets its own parsePatch call).
+ */
+function tryParseAsDiff(text: string, source: "fenced" | "raw"): ParsedPatchResult[] {
+  // Normalize whitespace: trim trailing whitespace per line + collapse
+  // consecutive blank lines (LLMs sometimes add spurious blank lines that
+  // confuse parsePatch's hunk body parsing).
+  const normalized = text
+    .split("\n")
+    .map((l) => l.replace(/\s+$/, ""))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n");
+
+  // Some LLMs emit multiple `diff --git` sections in one fenced block.
+  // parsePatch handles this if you give it the full text, but if there's
+  // prose contamination between sections, it gets confused. Split on
+  // `diff --git` boundaries and parse each separately.
+  const sections = normalized.includes("diff --git ")
+    ? splitOnDiffGitSections(normalized)
+    : [normalized];
+
+  const results: ParsedPatchResult[] = [];
+
+  for (const section of sections) {
+    if (!section.trim()) continue;
+
     let patches: ReturnType<typeof parsePatch>;
     try {
-      patches = parsePatch(text);
+      patches = parsePatch(section);
     } catch (e) {
-      console.error("[ai-diff-parser] Failed to parse diff:", e);
+      // parsePatch shouldn't throw in practice, but be defensive
+      console.error("[ai-diff-parser] parsePatch threw:", e);
       continue;
     }
 
-    for (const patch of patches) {
-      // Extract file path
-      let filePath = patch.newFileName || patch.oldFileName || "(unknown file)";
-      filePath = filePath.replace(/^[ab]\//, "");
-      if (filePath === "/dev/null") {
-        filePath = patch.oldFileName?.replace(/^[ab]\//, "") || "(unknown file)";
-      }
+    // Filter: parsePatch returns empty hunks for non-diff input. Only
+    // accept patches that have at least one hunk with at least one line.
+    const validPatches = patches.filter(
+      (p) => p.hunks && p.hunks.length > 0 && p.hunks.some((h) => h.lines && h.lines.length > 0)
+    );
 
-      // Skip if we still have no usable path — surfacing "(unknown file)"
-      // just adds noise (the agent panel can't apply it without a real path).
-      if (filePath === "(unknown file)") continue;
+    if (validPatches.length > 0) {
+      results.push({ ok: true, text: section, source, patches: validPatches });
+    }
+  }
 
-      // Fuzzy match against known files
-      if (knownFiles && knownFiles.length > 0 && !knownFiles.includes(filePath)) {
-        const basename = filePath.split("/").pop();
-        const match = knownFiles.find(
-          (f) => f === filePath || f.endsWith("/" + basename) || f === basename
-        );
-        if (match) filePath = match;
-      }
+  return results;
+}
+
+/**
+ * Split a text block on `diff --git` boundaries. Each section includes
+ * its leading `diff --git` line. Used when a single fenced block contains
+ * multiple file patches (common in agentic flows where the AI edits
+ * multiple files in one response).
+ */
+function splitOnDiffGitSections(text: string): string[] {
+  const lines = text.split("\n");
+  const sections: string[] = [];
+  let current: string[] = [];
+
+  for (const line of lines) {
+    if (line.startsWith("diff --git ") && current.length > 0) {
+      // Start of a new section — flush the previous one
+      sections.push(current.join("\n"));
+      current = [];
+    }
+    current.push(line);
+  }
+  if (current.length > 0) sections.push(current.join("\n"));
+
+  return sections;
+}
+
+// ============================================================
+// Stage 3: Raw-text fallback (no code fence at all)
+// ============================================================
+
+/**
+ * Scan raw prose for unfenced unified diffs. Used as a fallback when no
+ * fenced diff was successfully parsed.
+ *
+ * Strategy: find every `diff --git` or `--- a/...` marker in the raw
+ * text, then expand forward to the end of the diff (heuristic: the diff
+ * ends at the next blank line followed by prose, or at end of string).
+ *
+ * This is intentionally conservative — we'd rather miss a diff than
+ * misidentify prose as a patch (false positives would silently corrupt
+ * user files on Accept).
+ */
+function scanRawTextForDiffs(text: string): ParsedPatchResult[] {
+  const results: ParsedPatchResult[] = [];
+
+  // Find candidate start positions:
+  //   - `diff --git a/X b/Y` (canonical git header)
+  //   - `--- a/...` followed (within 5 lines) by `+++ b/...`
+  const starts: number[] = [];
+
+  // Pattern 1: diff --git headers
+  const diffGitRe = /^diff --git /gm;
+  let m: RegExpExecArray | null;
+  while ((m = diffGitRe.exec(text)) !== null) {
+    starts.push(m.index);
+  }
+
+  // Pattern 2: --- / +++ pairs without diff --git (LLM forgot the git header)
+  // Look for `--- a/` or `--- /dev/null` lines, then verify `+++` follows within 5 lines.
+  const headerRe = /^--- (?:a\/|\.\.\/|\/dev\/null)/gm;
+  while ((m = headerRe.exec(text)) !== null) {
+    // Verify there's a +++ within the next 5 lines
+    const after = text.slice(m.index, m.index + 500);
+    if (/^\+\+\+ /m.test(after)) {
+      // Avoid double-counting if this is part of a diff --git section
+      const alreadyCovered = starts.some((s) => Math.abs(s - m.index!) < 50);
+      if (!alreadyCovered) starts.push(m.index!);
+    }
+  }
+
+  // Sort + dedupe starts
+  starts.sort((a, b) => a - b);
+  for (let i = 0; i < starts.length; i++) {
+    if (i > 0 && starts[i] === starts[i - 1]) continue;
+    const start = starts[i];
+    // End: next `diff --git` start, or end of string
+    const end = i + 1 < starts.length ? starts[i + 1] : text.length;
+    const candidate = text.slice(start, end).trim();
+    if (!candidate) continue;
+
+    // Try to parse — only accept if parsePatch returns valid hunks
+    const parsed = tryParseAsDiff(candidate, "raw");
+    results.push(...parsed);
+  }
+
+  return results;
+}
+
+// ============================================================
+// Stage 4: Merge by filePath
+// ============================================================
+
+/**
+ * Resolve a parsed patch's file path to a known project file.
+ * Handles common LLM path quirks:
+ *   - `a/path` / `b/path` prefix (git format) — strip
+ *   - `/dev/null` (file creation/deletion) — fall back to the other header
+ *   - Quoted paths with spaces — strip quotes
+ *   - Wrong basename — try fuzzy matching against knownFiles
+ */
+function resolveFilePath(patch: ReturnType<typeof parsePatch>[number], knownFiles?: string[]): string | null {
+  let filePath = patch.newFileName || patch.oldFileName || "";
+
+  // Strip `a/` or `b/` prefix (git format)
+  filePath = filePath.replace(/^[ab]\//, "");
+
+  // Handle /dev/null (file creation or deletion)
+  if (filePath === "/dev/null" || !filePath) {
+    filePath = patch.oldFileName?.replace(/^[ab]\//, "") || "";
+    if (filePath === "/dev/null") filePath = "";
+  }
+
+  // Strip surrounding quotes if present
+  filePath = filePath.replace(/^["']|["']$/g, "").trim();
+
+  if (!filePath) return null;
+
+  // Fuzzy match against known project files
+  if (knownFiles && knownFiles.length > 0 && !knownFiles.includes(filePath)) {
+    const basename = filePath.split("/").pop();
+    if (basename) {
+      const match = knownFiles.find(
+        (f) => f === filePath || f.endsWith("/" + basename) || f === basename
+      );
+      if (match) filePath = match;
+    }
+  }
+
+  return filePath;
+}
+
+/**
+ * Merges a list of parsed patches into AIDiff objects, grouping all
+ * patches for the same file into a single AIDiff with all hunks combined.
+ *
+ * Without this, an LLM emitting 3 diff blocks for src/lib.rs would
+ * produce 3 separate Accept cards — confusing UX. After merge, the user
+ * sees ONE card per file with all hunks grouped.
+ */
+function mergeByFilePath(parsed: ParsedPatchResult[], knownFiles?: string[]): AIDiff[] {
+  const byPath = new Map<string, AIDiff>();
+
+  for (const result of parsed) {
+    for (const patch of result.patches) {
+      const filePath = resolveFilePath(patch, knownFiles);
+      if (!filePath) continue; // skip — can't apply without a path
 
       const isNewFile = patch.oldFileName === "/dev/null" || patch.oldFileName === undefined;
       const isDeletedFile = patch.newFileName === "/dev/null" || patch.newFileName === undefined;
@@ -118,22 +355,24 @@ export function extractAndParseDiffs(aiResponse: string, knownFiles?: string[]):
         lines: h.lines,
       }));
 
-      // Merge into existing entry for this file, or create a new one
       const existing = byPath.get(filePath);
       if (existing) {
         existing.hunks.push(...newHunks);
-        existing.raw += "\n\n" + text;
-        // isNewFile / isDeletedFile flags: keep the first non-default value
-        // (in case the AI emits a creation + an edit in separate blocks).
+        existing.raw += "\n\n" + result.text;
+        // Promote source from "raw" to "fenced" if we have at least one
+        // fenced contribution (fenced is more trustworthy).
+        if (result.source === "fenced") existing.source = "fenced";
+        // Update create/delete flags
         if (!existing.isNewFile && isNewFile) existing.isNewFile = true;
         if (!existing.isDeletedFile && isDeletedFile) existing.isDeletedFile = true;
       } else {
         byPath.set(filePath, {
           filePath,
           hunks: newHunks,
-          raw: text,
+          raw: result.text,
           isNewFile,
           isDeletedFile,
+          source: result.source,
         });
       }
     }
@@ -141,6 +380,62 @@ export function extractAndParseDiffs(aiResponse: string, knownFiles?: string[]):
 
   return Array.from(byPath.values());
 }
+
+// ============================================================
+// Public entry point
+// ============================================================
+
+/**
+ * Extracts and parses GitHub-style unified diffs from an AI response.
+ *
+ * Strategy (in order):
+ *   1. Parse the response as Markdown (remark/CommonMark) to reliably
+ *      identify all fenced code blocks — handles all fence variants
+ *      (```, ~~~, no lang, trailing whitespace, missing close, CRLF).
+ *   2. For each fenced block, try parsePatch() and accept it only if it
+ *      parses AND returns ≥1 hunk. The fence language tag ('diff',
+ *      'patch', 'rust', or empty) doesn't matter — content is the source
+ *      of truth.
+ *   3. If NO fenced diff was successfully parsed, fall back to scanning
+ *      raw prose for unfenced `diff --git` / `--- /+++` patterns.
+ *   4. Merge multiple diff blocks targeting the same file into a single
+ *      AIDiff with all hunks grouped (one Accept card per file).
+ *
+ * @param aiResponse The raw LLM response text
+ * @param knownFiles  Project file paths — used to fuzzy-match LLM-claimed
+ *                    paths against real files (handles missing `a/`/`b/`
+ *                    prefixes, wrong directories, etc.)
+ */
+export function extractAndParseDiffs(aiResponse: string, knownFiles?: string[]): AIDiff[] {
+  if (!aiResponse || !aiResponse.trim()) return [];
+
+  // Stage 1: Markdown extraction
+  const codeBlocks = extractCodeBlocks(aiResponse);
+
+  // Stage 2: Validation — try parsePatch on every code block
+  const fencedPatches: ParsedPatchResult[] = [];
+  for (const block of codeBlocks) {
+    if (!block.value.trim()) continue;
+    // We don't filter by `lang` here — content is the source of truth.
+    // Even a `rust`-tagged block can contain a diff if the LLM is confused.
+    fencedPatches.push(...tryParseAsDiff(block.value, "fenced"));
+  }
+
+  // Stage 3: Raw-text fallback — only if no fenced diff was successfully parsed
+  let rawPatches: ParsedPatchResult[] = [];
+  if (fencedPatches.length === 0) {
+    rawPatches = scanRawTextForDiffs(aiResponse);
+  }
+
+  const allPatches = [...fencedPatches, ...rawPatches];
+
+  // Stage 4: Merge by filePath
+  return mergeByFilePath(allPatches, knownFiles);
+}
+
+// ============================================================
+// Monaco edit operations (unchanged from previous version)
+// ============================================================
 
 /**
  * Converts a parsed diff hunk into Monaco editor edit operations.
@@ -257,9 +552,7 @@ export function applyDiffToContent(content: string, diff: AIDiff): string | null
   let applied = false;
 
   // Process hunks in REVERSE order of oldStart so earlier hunks' line
-  // numbers don't shift when later hunks are applied. (Using oldStart —
-  // the line number in the ORIGINAL file — not newStart, because we're
-  // matching against the original content at each step.)
+  // numbers don't shift when later hunks are applied.
   const sortedHunks = [...diff.hunks].sort((a, b) => b.oldStart - a.oldStart);
 
   for (const hunk of sortedHunks) {
@@ -275,17 +568,14 @@ export function applyDiffToContent(content: string, diff: AIDiff): string | null
       } else if (line.startsWith("+")) {
         newLines.push(line.substring(1));
       } else if (line.startsWith(" ")) {
-        // Proper context line (leading space)
         const ctx = line.substring(1);
         oldLines.push(ctx);
         newLines.push(ctx);
       } else if (line === "") {
-        // Empty line — LLMs often drop the leading space on blank
-        // context lines. Treat as an empty context line.
+        // LLMs often drop the leading space on blank context lines.
         oldLines.push("");
         newLines.push("");
       } else if (line.startsWith("\\")) {
-        // "\ No newline at end of file" — skip
         continue;
       } else {
         // Unknown line — push as context (parsePatch should have handled this)
@@ -307,8 +597,6 @@ export function applyDiffToContent(content: string, diff: AIDiff): string | null
     }
 
     // Strategy 2: Fuzzy search ±15 lines around expected position.
-    // Handles the case where the file drifted slightly between AI
-    // generating the diff and the user accepting it (e.g. small edit).
     if (matchIdx === -1 && oldLines.length > 0) {
       for (let offset = -15; offset <= 15; offset++) {
         const idx = startIdx + offset;
@@ -327,7 +615,6 @@ export function applyDiffToContent(content: string, diff: AIDiff): string | null
     }
 
     // Strategy 3: Pure insertion (no context, no deletions).
-    // Safe to apply at the expected position — we're not deleting anything.
     if (matchIdx === -1 && oldLines.length === 0 && newLines.length > 0) {
       lines.splice(startIdx, 0, ...newLines);
       applied = true;
@@ -335,8 +622,6 @@ export function applyDiffToContent(content: string, diff: AIDiff): string | null
     }
 
     if (matchIdx === -1) {
-      // Skip this hunk — log so user/dev can see something went wrong.
-      // Other hunks still apply (graceful degradation).
       console.error(
         `[ai-diff-parser] could not apply hunk @@ -${hunk.oldStart} +${hunk.newStart} @@ ` +
         `for ${diff.filePath} — context not found at expected position or within ±15 lines. Skipping.`,

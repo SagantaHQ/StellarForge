@@ -154,7 +154,20 @@ export const useAgentTabsStore = create<AgentTabsState>()(
     {
       name: "soroban-build:agent-tabs",
       storage: createJSONStorage(() => localStorage),
-      // Persist everything — tabs + activeTabId + activeProjectId
+      // Persist messages + tab metadata, but NOT pendingDiffs.
+      // pendingDiffs are transient — they should only exist while the user
+      // is looking at them. If we persist them, the zustand persist middleware
+      // can rehydrate from localStorage AFTER set() is called, overwriting
+      // the new pendingDiffs with stale ones from the previous session.
+      // This was causing the "Accept button not showing" bug.
+      partialize: (s) => ({
+        tabs: s.tabs.map((t) => ({
+          ...t,
+          pendingDiffs: [], // don't persist pending diffs
+        })),
+        activeTabId: s.activeTabId,
+        activeProjectId: s.activeProjectId,
+      }),
     }
   )
 );

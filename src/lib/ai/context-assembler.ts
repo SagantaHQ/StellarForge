@@ -38,15 +38,31 @@ Knowledge base: You have access to the following reference material (cloned at i
 - OpenZeppelin adapter-stellar (for contract-UI bindings)
 
 When you propose a code change:
-- Output a fenced diff using \`\`\`diff blocks with proper --- / +++ / @@ markers
-- ALWAYS include the file path in the diff header. Use the EXACT path from the
-  project file list provided in the context. Format:
+- Output GitHub-style unified diff patches using \`\`\`diff blocks.
+- Each file change MUST start with the git diff header:
+    diff --git a/path/to/file.rs b/path/to/file.rs
     --- a/path/to/file.rs
     +++ b/path/to/file.rs
     @@ -10,5 +10,8 @@
      existing line
     +new line
      existing line
+- For MULTI-FILE edits, output SEPARATE diff blocks for each file, each
+  with its own diff --git header. Example:
+    \`\`\`diff
+    diff --git a/src/lib.rs b/src/lib.rs
+    --- a/src/lib.rs
+    +++ b/src/lib.rs
+    @@ -1,3 +1,4 @@
+    ...
+    \`\`\`
+    \`\`\`diff
+    diff --git a/Cargo.toml b/Cargo.toml
+    --- a/Cargo.toml
+    +++ b/Cargo.toml
+    @@ -5,3 +5,4 @@
+    ...
+    \`\`\`
 - The path after \`+++ b/\` MUST match a file path from the project file list.
   Do NOT invent paths — if you're not sure which file to edit, ask the user.
 - Only touch code within the active scope (Smart Contract / UI / General)
@@ -335,8 +351,15 @@ export function assembleContext(opts: AssembleOptions): AssembledContext {
 }
 
 /**
- * Parse a model response and extract any fenced diff blocks.
- * Used by the diff-approval flow (§9.5).
+ * Parse a model response and extract GitHub-style unified diff patches.
+ * Uses the `diff` npm package's parsePatch() for robust parsing.
+ *
+ * Two-stage approach:
+ *   1. Extract all code blocks that look like diffs (```diff, ```patch, or
+ *      any block containing "diff --git" or "--- /+++ " patterns)
+ *   2. Parse each block with parsePatch() → structured file patches
+ *
+ * Supports multi-file diffs — each file gets its own ParsedDiff entry.
  */
 export interface ParsedDiff {
   filePath: string;
@@ -345,74 +368,85 @@ export interface ParsedDiff {
 }
 
 export function parseDiffFromResponse(content: string, knownFiles?: string[]): ParsedDiff[] {
-  const diffs: ParsedDiff[] = [];
-  const diffBlockPattern = /```diff\n([\s\S]*?)```/g;
+  // Stage 1: Extract code blocks that contain diff/patch content
+  // Accept any fenced code block that contains diff markers
+  const blockPattern = /```[^\n]*\n([\s\S]*?)```/g;
+  const blocks: string[] = [];
   let m: RegExpExecArray | null;
-  while ((m = diffBlockPattern.exec(content)) !== null) {
-    const raw = m[1];
+  while ((m = blockPattern.exec(content)) !== null) {
+    const block = m[1].trim();
+    // Check if this block looks like a diff (git header or --- /+++ markers)
+    if (/^diff --git /m.test(block) || /^--- /m.test(block) || /^\+\+\+ /m.test(block)) {
+      blocks.push(block);
+    }
+  }
 
-    // Try multiple file path formats (LLMs are inconsistent):
-    //   +++ b/path/to/file.rs    (standard git format)
-    //   +++ path/to/file.rs      (no b/ prefix)
-    //   +++ a/path/to/file.rs    (wrong prefix but common)
-    //   --- path/to/file.rs      (only minus line)
-    //   # path/to/file.rs        (comment header)
-    //   File: path/to/file.rs    (explicit label)
-    let filePath = "";
-    const patterns = [
-      /^\+\+\+ b\/(.+)$/m,           // +++ b/path
-      /^\+\+\+ a\/(.+)$/m,           // +++ a/path (wrong but seen)
-      /^\+\+\+ (.+)$/m,              // +++ path
-      /^--- (.+)$/m,                 // --- path
-      /^# File: (.+)$/m,             // # File: path
-      /^File: (.+)$/m,               // File: path
-      /^# (.+\.rs)$/m,               // # path.rs (comment with .rs extension)
-    ];
-    for (const pat of patterns) {
-      const fm = raw.match(pat);
-      if (fm) {
-        filePath = fm[1].trim();
-        // Strip trailing tab/space + any "diff --git" artifacts
-        filePath = filePath.split(/\s/)[0];
-        break;
+  if (blocks.length === 0) return [];
+
+  // Stage 2: Parse each block with parsePatch from the `diff` library
+  const diffs: ParsedDiff[] = [];
+
+  for (const block of blocks) {
+    // parsePatch is loaded dynamically to avoid SSR issues
+    const { parsePatch } = require("diff") as typeof import("diff");
+    const patches = parsePatch(block);
+
+    for (const patch of patches) {
+      // Extract file path from newFileName (e.g. "b/src/lib.rs" → "src/lib.rs")
+      let filePath = patch.newFileName || patch.oldFileName || "(unknown file)";
+      // Strip "b/" or "a/" prefix
+      filePath = filePath.replace(/^[ab]\//, "");
+      // Handle /dev/null (file deletion)
+      if (filePath === "/dev/null") {
+        filePath = patch.oldFileName?.replace(/^[ab]\//, "") || "(unknown file)";
       }
-    }
 
-    // If no path found, try to extract from the first hunk's context
-    // or fall back to "(unknown file)"
-    if (!filePath) {
-      filePath = "(unknown file)";
-    }
-
-    // If we have known files, try to match the extracted path against them
-    // (LLMs sometimes add/remove the b/ prefix or use relative paths)
-    if (knownFiles && knownFiles.length > 0 && filePath !== "(unknown file)") {
-      // Try exact match first
-      if (!knownFiles.includes(filePath)) {
-        // Try matching by basename (filename without directory)
+      // Fuzzy match against known files if the path doesn't match exactly
+      if (knownFiles && knownFiles.length > 0 && !knownFiles.includes(filePath)) {
         const basename = filePath.split("/").pop();
-        const match = knownFiles.find((f) => f === filePath || f.endsWith("/" + basename) || f === basename);
-        if (match) {
-          filePath = match;
-        }
+        const match = knownFiles.find(
+          (f) => f === filePath || f.endsWith("/" + basename) || f === basename
+        );
+        if (match) filePath = match;
       }
-    }
 
-    // Hunk pattern: @@ -oldStart,count +newStart,count @@ optional_context\n lines
-    // The optional context after @@ (e.g. "impl HelloWorld {") is common in
-    // AI-generated diffs — the regex must allow text after the second @@.
-    // Also handles \r\n line endings.
-    const hunkPattern = /@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@[^\n]*\r?\n([\s\S]*?)(?=\r?\n@@|\r?\n```|$)/g;
-    const hunks: ParsedDiff["hunks"] = [];
-    let h: RegExpExecArray | null;
-    while ((h = hunkPattern.exec(raw)) !== null) {
-      hunks.push({
-        oldStart: parseInt(h[1], 10),
-        newStart: parseInt(h[2], 10),
-        lines: h[3].split("\n").filter((l) => l.length > 0),
+      // Convert parsePatch's hunk format to our ParsedDiff hunk format
+      const hunks = (patch.hunks || []).map((h) => ({
+        oldStart: h.oldStart,
+        newStart: h.newStart,
+        lines: h.lines,
+      }));
+
+      diffs.push({
+        filePath,
+        hunks,
+        raw: block,
       });
     }
-    diffs.push({ filePath, hunks, raw });
   }
+
   return diffs;
+}
+
+/**
+ * Apply a parsed diff to file content using the `diff` library's applyPatch.
+ * Returns the updated content, or null if the patch couldn't be applied.
+ */
+export function applyParsedDiff(content: string, diff: ParsedDiff): string | null {
+  try {
+    const { applyPatch } = require("diff") as typeof import("diff");
+    // Reconstruct a patch string from our ParsedDiff format
+    const patchStr = `--- a/${diff.filePath}\n+++ b/${diff.filePath}\n${diff.hunks
+      .map((h) => {
+        const oldCount = h.lines.filter((l) => !l.startsWith("+")).length;
+        const newCount = h.lines.filter((l) => !l.startsWith("-")).length;
+        return `@@ -${h.oldStart},${oldCount} +${h.newStart},${newCount} @@\n${h.lines.join("\n")}`;
+      })
+      .join("\n")}`;
+
+    const result = applyPatch(content, patchStr);
+    return result === false ? null : result;
+  } catch {
+    return null;
+  }
 }

@@ -76,6 +76,7 @@
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "date-fns": "^4.1.0",
+    "diff": "^9.0.0",
     "embla-carousel-react": "^8.6.0",
     "framer-motion": "^12.23.2",
     "idb": "^8.0.3",
@@ -90,6 +91,7 @@
     "next-auth": "^4.24.11",
     "next-intl": "^4.3.4",
     "next-themes": "^0.4.6",
+    "parse-diff": "^0.12.0",
     "prisma": "^6.11.1",
     "react": "^19.0.0",
     "react-day-picker": "^9.8.0",
@@ -122,6 +124,7 @@
   "devDependencies": {
     "@playwright/test": "^1.48.0",
     "@tailwindcss/postcss": "^4",
+    "@types/diff": "^7.0.2",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/ws": "^8.18.1",

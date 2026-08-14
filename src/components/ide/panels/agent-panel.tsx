@@ -25,7 +25,7 @@ import { Button } from "@/components/ui/button";
 import { useAIKeysStore } from "@/stores/ai-keys-store";
 import { useAIChat } from "@/hooks/use-ai-chat";
 import { PROVIDERS, PROVIDER_LIST, type ProviderId, type ChatMessage } from "@/lib/ai/providers";
-import { parseDiffFromResponse, type ParsedDiff } from "@/lib/ai/context-assembler";
+import { parseDiffFromResponse, applyParsedDiff, type ParsedDiff } from "@/lib/ai/context-assembler";
 import { useFileSystemStore } from "@/stores/file-system-store";
 import { flattenFiles } from "@/lib/soroban/sample-project";
 import { useFixWithAIStore } from "@/stores/fix-with-ai-store";
@@ -380,7 +380,14 @@ Do NOT just explain the error — output the actual fix as a diff.`;
       return;
     }
 
-    const newContent = applyDiffToFile(file.content, diff);
+    // Apply the diff using the `diff` library's applyPatch (robust, handles
+    // context lines, fuzz matching, etc.)
+    let newContent = applyParsedDiff(file.content, diff);
+    if (newContent === null) {
+      // Fallback: if applyPatch fails (e.g. context mismatch), try the old
+      // line-by-line approach as a last resort
+      newContent = applyDiffToFile(file.content, diff);
+    }
 
     // §9.9 — Single-step undo: use Monaco's pushUndoStop + executeEdits
     // so the entire AI diff is ONE undo step (not dozens of individual edits).

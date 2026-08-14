@@ -400,20 +400,31 @@ export const useProjectsStore = create<ProjectsState>()(
 
           const wasActive = get().activeProjectId === projectId;
 
-          // If we're deleting the active project, clear the file system store
-          // and editor tabs BEFORE updating the projects store, so the UI
-          // transitions cleanly to the welcome page.
+          // If we're deleting the active project, clear ALL stores
           if (wasActive) {
             try {
               const { useFileSystemStore } = await import("@/stores/file-system-store");
               const { useEditorTabsStore } = await import("@/stores/editor-tabs-store");
+              const { useBuildStore } = await import("@/stores/build-store");
+              const { useAutocompleteStore } = await import("@/stores/autocomplete-store");
+              const { useAttributionStore } = await import("@/stores/attribution-store");
+              const { useAgentTabsStore } = await import("@/stores/agent-tabs-store");
+
               await useFileSystemStore.getState().replaceTree([]);
               useEditorTabsStore.getState().closeAllTabs();
+              useBuildStore.getState().reset();
+              useAutocompleteStore.getState().clear();
+              useAttributionStore.getState().clear();
+              useAgentTabsStore.getState().setActiveProject(null);
             } catch {
               // Best-effort — the UI will show empty state regardless
             }
             await metaSet("activeProjectId", null);
           }
+
+          // Always clear the agent chat tabs for this project (even if not active)
+          const { useAgentTabsStore } = await import("@/stores/agent-tabs-store");
+          useAgentTabsStore.getState().clearProjectTabs(projectId);
 
           // Update store state
           set((s) => ({
@@ -498,8 +509,6 @@ export const useProjectsStore = create<ProjectsState>()(
           const project = get().projects.find((p) => p.id === outgoingId);
 
           // 1. Delete from the server if it has a serverProjectId.
-          //    The server cascade-deletes: files, comments, members,
-          //    snapshots, audit logs, share permissions, collab sessions.
           if (project?.serverProjectId && project.ownerId) {
             try {
               await fetch(
@@ -514,9 +523,7 @@ export const useProjectsStore = create<ProjectsState>()(
           // 2. Delete from IndexedDB (local project record + cached files)
           await projectDelete(outgoingId);
 
-          // 3. Clear the file system store (the IDB "files" object store
-          //    still has the file contents — clear them so the next project
-          //    doesn't see stale data)
+          // 3. Clear the file system store
           const { useFileSystemStore } = await import("@/stores/file-system-store");
           const { fileClearAll } = await import("@/lib/storage/idb");
           await fileClearAll();
@@ -526,7 +533,23 @@ export const useProjectsStore = create<ProjectsState>()(
           const { useEditorTabsStore } = await import("@/stores/editor-tabs-store");
           useEditorTabsStore.getState().closeAllTabs();
 
-          // 5. Clear active project + remove from the projects list
+          // 5. Clear the build store (output, WASM info, errors)
+          const { useBuildStore } = await import("@/stores/build-store");
+          useBuildStore.getState().reset();
+
+          // 6. Clear the autocomplete store
+          const { useAutocompleteStore } = await import("@/stores/autocomplete-store");
+          useAutocompleteStore.getState().clear();
+
+          // 7. Clear the attribution store
+          const { useAttributionStore } = await import("@/stores/attribution-store");
+          useAttributionStore.getState().clear();
+
+          // 8. Clear the agent chat for this project + set activeProject to null
+          const { useAgentTabsStore } = await import("@/stores/agent-tabs-store");
+          useAgentTabsStore.getState().setActiveProject(null);
+
+          // 9. Clear active project + remove from the projects list
           set((s) => ({
             projects: s.projects.filter((p) => p.id !== outgoingId),
             activeProjectId: null,

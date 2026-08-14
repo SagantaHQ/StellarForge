@@ -54,6 +54,8 @@ interface AttributionState {
   toggle: () => void;
   /** Clear attributions for a file (e.g. on file delete) */
   clearFile: (filePath: string) => void;
+  /** Clear ALL attributions (e.g. on project close/delete) */
+  clear: () => void;
 }
 
 export const useAttributionStore = create<AttributionState>((set, get) => ({
@@ -101,4 +103,6 @@ export const useAttributionStore = create<AttributionState>((set, get) => ({
       delete newAttribs[filePath];
       return { attributions: newAttribs };
     }),
+
+  clear: () => set({ attributions: {} }),
 }));

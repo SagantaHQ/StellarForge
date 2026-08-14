@@ -1141,38 +1141,105 @@ function ProviderPicker({ onClose, onOpenSettings }: { onClose: () => void; onOp
 
 /**
  * Apply a parsed diff to file content.
- * Handles unified diff hunks with +/- line markers.
+ * Legacy fallback used only when applyDiffToContent (which uses the `diff`
+ * library's applyPatch) returns null. Handles unified diff hunks with
+ * +/- line markers.
+ *
+ * Bugs fixed here vs. the old version:
+ *   - Sort by `oldStart` (was `newStart`) — we match against the ORIGINAL
+ *     file, so the original line number is what matters.
+ *   - Use `oldStart` for positioning (was `newStart`) and verify context
+ *     matches before splicing. Was using `lines.indexOf(oldLines[0], ...)`
+ *     which returned the WRONG position when `oldLines[0]` was an empty
+ *     string (common — LLMs drop the leading space on blank context lines)
+ *     — `indexOf("")` returns the first empty line in the file.
+ *   - Fuzzy fallback ±20 lines if exact position doesn't match (file drift).
+ *   - Insert-only hunks (no context, no deletions) apply safely.
+ *   - Skip failing hunks instead of corrupting the file.
  */
 function applyDiffToFile(content: string, diff: ParsedDiff): string {
   const lines = content.split("\n");
-  // Process hunks in reverse order so line numbers don't shift
-  const sortedHunks = [...diff.hunks].sort((a, b) => b.newStart - a.newStart);
+  // Process hunks in REVERSE order of oldStart so earlier hunks' line
+  // numbers don't get shifted when later hunks are applied.
+  const sortedHunks = [...diff.hunks].sort((a, b) => b.oldStart - a.oldStart);
 
   for (const hunk of sortedHunks) {
-    let insertIdx = hunk.newStart - 1; // 0-indexed
-    // Find the position in the current lines array
-    // Remove old lines (starting at oldStart) and insert new ones
     const oldLines: string[] = [];
     const newLines: string[] = [];
     for (const line of hunk.lines) {
-      if (line.startsWith("-") && !line.startsWith("---")) {
+      // Skip patch header lines that may have been left in
+      if (line.startsWith("---") || line.startsWith("+++")) continue;
+      if (line.startsWith("@@")) continue;
+      if (line.startsWith("-")) {
         oldLines.push(line.substring(1));
-      } else if (line.startsWith("+") && !line.startsWith("+++")) {
+      } else if (line.startsWith("+")) {
         newLines.push(line.substring(1));
       } else if (line.startsWith(" ")) {
-        oldLines.push(line.substring(1));
-        newLines.push(line.substring(1));
+        const ctx = line.substring(1);
+        oldLines.push(ctx);
+        newLines.push(ctx);
+      } else if (line === "") {
+        // LLMs often drop the leading space on blank context lines.
+        oldLines.push("");
+        newLines.push("");
+      } else if (line.startsWith("\\")) {
+        // "\ No newline at end of file" — skip
+        continue;
       }
     }
 
-    // Find the old lines in the array and replace with new lines
-    const oldStartIdx = lines.indexOf(oldLines[0], Math.max(0, insertIdx - oldLines.length - 5));
-    if (oldStartIdx >= 0) {
-      lines.splice(oldStartIdx, oldLines.length, ...newLines);
-    } else {
-      // Fallback: just insert at the hunk position
-      lines.splice(insertIdx, 0, ...newLines);
+    // Strategy 1: Apply at hunk.oldStart (1-indexed → 0-indexed).
+    const expectedStart = Math.max(0, hunk.oldStart - 1);
+    let matchesAtPosition =
+      oldLines.length > 0 &&
+      expectedStart + oldLines.length <= lines.length;
+    if (matchesAtPosition) {
+      for (let i = 0; i < oldLines.length; i++) {
+        if (lines[expectedStart + i] !== oldLines[i]) {
+          matchesAtPosition = false;
+          break;
+        }
+      }
     }
+    if (matchesAtPosition) {
+      lines.splice(expectedStart, oldLines.length, ...newLines);
+      continue;
+    }
+
+    // Strategy 2: Fuzzy search ±20 lines around the expected position.
+    if (oldLines.length > 0) {
+      const searchStart = Math.max(0, expectedStart - 20);
+      const searchEnd = Math.min(lines.length - oldLines.length, expectedStart + 20);
+      let foundIdx = -1;
+      for (let i = searchStart; i <= searchEnd; i++) {
+        let allMatch = true;
+        for (let j = 0; j < oldLines.length; j++) {
+          if (lines[i + j] !== oldLines[j]) { allMatch = false; break; }
+        }
+        if (allMatch) { foundIdx = i; break; }
+      }
+      if (foundIdx >= 0) {
+        console.warn(
+          `[agent] legacy fallback applied hunk @@ -${hunk.oldStart} +${hunk.newStart} @@ ` +
+          `at line ${foundIdx + 1} (offset ${foundIdx + 1 - hunk.oldStart})`
+        );
+        lines.splice(foundIdx, oldLines.length, ...newLines);
+        continue;
+      }
+    }
+
+    // Strategy 3: Pure insertion (no context, no removed lines).
+    if (oldLines.length === 0 && newLines.length > 0) {
+      lines.splice(expectedStart, 0, ...newLines);
+      continue;
+    }
+
+    // Strategy 4: Skip the hunk — log so dev/user can see it failed.
+    // Don't corrupt the file with a wrong-position splice.
+    console.error(
+      `[agent] legacy fallback could not apply hunk @@ -${hunk.oldStart} +${hunk.newStart} @@ ` +
+      `— context not found. Skipping.`
+    );
   }
 
   return lines.join("\n");

@@ -16,6 +16,22 @@ import { db } from "@/lib/db";
  *   `updateContractWasm` operation that swaps the contract's installed
  *   WASM to the new hash. The contract ID stays the same.
  *
+ * Constructor args:
+ *   Per https://stellar.github.io/js-stellar-sdk/reference/contracts-client/#clientdeployargs-options
+ *   `Client.deploy(args, options)` accepts `args` for the contract's
+ *   `__constructor` method. We mirror that here via `constructorArgs` —
+ *   an array of native JS values that we convert to ScVals using
+ *   `nativeToScVal` (no spec needed for type inference).
+ *
+ *   Example body field:
+ *     "constructorArgs": [42, "hello", true]           // positional args
+ *     "constructorArgs": [{"address": "GABC..."}]      // Address type
+ *     "constructorArgs": []                             // no args (default)
+ *     "constructorArgs": null                          // equivalent to []
+ *
+ *   For contracts WITHOUT a __constructor function, pass [] (empty array)
+ *   or omit the field — Soroban will use a no-op constructor.
+ *
  * Body:
  *   {
  *     projectId: string,
@@ -23,6 +39,7 @@ import { db } from "@/lib/db";
  *     network: string,
  *     wasmHash: string,         // SHA-256 hex of the WASM bytes (from Phase A)
  *     existingContractId?: string,  // present when upgrading
+ *     constructorArgs?: unknown[], // native JS values for __constructor
  *   }
  *
  * Returns:
@@ -94,11 +111,22 @@ function generateSalt(): Uint8Array {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { projectId, walletAddress, network, wasmHash, existingContractId } = body;
+    const { projectId, walletAddress, network, wasmHash, existingContractId, constructorArgs } = body;
 
     if (!projectId || !walletAddress || !network || !wasmHash) {
       return NextResponse.json(
         { error: "Missing required fields: projectId, walletAddress, network, wasmHash" },
+        { status: 400 }
+      );
+    }
+
+    // Validate constructorArgs — must be an array or null/undefined
+    if (constructorArgs != null && !Array.isArray(constructorArgs)) {
+      return NextResponse.json(
+        {
+          error: "constructorArgs must be an array (positional args for __constructor)",
+          detail: `Got ${typeof constructorArgs}. Pass an array of native JS values like [42, "hello"] or null/[] for no-arg constructors.`,
+        },
         { status: 400 }
       );
     }
@@ -147,7 +175,12 @@ export async function POST(req: NextRequest) {
 
     // Load the Stellar SDK + fetch the source account
     const StellarSdk = await import("@stellar/stellar-sdk");
-    const { rpc: stellarRpc, BASE_FEE, Operation, TransactionBuilder, Address } = StellarSdk;
+    const { rpc: stellarRpc, BASE_FEE, Operation, TransactionBuilder, Address, nativeToScVal } = StellarSdk;
+    // nativeToScVal converts native JS values to ScVal without needing the
+    // contract spec. For typed args (Address, ScInt), the caller should pass
+    // the SDK type directly (e.g. new Address('G...')) — see the
+    // Client.deploy() docs at
+    // https://stellar.github.io/js-stellar-sdk/reference/contracts-client/#clientdeployargs-options
 
     const server = new stellarRpc.Server(rpc);
 
@@ -179,6 +212,8 @@ export async function POST(req: NextRequest) {
       // ──────────────────────────────────────────────────────────────
       // UPGRADE: update the contract's installed WASM to the new hash.
       // The contract ID stays the same — only the code changes.
+      // (constructorArgs are NOT applicable for upgrades — the existing
+      // contract instance keeps its initialized state.)
       // ──────────────────────────────────────────────────────────────
       txBuilder.addOperation(
         Operation.updateContractWasm({
@@ -198,18 +233,55 @@ export async function POST(req: NextRequest) {
       // The `salt` makes the contract ID deterministic per (deployer,
       // wasmHash, salt) — random so multiple deploys of the same WASM
       // produce different contract IDs.
+      //
+      // constructorArgs (per Client.deploy docs):
+      //   The contract's `__constructor` method receives these as
+      //   positional args. We convert each native JS value to an ScVal
+      //   using nativeToScVal (no spec needed for basic types like
+      //   u32, u64, string, bool, vec, map, bytes).
+      //
+      //   For Address args, the client should pass an SDK Address
+      //   instance (e.g. { type: 'address', value: 'GABC...' }) —
+      //   currently nativeToScVal treats strings as scvString, so the
+      //   client must wrap them. (Future: use the contract spec to
+      //   properly type-convert args via Spec.funcArgsToScVals.)
       // ──────────────────────────────────────────────────────────────
       const deployerAddress = new Address(walletAddress);
       const salt = generateSalt();
+
+      // Convert constructorArgs (native JS values) to ScVal[]
+      // Empty array = no constructor args (default Soroban __constructor)
+      let scValConstructorArgs: ReturnType<typeof nativeToScVal>[] = [];
+      if (Array.isArray(constructorArgs) && constructorArgs.length > 0) {
+        try {
+          scValConstructorArgs = constructorArgs.map((arg, i) => {
+            try {
+              return nativeToScVal(arg);
+            } catch (err) {
+              throw new Error(
+                `constructorArgs[${i}] (${typeof arg}): ${
+                  err instanceof Error ? err.message : String(err)
+                }`
+              );
+            }
+          });
+        } catch (err) {
+          return NextResponse.json(
+            {
+              error: "Failed to convert constructorArgs to ScVals",
+              detail: err instanceof Error ? err.message : String(err),
+            },
+            { status: 400 }
+          );
+        }
+      }
 
       txBuilder.addOperation(
         Operation.createCustomContract({
           address: deployerAddress,
           wasmHash: wasmHashBytes,
           salt,
-          // constructorArgs: left empty — most Soroban contracts either
-          // have no constructor or use __constructor() with no args.
-          // Future: pass parsed constructor args from the deploy UI.
+          constructorArgs: scValConstructorArgs,
         })
       );
     }

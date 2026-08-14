@@ -700,6 +700,19 @@ function DeployPanel({ network }: { network: string }) {
           network,
           wasmHash: uploadTx.wasmHash,  // SHA-256 hex from Phase A
           existingContractId: uploadTx.contractId,
+          // constructorArgs: native JS array for __constructor method.
+          // Currently null because the deploy UI doesn't have a constructor
+          // args input yet. When the contract has no __constructor (most
+          // Soroban contracts), null/[] is correct — Soroban uses a no-op
+          // constructor.
+          //
+          // Future: detect __constructor from the contract spec via
+          // /api/contracts/list (which returns the function signatures) and
+          // show a dynamic form for the user to fill in the args.
+          // Per https://stellar.github.io/js-stellar-sdk/reference/contracts-client/#clientdeployargs-options
+          // the SDK's Client.deploy(args, options) takes args for the
+          // __constructor method — we mirror that pattern here.
+          constructorArgs: null,
         }),
       });
 

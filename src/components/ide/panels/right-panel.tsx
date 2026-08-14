@@ -1020,16 +1020,26 @@ function DeployPanel({ network }: { network: string }) {
       )}
 
       {/* Contract interaction — after deploy (Remix-style forms for
-          calling/querying the deployed contract's functions) */}
-      {success?.contractId && success.contractId.startsWith("C") && (
-        <ContractInteractionPanel contractId={success.contractId} network={network} />
+          calling/querying the deployed contract's functions).
+
+          Always show after a successful deploy — even if contract ID
+          extraction failed, the user can manually paste the contract ID
+          they found on the explorer. Also show for existing deploys. */}
+      {success && (
+        <ContractInteractionPanel
+          contractId={success.contractId || undefined}
+          network={network}
+        />
       )}
 
       {/* Also show the interaction panel for an existing deployed contract
           (so the user can interact without redeploying). Only show if we
           don't have a freshly-deployed success card (avoid duplicate). */}
-      {!success?.contractId && existingContract?.contractId && existingContract.contractId.startsWith("C") && (
-        <ContractInteractionPanel contractId={existingContract.contractId} network={network} />
+      {!success && existingContract && (
+        <ContractInteractionPanel
+          contractId={existingContract.contractId}
+          network={network}
+        />
       )}
 
       {/* WASM version history */}

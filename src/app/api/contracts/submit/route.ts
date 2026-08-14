@@ -276,31 +276,22 @@ export async function POST(req: NextRequest) {
  * Extract the contract ID from a successful `createCustomContract`
  * transaction result.
  *
- * STRATEGY: brute-force search across the entire response object.
+ * ROOT CAUSE of previous failures:
+ *   The contract ID is stored as a RAW 32-BYTE HASH in the XDR — NOT as
+ *   a strkey string ("C..."). So scanning the response for `C[A-Z2-7]{55}`
+ *   doesn't find it (the hash bytes don't match that pattern).
  *
- * Why brute-force instead of structured XDR walking?
- *   The previous structured approach (parse TransactionResult → walk
- *   results() → invokeHostFunctionResult() → value() → Address.fromScVal)
- *   was fragile and silently failed in practice — likely due to SDK
- *   version differences in the XDR class API. The user kept getting
- *   '(check explorer with tx hash)' because extraction silently failed.
+ *   The correct path is to walk the XDR structure:
+ *     resultMetaXdr → TransactionMeta → v3 → sorobanMeta → returnValue
+ *       → ScVal (scvAddress) → Address.fromScVal() → strkey
  *
- *   Brute-force search is RELIABLE because:
- *     - Stellar contract IDs are exactly 56 chars: 'C' + 55 base32 chars
- *       (charset [A-Z2-7] — Stellar uses RFC 4648 base32, no lowercase)
- *     - Account addresses start with 'G', not 'C'
- *     - WASM hashes are 64-char hex strings (lowercase), not base32
- *     - Transaction hashes are 64-char hex, not base32
- *     - For a single-op createCustomContract tx, the contract ID is the
- *       ONLY C... 56-char pattern in the entire response
+ *   OR from resultXdr:
+ *     TransactionResult → results[0] → tr → invokeHostFunctionResult
+ *       → invokeHostFunctionSuccess → returnValue → ScVal → Address.fromScVal
  *
- *   We search the response object's JSON serialization (with BigInts
- *   converted to strings) to catch the contract ID wherever it appears
- *   — in resultXdr, resultMetaXdr, envelopeXdr, or anywhere else.
- *
- * The structured extraction is preserved as a fallback for the (rare)
- * case where multiple C... patterns appear and we need to pick the
- * right one via context.
+ *   We try BOTH paths + a fallback that scans ContractEvents in the
+ *   SorobanTransactionMeta for any event whose contractId field (raw
+ *   32-byte hash) can be converted via StrKey.encodeContract.
  */
 function extractContractIdFromResult(response: {
   resultMetaXdr?: string;
@@ -309,101 +300,282 @@ function extractContractIdFromResult(response: {
   [key: string]: unknown;
 }): { contractId?: string; debug: { triedPaths: string[]; rawFields: Record<string, string> } } {
   const StellarSdk = require("@stellar/stellar-sdk");
-  const { xdr, Address } = StellarSdk;
+  const { xdr, Address, StrKey, scValToNative } = StellarSdk;
   const triedPaths: string[] = [];
   const rawFields: Record<string, string> = {};
 
-  // Stellar contract ID regex: 56 chars, 'C' + 55 base32 chars
-  // RFC 4648 base32 alphabet: A-Z, 2-7 (no 0/1/8/9 to avoid confusion)
-  const CONTRACT_ID_RE = /\bC[A-Z2-7]{55}\b/g;
-
-  // ─── Collect all candidate strings to search ────────────────────────
-  // We search the raw base64 XDR strings themselves (the contract ID
-  // appears as ASCII bytes within the XDR encoding — base64-decoded, the
-  // strkey "C..." is just bytes in the XDR). AND we search the parsed
-  // XDR JSON serialization (where the strkey appears as a string field).
-  const candidates: { source: string; text: string }[] = [];
-
-  // Raw base64 XDR strings — decode and search the raw bytes
+  // Save raw XDR strings for debugging
   for (const field of ["resultXdr", "resultMetaXdr", "envelopeXdr"]) {
     const val = response[field];
     if (typeof val === "string" && val.length > 0) {
-      rawFields[field] = val;
-      // Search the raw base64 string itself — the contract ID's strkey
-      // chars appear as ASCII in the base64-decoded bytes, which means
-      // they ALSO appear (scrambled) in the base64 encoding. We can't
-      // reliably match base32-in-base64, so instead we decode + search.
-      try {
-        const decoded = Buffer.from(val, "base64").toString("latin1");
-        candidates.push({ source: `${field} (decoded)`, text: decoded });
-      } catch {}
-      // Also search the raw base64 (in case the strkey happens to appear
-      // as ASCII in the base64 itself — rare but cheap to check)
-      candidates.push({ source: field, text: val });
+      rawFields[field] = val.substring(0, 200) + (val.length > 200 ? "…" : "");
     }
   }
 
-  // Parsed XDR JSON — the strkey appears as a clean ASCII string field
-  for (const [field, xdrClass] of [
-    ["resultXdr", xdr.TransactionResult],
-    ["resultMetaXdr", xdr.TransactionMeta],
-    ["envelopeXdr", xdr.TransactionEnvelope],
-  ] as const) {
+  // ─── Path 1: resultMetaXdr → TransactionMeta → v3 → sorobanMeta → returnValue ──
+  // For createCustomContract, the SorobanTransactionMeta contains a
+  // returnValue which is an ScVal of type scvAddress containing the
+  // new contract ID. This is the MOST RELIABLE path.
+  if (response.resultMetaXdr) {
+    triedPaths.push("resultMetaXdr → sorobanMeta.returnValue");
+    try {
+      const meta = xdr.TransactionMeta.fromXDR(response.resultMetaXdr, "base64");
+      const contractId = tryExtractFromTransactionMeta(meta, xdr, Address, StrKey, scValToNative, triedPaths);
+      if (contractId) {
+        console.log(`[submit] extracted contract ID from TransactionMeta: ${contractId}`);
+        return { contractId, debug: { triedPaths, rawFields } };
+      }
+    } catch (err) {
+      triedPaths.push(`resultMetaXdr parse failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // ─── Path 2: resultXdr → TransactionResult → results[0] → invokeHostFunctionResult ──
+  // The OperationResult for createCustomContract contains an
+  // InvokeHostFunctionResult. For success, the inner value is an ScVal
+  // (scvAddress) containing the contract ID.
+  if (response.resultXdr) {
+    triedPaths.push("resultXdr → results[0].tr.invokeHostFunctionResult");
+    try {
+      const txResult = xdr.TransactionResult.fromXDR(response.resultXdr, "base64");
+      const opResults = txResult.results?.() ?? [];
+      for (const opResult of opResults) {
+        try {
+          const tr = opResult.tr();
+          const invokeResult = tr.invokeHostFunctionResult();
+          if (!invokeResult) continue;
+
+          // The success arm — try to get the returnValue (ScVal)
+          let scVal;
+          try {
+            scVal = invokeResult.success();
+          } catch {
+            continue; // not a success — skip
+          }
+          if (!scVal) continue;
+
+          // Try Address.fromScVal — the canonical conversion
+          try {
+            const addr = Address.fromScVal(scVal);
+            if (addr && addr.toString().startsWith("C") && addr.toString().length === 56) {
+              console.log(`[submit] extracted contract ID from resultXdr success ScVal: ${addr.toString()}`);
+              return { contractId: addr.toString(), debug: { triedPaths, rawFields } };
+            }
+          } catch {}
+
+          // Fallback: scValToNative might return the strkey as a string
+          try {
+            const native = scValToNative(scVal);
+            if (typeof native === "string" && native.startsWith("C") && native.length === 56) {
+              console.log(`[submit] extracted contract ID from scValToNative: ${native}`);
+              return { contractId: native, debug: { triedPaths, rawFields } };
+            }
+          } catch {}
+        } catch {
+          // wrong operation type — continue
+        }
+      }
+    } catch (err) {
+      triedPaths.push(`resultXdr parse failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // ─── Path 3: Last-resort brute-force scan for strkey pattern ──
+  // This catches the rare case where the contract ID appears as a strkey
+  // string somewhere in the JSON-serialized XDR (some SDK versions
+  // serialize Hash fields as strkeys in their toJSON method).
+  triedPaths.push("brute-force strkey scan (last resort)");
+  const CONTRACT_ID_RE = /\bC[A-Z2-7]{55}\b/g;
+  for (const field of ["resultMetaXdr", "resultXdr", "envelopeXdr"]) {
     const val = response[field];
     if (typeof val !== "string" || val.length === 0) continue;
     try {
-      const parsed = xdrClass.fromXDR(val, "base64");
+      const parsed = xdr.TransactionMeta.fromXDR(val, "base64");
       const jsonStr = safeStringify(parsed);
-      candidates.push({ source: `${field} (parsed JSON)`, text: jsonStr });
-      triedPaths.push(`parsed ${field}`);
-    } catch (err) {
-      triedPaths.push(`failed to parse ${field}: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-
-  // ─── Search all candidates for the contract ID pattern ──────────────
-  const seen = new Set<string>();
-  for (const { source, text } of candidates) {
-    let m: RegExpExecArray | null;
-    CONTRACT_ID_RE.lastIndex = 0; // reset regex stateful iterator
-    while ((m = CONTRACT_ID_RE.exec(text)) !== null) {
-      const candidate = m[0];
-      // Validate: contract IDs start with 'C' and decode to a 32-byte payload.
-      // Stellar's strkey format: 1-byte version (0x0E for contract) + 32 bytes + 2-byte CRC.
-      // We can verify by trying to construct an Address — if it throws, it's not a real contract ID.
-      try {
-        const addr = new Address(candidate);
-        // Address constructor validates the strkey — if we get here, it's valid
-        if (addr.toString() === candidate) {
-          if (!seen.has(candidate)) {
-            seen.add(candidate);
-            console.log(`[submit] found contract ID via ${source}: ${candidate}`);
-            return { contractId: candidate, debug: { triedPaths, rawFields } };
+      CONTRACT_ID_RE.lastIndex = 0;
+      const m = CONTRACT_ID_RE.exec(jsonStr);
+      if (m) {
+        try {
+          const addr = new Address(m[0]);
+          if (addr.toString() === m[0]) {
+            console.log(`[submit] extracted contract ID via brute-force scan in ${field}: ${m[0]}`);
+            return { contractId: m[0], debug: { triedPaths, rawFields } };
           }
-        }
-      } catch {
-        // Not a valid contract ID strkey — skip
+        } catch {}
       }
-    }
-  }
-
-  // ─── Structured fallback (for debugging — logs paths tried) ────────
-  if (response.resultXdr) {
-    triedPaths.push("structured resultXdr walk (fallback)");
-    try {
-      const txResult = xdr.TransactionResult.fromXDR(response.resultXdr, "base64");
-      // Walk the structure — log what we find for debugging
-      console.warn("[submit] resultXdr structure:", {
-        switch: txResult?.switch?.()?.name ?? "unknown",
-        hasResults: typeof txResult?.results === "function",
-      });
-    } catch (err) {
-      triedPaths.push(`structured walk failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
+    } catch {}
   }
 
   console.warn("[submit] contract ID extraction failed. Tried paths:", triedPaths);
   return { contractId: undefined, debug: { triedPaths, rawFields } };
+}
+
+/**
+ * Walk a TransactionMeta XDR object looking for the contract ID.
+ *
+ * Tries multiple sub-paths:
+ *   1. v3.sorobanMeta.returnValue (ScVal → Address.fromScVal)
+ *   2. v2.sorobanMeta.returnValue
+ *   3. v3.sorobanMeta.events[].event.contractId (raw 32-byte Hash → StrKey.encodeContract)
+ *   4. v3.sorobanMeta.events[].event.data (ScVal → might be Address)
+ *   5. v1.changes / v2.changes / v3.changes — LEDGER_ENTRY_CREATED with ContractCode (has contract hash)
+ *
+ * Returns the first valid contract ID strkey found, or undefined.
+ */
+function tryExtractFromTransactionMeta(
+  meta: any,
+  xdr: any,
+  Address: any,
+  StrKey: any,
+  scValToNative: any,
+  triedPaths: string[]
+): string | undefined {
+  // Helper: convert a 32-byte Buffer to a contract strkey
+  const hashToStrkey = (hash: Buffer | Uint8Array): string | undefined => {
+    try {
+      const buf = Buffer.isBuffer(hash) ? hash : Buffer.from(hash);
+      if (buf.length !== 32) return undefined;
+      const strkey = StrKey.encodeContract(buf);
+      return strkey;
+    } catch {
+      return undefined;
+    }
+  };
+
+  // Helper: try to extract contract ID from an ScVal
+  const scValToContractId = (scVal: any): string | undefined => {
+    if (!scVal) return undefined;
+    try {
+      const addr = Address.fromScVal(scVal);
+      const str = addr.toString();
+      if (str.startsWith("C") && str.length === 56) return str;
+    } catch {}
+    try {
+      const native = scValToNative(scVal);
+      if (typeof native === "string" && native.startsWith("C") && native.length === 56) return native;
+    } catch {}
+    return undefined;
+  };
+
+  // ─── Try v3 (current Soroban format) ──
+  try {
+    const v3 = meta.v3();
+    if (v3) {
+      const sorobanMeta = v3.sorobanMeta?.();
+      if (sorobanMeta) {
+        // Path 1: returnValue (for createCustomContract, this is the contract ID)
+        try {
+          const returnValue = sorobanMeta.returnValue?.();
+          if (returnValue) {
+            const id = scValToContractId(returnValue);
+            if (id) {
+              triedPaths.push("v3.sorobanMeta.returnValue → contract ID");
+              return id;
+            }
+          }
+        } catch {}
+
+        // Path 2: events → contractId field (raw 32-byte hash)
+        try {
+          const txEvents = sorobanMeta.events?.() ?? [];
+          for (const txEvent of txEvents) {
+            const contractEvent = txEvent.event?.();
+            if (!contractEvent) continue;
+            // The contractId field is a Hash (raw 32 bytes)
+            const contractIdHash = contractEvent.contractId?.();
+            if (contractIdHash) {
+              const id = hashToStrkey(contractIdHash);
+              if (id) {
+                triedPaths.push("v3.sorobanMeta.events[].contractId → StrKey");
+                return id;
+              }
+            }
+            // The data field might be an ScVal containing the address
+            try {
+              const data = contractEvent.body?.()?.data?.();
+              if (data) {
+                const id = scValToContractId(data);
+                if (id) {
+                  triedPaths.push("v3.sorobanMeta.events[].body.data → contract ID");
+                  return id;
+                }
+              }
+            } catch {}
+          }
+        } catch {}
+      }
+    }
+  } catch {
+    // not v3 — continue
+  }
+
+  // ─── Try v2 (older Soroban format) ──
+  try {
+    const v2 = meta.v2();
+    if (v2) {
+      const sorobanMeta = v2.sorobanMeta?.();
+      if (sorobanMeta) {
+        try {
+          const returnValue = sorobanMeta.returnValue?.();
+          if (returnValue) {
+            const id = scValToContractId(returnValue);
+            if (id) {
+              triedPaths.push("v2.sorobanMeta.returnValue → contract ID");
+              return id;
+            }
+          }
+        } catch {}
+
+        try {
+          const txEvents = sorobanMeta.events?.() ?? [];
+          for (const txEvent of txEvents) {
+            const contractEvent = txEvent.event?.();
+            if (!contractEvent) continue;
+            const contractIdHash = contractEvent.contractId?.();
+            if (contractIdHash) {
+              const id = hashToStrkey(contractIdHash);
+              if (id) {
+                triedPaths.push("v2.sorobanMeta.events[].contractId → StrKey");
+                return id;
+              }
+            }
+          }
+        } catch {}
+      }
+    }
+  } catch {
+    // not v2 — continue
+  }
+
+  // ─── Try v1 (very old format — just operations + changes) ──
+  try {
+    const v1 = meta.v1?.();
+    if (v1) {
+      // v1 has changes — scan for LEDGER_ENTRY_CREATED with contract entries
+      const changes = v1.changes?.() ?? [];
+      for (const change of changes) {
+        try {
+          // LEDGER_ENTRY_CREATED has a created() method returning LedgerEntry
+          const created = change.created?.();
+          if (!created) continue;
+          // Check if it's a ContractCode entry — its key contains the contract hash
+          const data = created.data?.();
+          if (data && data.contractCode) {
+            const contractHash = data.contractCode().hash?.();
+            if (contractHash) {
+              const id = hashToStrkey(contractHash);
+              if (id) {
+                triedPaths.push("v1.changes[].created.contractCode.hash → StrKey");
+                return id;
+              }
+            }
+          }
+        } catch {}
+      }
+    }
+  } catch {}
+
+  return undefined;
 }
 
 /**

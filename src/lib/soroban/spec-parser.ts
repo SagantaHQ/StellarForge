@@ -19,6 +19,13 @@ export interface ContractFunction {
   returnType: string;
   /** Whether this is a constructor (called once on deploy) */
   isConstructor: boolean;
+  /**
+   * Whether this function is read-only (doesn't modify contract state).
+   * Heuristic: if the function body doesn't contain storage().set(),
+   * storage().persistent().set(), or storage().instance().set(), we
+   * treat it as read-only. Used to show "Query" vs "Transact" buttons.
+   */
+  isReadonly: boolean;
 }
 
 /**
@@ -27,13 +34,17 @@ export interface ContractFunction {
  * Looks for patterns like:
  *   pub fn greet(env: Env, name: String) -> String { ... }
  *   pub fn __constructor(env: Env) { ... }
+ *
+ * Also extracts the function body (up to the matching closing brace) to
+ * detect read-only functions (those that don't call storage().set()).
  */
 export function parseContractSpec(source: string): ContractFunction[] {
   const functions: ContractFunction[] = [];
 
   // Match: pub fn <name>(<args>) -> <return_type> {
   // or:    pub fn <name>(<args>) {
-  const fnRegex = /pub\s+fn\s+(\w+)\s*\(([^)]*)\)\s*(?:->\s*([^{]+?))?\s*\{/g;
+  // Capture group 4 = everything after the opening brace (for body extraction)
+  const fnRegex = /pub\s+fn\s+(\w+)\s*\(([^)]*)\)\s*(?:->\s*([^{]+?))?\s*\{([\s\S]*?^\s*\})/gm;
   let match: RegExpExecArray | null;
 
   while ((match = fnRegex.exec(source)) !== null) {
@@ -60,11 +71,23 @@ export function parseContractSpec(source: string): ContractFunction[] {
       if (current.trim()) args.push(parseArg(current.trim()));
     }
 
+    // Extract the function body to detect read-only-ness
+    // match[4] is everything between { and the matching }
+    const body = match[4] ?? "";
+
+    // Read-only heuristic: if the body doesn't contain storage write
+    // operations, it's likely a view/read function.
+    // (Checks for .set(, .remove(, .extend( — all storage mutators)
+    const isReadonly =
+      !/\.storage\(\)\.(?:instance|persistent|temporary)\(\)\.(?:set|remove|extend)\s*\(/.test(body) &&
+      !/\.set\s*\(\s*&/.test(body); // catch env.storage().instance().set(&...)
+
     functions.push({
       name,
       args,
       returnType: returnType.trim(),
       isConstructor: name === "__constructor",
+      isReadonly: isReadonly && name !== "__constructor",
     });
   }
 

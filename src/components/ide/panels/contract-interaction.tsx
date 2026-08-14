@@ -40,6 +40,16 @@ export function ContractInteractionPanel({
   const [argValues, setArgValues] = useState<Record<string, Record<string, string>>>({});
   const [invokeStates, setInvokeStates] = useState<Record<string, InvokeState>>({});
 
+  // Manual contract ID entry — used when the deploy succeeded but contract
+  // ID extraction failed on the server. The user pastes the contract ID
+  // they found on the explorer.
+  const [manualContractId, setManualContractId] = useState("");
+  const [manualError, setManualError] = useState<string | null>(null);
+
+  // Effective contract ID: use the prop if provided, otherwise use the
+  // manually-entered value (if it looks valid)
+  const effectiveContractId = contractId || (manualContractId.startsWith("C") && manualContractId.length === 56 ? manualContractId : undefined);
+
   // Find the active Rust file and parse its contract spec
   const functions = useMemo(() => {
     const rustFile = findFile(tree, "src/lib.rs");
@@ -47,13 +57,54 @@ export function ContractInteractionPanel({
     return parseContractSpec(rustFile.content);
   }, [tree]);
 
-  if (!contractId) {
+  // No contract ID available (neither from prop nor manual entry) — show
+  // a manual-entry form so the user can paste the contract ID from the
+  // explorer. This handles the case where the deploy succeeded but the
+  // server couldn't auto-extract the contract ID.
+  if (!effectiveContractId) {
     return (
-      <div className="p-3 text-center">
-        <FunctionSquare size={20} strokeWidth={1.5} className="mx-auto mb-2 text-[var(--text-muted)]" />
-        <p className="text-xs text-[var(--text-muted)]">
-          Deploy a contract first to see the interaction panel.
-        </p>
+      <div className="border-t border-[var(--border-subtle)] p-3 space-y-2">
+        <div className="text-[10px] uppercase tracking-wide text-[var(--text-muted)] mb-1">
+          Interact with deployed contract
+        </div>
+        <div className="rounded-md border border-[var(--status-warning)]/30 bg-[color-mix(in_srgb,var(--status-warning)_6%,transparent)] p-2.5 space-y-2">
+          <div className="flex items-start gap-2 text-[11px] text-[var(--text-secondary)]">
+            <AlertCircle size={12} strokeWidth={1.75} className="text-[var(--status-warning)] shrink-0 mt-0.5" />
+            <div>
+              <div className="font-medium text-[var(--text-primary)] mb-0.5">
+                Contract ID not auto-extracted
+              </div>
+              <div className="text-[var(--text-muted)]">
+                The deploy succeeded but we couldn&apos;t auto-extract the contract ID.
+                Find it on the explorer (link above) and paste it here to interact.
+              </div>
+            </div>
+          </div>
+          <div>
+            <label className="text-[10px] font-mono text-[var(--text-secondary)] mb-0.5 block">
+              Contract ID
+            </label>
+            <input
+              value={manualContractId}
+              onChange={(e) => {
+                setManualContractId(e.target.value.trim());
+                setManualError(null);
+              }}
+              placeholder="C…"
+              className="w-full rounded border border-[var(--border-subtle)] bg-[var(--surface-panel)] px-2 py-1 text-[11px] font-mono text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
+              spellCheck={false}
+              autoComplete="off"
+            />
+            {manualError && (
+              <div className="text-[10px] text-[var(--status-error)] mt-1">{manualError}</div>
+            )}
+            {manualContractId && !effectiveContractId && (
+              <div className="text-[10px] text-[var(--text-muted)] mt-1">
+                Enter a valid 56-character contract ID starting with &quot;C&quot;
+              </div>
+            )}
+          </div>
+        </div>
       </div>
     );
   }
@@ -134,7 +185,7 @@ export function ContractInteractionPanel({
    * Uses /api/contracts/invoke?mode=read
    */
   async function handleQuery(fn: ContractFunction) {
-    if (!contractId) return;
+    if (!effectiveContractId) return;
     setInvokeState(fn.name, { loading: true, error: undefined, result: undefined });
 
     try {
@@ -148,7 +199,7 @@ export function ContractInteractionPanel({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          contractId,
+          effectiveContractId,
           network,
           function: fn.name,
           args,
@@ -184,7 +235,7 @@ export function ContractInteractionPanel({
    * via appkit.signTransaction, then submits via /api/contracts/submit.
    */
   async function handleTransact(fn: ContractFunction) {
-    if (!contractId) return;
+    if (!effectiveContractId) return;
 
     if (!profile?.address || !walletConnected) {
       setInvokeState(fn.name, {
@@ -216,7 +267,7 @@ export function ContractInteractionPanel({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          contractId,
+          effectiveContractId,
           network,
           function: fn.name,
           args,
@@ -322,6 +373,21 @@ export function ContractInteractionPanel({
         <div className="text-[10px] uppercase tracking-wide text-[var(--text-muted)] mb-1">
           Interact with deployed contract
         </div>
+        {/* Contract ID with copy button */}
+        <div className="flex items-center gap-1.5 mb-1.5">
+          <code className="flex-1 text-[11px] font-mono text-[var(--text-primary)] truncate" title={effectiveContractId}>
+            {effectiveContractId}
+          </code>
+          <button
+            onClick={() => {
+              navigator.clipboard.writeText(effectiveContractId);
+            }}
+            className="shrink-0 text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+            aria-label="Copy contract ID"
+          >
+            <Copy size={11} strokeWidth={1.75} />
+          </button>
+        </div>
         <div className="text-[11px] text-[var(--text-secondary)]">
           <span className="text-[var(--text-muted)]">Network:</span>{" "}
           <span className="font-medium capitalize">{network}</span>
@@ -375,13 +441,23 @@ function FunctionInvoker({
         onClick={() => setExpanded((v) => !v)}
         className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-[var(--surface-hover)] transition-colors"
       >
-        <FunctionSquare size={11} strokeWidth={1.75} className="text-[var(--accent)] shrink-0" />
+        <FunctionSquare size={11} strokeWidth={1.75} className={fn.isReadonly ? "text-[var(--status-info)]" : "text-[var(--accent)]"} shrink-0 />
         <span className="text-[12px] font-mono font-medium text-[var(--text-primary)]">
           {fn.name}
         </span>
         {fn.isConstructor && (
           <span className="rounded bg-[var(--accent-subtle)] px-1 text-[9px] text-[var(--accent)]">
             constructor
+          </span>
+        )}
+        {/* Read-only / Write badge — shows whether the function modifies state */}
+        {fn.isReadonly ? (
+          <span className="rounded bg-[var(--status-info)]/15 px-1 text-[9px] text-[var(--status-info)]">
+            read
+          </span>
+        ) : (
+          <span className="rounded bg-[var(--accent)]/15 px-1 text-[9px] text-[var(--accent)]">
+            write
           </span>
         )}
         <span className="ml-auto text-[10px] font-mono text-[var(--text-muted)]">
@@ -411,21 +487,28 @@ function FunctionInvoker({
             ))
           )}
 
-          {/* Two action buttons: Query (read/simulate) + Transact (write/sign) */}
+          {/* Action buttons — read-only functions show only "Query";
+              write functions show both "Query" + "Transact" */}
           <div className="flex gap-1.5">
             <Button
               size="sm"
               onClick={onQuery}
               disabled={loading}
               className="flex-1 h-7 gap-1.5 bg-[var(--surface-raised)] hover:bg-[var(--surface-hover)] border border-[var(--border-subtle)] text-[var(--text-primary)] text-[11px] disabled:opacity-50"
-              title="Read-only — simulate the call without submitting a transaction"
+              title={fn.isReadonly
+                ? "Read-only function — simulate the call (free, no transaction)"
+                : "Simulate the call without submitting a transaction (read-only)"}
             >
               <Eye size={10} strokeWidth={1.75} />
               {loading && !pendingSign ? "Querying…" : "Query"}
             </Button>
-            <Button
-              size="sm"
-              onClick={onTransact}
+            {/* Only show the Transact button for write functions —
+                read-only functions don't need a transaction (they don't
+                modify state, so simulating is equivalent to executing) */}
+            {!fn.isReadonly && (
+              <Button
+                size="sm"
+                onClick={onTransact}
               disabled={loading}
               className="flex-1 h-7 gap-1.5 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)] text-[11px] disabled:opacity-50"
               title="Write — submit a transaction (requires wallet signing)"
@@ -433,6 +516,7 @@ function FunctionInvoker({
               {loading && pendingSign ? <AlertCircle size={10} strokeWidth={1.75} /> : <Send size={10} strokeWidth={1.75} />}
               {loading && pendingSign ? "Sign…" : loading ? "Submitting…" : "Transact"}
             </Button>
+            )}
           </div>
 
           {/* Pending-sign message */}

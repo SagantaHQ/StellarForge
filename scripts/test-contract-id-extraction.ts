@@ -116,10 +116,12 @@ const submitCode = fs.readFileSync(
   "utf8"
 );
 const codeChecks = [
-  ["uses brute-force CONTRACT_ID_RE regex", submitCode.includes("CONTRACT_ID_RE")],
-  ["validates via Address constructor", submitCode.includes("new Address(candidate)")],
-  ["searches resultXdr + resultMetaXdr + envelopeXdr", submitCode.includes('"resultXdr", "resultMetaXdr", "envelopeXdr"')],
-  ["decodes base64 XDR before searching", submitCode.includes('Buffer.from(val, "base64")')],
+  ["uses structured XDR walk (not brute-force regex)", submitCode.includes("tryExtractFromTransactionMeta")],
+  ["uses StrKey.encodeContract for hash→strkey conversion", submitCode.includes("StrKey.encodeContract")],
+  ["uses Address.fromScVal for ScVal→strkey conversion", submitCode.includes("Address.fromScVal")],
+  ["walks TransactionMeta v3.sorobanMeta.returnValue", submitCode.includes("sorobanMeta.returnValue")],
+  ["walks TransactionMeta v3.sorobanMeta.events[].contractId", submitCode.includes("contractEvent.contractId")],
+  ["walks TransactionResult results[0].tr.invokeHostFunctionResult", submitCode.includes("invokeHostFunctionResult")],
   ["returns debug info on failure", submitCode.includes("triedPaths")],
   ["includes rawFields in response", submitCode.includes("rawFields")],
   ["surfaces extractionFailed flag to client", submitCode.includes("extractionFailed: true")],

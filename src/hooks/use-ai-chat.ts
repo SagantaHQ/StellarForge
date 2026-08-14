@@ -5,6 +5,7 @@ import { PROVIDERS, type ChatMessage, type ChatResponse, type ProviderId } from 
 import { useAIKeysStore } from "@/stores/ai-keys-store";
 import { assembleContext, parseDiffFromResponse, type ParsedDiff } from "@/lib/ai/context-assembler";
 import { useFileSystemStore } from "@/stores/file-system-store";
+import { flattenFiles } from "@/lib/soroban/sample-project";
 
 interface UseAIChatOptions {
   scope?: "smart-contract" | "ui-frontend" | "general" | "custom";
@@ -121,8 +122,9 @@ export function useAIChat(opts: UseAIChatOptions = {}) {
           config.baseUrl // for custom-openai
         );
 
-        // Parse any diffs from the response
-        const diffs = parseDiffFromResponse(response.content);
+        // Parse any diffs from the response (with known files for fuzzy matching)
+        const allFilePaths = flattenFiles(tree).map((f) => f.path);
+        const diffs = parseDiffFromResponse(response.content, allFilePaths);
 
         setState((s) => ({
           ...s,

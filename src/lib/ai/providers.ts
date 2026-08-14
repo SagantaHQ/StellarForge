@@ -101,9 +101,10 @@ async function openaiCompatibleChat({
     model,
     messages: messages.map((m) => ({ role: m.role, content: m.content })),
     temperature: opts?.temperature ?? 0.7,
-    max_tokens: opts?.maxTokens,
-    stop: opts?.stop,
   };
+  // Only include max_tokens + stop if they're set (some providers reject null/undefined)
+  if (opts?.maxTokens) body.max_tokens = opts.maxTokens;
+  if (opts?.stop) body.stop = opts.stop;
 
   const res = await fetch(url, {
     method: "POST",

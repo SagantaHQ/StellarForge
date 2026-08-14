@@ -19,6 +19,8 @@ import {
   RotateCcw,
   Wrench,
   Copy,
+  Wand2,
+  Info,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -316,6 +318,72 @@ Do NOT just explain the error — output the actual fix as a diff.`;
     lastSentRef.current = { message: userInput };
   }
 
+  /**
+   * "Ask agent to format as diff" — sends a follow-up message asking the
+   * agent to re-output its previous response as a ```diff block.
+   *
+   * Used when the agent's last response discussed code (had fenced code
+   * blocks) but didn't produce a parseable diff. Without this affordance,
+   * the user is left staring at a long analysis with no Accept button and
+   * no obvious way to proceed.
+   *
+   * The follow-up message is concise + forces the agent to:
+   *   - NOT re-analyze (the analysis is already in the chat history)
+   *   - Output ONLY a ```diff block
+   *   - Use the exact file paths from the project file list
+   */
+  function handleAskForDiff() {
+    if (loading || !activeTab) return;
+
+    const followUp = `Your previous response didn't include a \`\`\`diff block I could apply. Please re-output your proposed fix as a GitHub-style unified diff block (using \`\`\`diff fences with --- /+++ / @@ markers). Don't repeat your analysis — just the diff. Use the exact file path from the project file list.`;
+
+    const userMsg = {
+      role: "user" as const,
+      content: followUp,
+      timestamp: Date.now(),
+    };
+    setTabs((prev) =>
+      prev.map((t) =>
+        t.id === activeTabId
+          ? { ...t, messages: [...t.messages, userMsg] }
+          : t
+      )
+    );
+
+    // Build history (last 10 messages — includes the agent's prose-only
+    // response, so the agent sees what it said and can convert it)
+    const history: ChatMessage[] = activeTab.messages.slice(-10).map((m) => ({
+      role: m.role === "system" ? "system" : m.role,
+      content: m.content,
+    }));
+
+    sendMessage(followUp, history).then(({ response, diffs }) => {
+      if (response) {
+        setTabs((prev) =>
+          prev.map((t) =>
+            t.id === activeTabId
+              ? {
+                  ...t,
+                  messages: [
+                    ...t.messages,
+                    {
+                      role: "assistant" as const,
+                      content: response.content,
+                      timestamp: Date.now(),
+                    },
+                  ],
+                  pendingDiffs: diffs,
+                  diffAccepted: false,
+                }
+              : t
+          )
+        );
+      }
+    });
+
+    lastSentRef.current = { message: followUp };
+  }
+
   // Retry the last sent message when the AI request failed.
   // Re-sends the same message + errorContext (if any) to the provider.
   function handleRetry() {
@@ -603,6 +671,49 @@ Do NOT just explain the error — output the actual fix as a diff.`;
             onToggleAllowAlways={setAllowAlways}
           />
         ))}
+
+        {/* "No diff detected" affordance — shown when the agent's last
+            response discussed code (had fenced code blocks) but didn't
+            produce a parseable diff. Without this, the user is left
+            staring at a long analysis with no Accept button and no
+            obvious way to proceed.
+
+            Conditions:
+              - No pending diffs (otherwise the Accept cards handle it)
+              - Last message is from the assistant (not user/system)
+              - Not currently loading
+              - Last assistant message has code blocks but no diffs
+              - No diff was accepted in this session (don't show after
+                a successful apply — the "Build to verify" button takes over) */}
+        {activeTab.pendingDiffs.length === 0 &&
+         !diffAcceptedRef.current &&
+         activeTab.messages.length > 0 &&
+         activeTab.messages[activeTab.messages.length - 1].role === "assistant" &&
+         !loading &&
+         hasCodeButNoDiff(activeTab.messages[activeTab.messages.length - 1].content) && (
+          <div className="rounded-md border border-[var(--status-warning)]/40 bg-[color-mix(in_srgb,var(--status-warning)_6%,var(--surface-panel))] p-2.5 space-y-2">
+            <div className="flex items-start gap-2 text-[11px] text-[var(--text-secondary)]">
+              <Info size={12} strokeWidth={1.75} className="text-[var(--status-warning)] shrink-0 mt-0.5" />
+              <div>
+                <div className="font-medium text-[var(--text-primary)] mb-0.5">
+                  No applyable diff detected
+                </div>
+                <div className="text-[var(--text-muted)]">
+                  The agent discussed code but didn't output a <code className="font-mono text-[10px] bg-[var(--surface-sunken)] px-1 rounded">```diff</code> block. Click below to ask it to reformat its fix as a diff you can accept.
+                </div>
+              </div>
+            </div>
+            <Button
+              size="sm"
+              onClick={handleAskForDiff}
+              disabled={loading}
+              className="w-full h-7 gap-1.5 bg-[var(--status-warning)] hover:bg-[var(--status-warning)]/90 text-white text-[11px] disabled:opacity-50"
+            >
+              <Wand2 size={10} strokeWidth={1.75} />
+              {loading ? "Asking…" : "Ask agent to format as diff"}
+            </Button>
+          </div>
+        )}
 
         {/* Build button — ONLY shown after the user accepts a diff (actual file
             change). Not shown for assistant messages that didn't include a diff,
@@ -1157,6 +1268,34 @@ function ProviderPicker({ onClose, onOpenSettings }: { onClose: () => void; onOp
  *   - Insert-only hunks (no context, no deletions) apply safely.
  *   - Skip failing hunks instead of corrupting the file.
  */
+
+/**
+ * Detect when an agent response discussed code (has fenced code blocks) but
+ * didn't produce a parseable diff. This is a common failure mode where the
+ * LLM rambles in analysis or shows the full source in a ```rust block but
+ * never outputs a ```diff block.
+ *
+ * Returns true when:
+ *   - The response has at least one fenced code block
+ *   - parseDiffFromResponse returns 0 diffs (no ```diff block, no raw-text
+ *     diff detected)
+ *
+ * Used to surface a "Re-ask agent to format as diff" affordance so the
+ * user isn't left wondering why no Accept button appeared.
+ */
+function hasCodeButNoDiff(content: string): boolean {
+  // Quick check: any fenced code block at all?
+  // Match ``` or ~~~ opening, optional language, then content.
+  // (Same fence regex used by the parser — kept simple here for speed.)
+  const hasFence = /(?:^|\n)(?:`{3}|~{3})[a-zA-Z0-9_+-]*[ \t]*\n[\s\S]/.test(content);
+  if (!hasFence) return false;
+
+  // Check if the parser found any diffs in this content.
+  // (Use a stub knownFiles — we only care about the count, not path matching.)
+  const diffs = parseDiffFromResponse(content, []);
+  return diffs.length === 0;
+}
+
 function applyDiffToFile(content: string, diff: ParsedDiff): string {
   const lines = content.split("\n");
   // Process hunks in REVERSE order of oldStart so earlier hunks' line

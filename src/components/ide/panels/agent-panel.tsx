@@ -43,6 +43,9 @@ interface AgentTab {
   messages: { role: "user" | "assistant" | "system"; content: string; timestamp: number }[];
   pendingDiffs: ParsedDiff[];
   unread?: boolean;
+  /** True if a diff was accepted in the last assistant response.
+   * Used to show the "Build to verify" button only after an actual file change. */
+  diffAccepted?: boolean;
 }
 
 export function AgentPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
@@ -210,6 +213,7 @@ Do NOT just explain the error — output the actual fix as a diff.`;
                     response.content,
                     flattenFiles(useFileSystemStore.getState().tree).map((f) => f.path)
                   ),
+                  diffAccepted: false, // reset — only set true when user accepts
                 }
               : t
           )
@@ -274,6 +278,7 @@ Do NOT just explain the error — output the actual fix as a diff.`;
                     },
                   ],
                   pendingDiffs: diffs,
+                  diffAccepted: false, // reset — only set true when user accepts
                 }
               : t
           )
@@ -405,7 +410,11 @@ Do NOT just explain the error — output the actual fix as a diff.`;
     setTabs((prev) =>
       prev.map((t) =>
         t.id === activeTabId
-          ? { ...t, pendingDiffs: t.pendingDiffs.filter((d) => d !== diff) }
+          ? {
+              ...t,
+              pendingDiffs: t.pendingDiffs.filter((d) => d !== diff),
+              diffAccepted: true, // a file was actually changed — show "Build to verify"
+            }
           : t
       )
     );
@@ -559,12 +568,11 @@ Do NOT just explain the error — output the actual fix as a diff.`;
           />
         ))}
 
-        {/* Build button — shown when there are no pending diffs but the last
-            message was from the assistant (e.g. after accepting a fix).
-            Lets the user manually trigger a build to check if the fix compiled.
-            We don't auto-build because cargo build + dev server can OOM the
-            4GB sandbox (see handleAcceptDiff comment). */}
+        {/* Build button — ONLY shown after the user accepts a diff (actual file
+            change). Not shown for assistant messages that didn't include a diff,
+            or when there are still pending diffs waiting for approval. */}
         {activeTab.pendingDiffs.length === 0 &&
+         activeTab.diffAccepted &&
          activeTab.messages.length > 0 &&
          activeTab.messages[activeTab.messages.length - 1].role === "assistant" &&
          !loading && (

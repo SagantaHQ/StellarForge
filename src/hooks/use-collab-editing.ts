@@ -30,32 +30,39 @@ export function useCollabEditing({ editor, model, filePath }: UseCollabEditingOp
   const connected = useCollabStore((s) => s.connected);
   const ydoc = useCollabStore((s) => s.ydoc);
   const provider = useCollabStore((s) => s.provider);
-  const profile = useProfileStore((s) => s.profile);
+  // Select primitive fields to avoid unnecessary re-renders
+  const username = useProfileStore((s) => s.profile?.username);
+  const accentColor = useProfileStore((s) => s.accentColor);
 
   useEffect(() => {
     if (!connected || !ydoc || !provider || !editor || !model) {
-      // Clean up any existing binding
       if (bindingRef.current) {
         bindingRef.current.destroy();
         bindingRef.current = null;
       }
-      // Use a microtask to avoid setState during effect
-      queueMicrotask(() => setIsCollabActive(false));
+      setIsCollabActive(false);
       return;
     }
 
     // Get or create the Y.Text for this file
     const ytext = ydoc.getText(`file:${filePath}`);
 
-    // Create the binding — this syncs Monaco edits to Y.Text and vice versa
+    // If the Y.Text is empty, initialize it with the current file content
+    if (ytext.toString().length === 0) {
+      ytext.insert(0, model.getValue());
+    }
+
+    // Create the binding — syncs Monaco edits to Y.Text and vice versa
+    // Cast awareness to any since MonacoBinding expects y-protocols/Awareness
+    // but our SimpleAwareness has the same interface
     const binding = new MonacoBinding(
       ytext,
       model,
       new Set([editor]),
-      provider.awareness
+      provider.awareness as unknown as import("y-protocols/awareness").Awareness
     );
     bindingRef.current = binding;
-    queueMicrotask(() => setIsCollabActive(true));
+    setIsCollabActive(true);
 
     // Update presence with cursor position on selection change
     const disposable = editor.onDidChangeCursorPosition((e) => {
@@ -65,11 +72,11 @@ export function useCollabEditing({ editor, model, filePath }: UseCollabEditingOp
       });
     });
 
-    // Also set the user info in awareness (in case it wasn't set yet)
-    if (profile) {
+    // Set the user info in awareness
+    if (username) {
       provider.awareness.setLocalStateField("user", {
-        name: profile.username,
-        color: useProfileStore.getState().accentColor,
+        name: username,
+        color: accentColor,
       });
     }
 
@@ -77,9 +84,9 @@ export function useCollabEditing({ editor, model, filePath }: UseCollabEditingOp
       binding.destroy();
       disposable.dispose();
       bindingRef.current = null;
-      queueMicrotask(() => setIsCollabActive(false));
+      setIsCollabActive(false);
     };
-  }, [connected, ydoc, provider, editor, model, filePath, profile]);
+  }, [connected, ydoc, provider, editor, model, filePath, username, accentColor]);
 
   return { isCollabActive };
 }

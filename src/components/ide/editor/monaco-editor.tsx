@@ -8,6 +8,7 @@ import { buildMonacoTheme } from "@/lib/themes/mappers";
 import { registerSorobanLanguage, registerCompletionProvider } from "./use-monaco";
 import { useAttributionStore } from "@/stores/attribution-store";
 import { lintSorobanSecurity, lintResultsToMarkers } from "@/lib/soroban/security-linter";
+import { useCollabEditing } from "@/hooks/use-collab-editing";
 
 interface MonacoEditorProps {
   path: string;
@@ -363,6 +364,11 @@ export function MonacoEditor({
 
     onMount?.(editor, monaco);
   };
+
+  // Wire up collaborative editing (Yjs + y-monaco) when a collab session is active
+  const collabEditor = editorRef.current;
+  const collabModel = collabEditor?.getModel() ?? null;
+  useCollabEditing({ editor: collabEditor, model: collabModel, filePath: path });
 
   // Live theme switching
   useEffect(() => {

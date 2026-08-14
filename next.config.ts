@@ -95,6 +95,7 @@ const nextConfig: NextConfig = {
   },
   async rewrites() {
     const lspUrl = process.env.LSP_GATEWAY_URL || "http://localhost:3099";
+    const collabUrl = process.env.COLLAB_WS_URL || "http://localhost:3002";
     return [
       {
         source: "/lsp",
@@ -103,6 +104,11 @@ const nextConfig: NextConfig = {
       {
         source: "/workspace/:path*",
         destination: `${lspUrl}/workspace/:path*`,
+      },
+      // WebSocket collaboration server proxy
+      {
+        source: "/collab/:path*",
+        destination: `${collabUrl}/:path*`,
       },
     ];
   },

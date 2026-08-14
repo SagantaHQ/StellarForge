@@ -31,14 +31,33 @@ export const dynamic = "force-dynamic";
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { projectId, ownerId, mode, role, guestUsername } = body;
+    const { projectId, mode, role, guestUsername, walletAddress } = body;
 
-    if (!projectId || !ownerId || !mode || !role) {
+    if (!projectId || !mode || !role) {
       return NextResponse.json(
-        { error: "Missing required fields: projectId, ownerId, mode, role" },
+        { error: "Missing required fields: projectId, mode, role" },
         { status: 400 }
       );
     }
+
+    // SECURITY: Derive ownerId from the wallet address (not client-supplied)
+    // The client sends walletAddress; we look up the server user ID.
+    // This prevents privilege escalation (client sending another user's ownerId).
+    if (!walletAddress) {
+      return NextResponse.json(
+        { error: "walletAddress is required" },
+        { status: 400 }
+      );
+    }
+
+    const user = await db.user.findUnique({
+      where: { walletAddress },
+      select: { id: true },
+    });
+    if (!user) {
+      return NextResponse.json({ error: "User not found" }, { status: 404 });
+    }
+    const ownerId = user.id;
 
     if (mode !== "public" && mode !== "private") {
       return NextResponse.json({ error: "Invalid mode. Use 'public' or 'private'." }, { status: 400 });

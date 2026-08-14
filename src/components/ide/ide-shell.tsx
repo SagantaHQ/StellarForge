@@ -342,7 +342,7 @@ export function IdeShell() {
         projectName={activeProject?.name ?? "No project"}
         branch="main"
         network={network}
-        collabUsers={[]}
+        collabUsers={useCollabStore((s) => s.users)}
         profile={profile}
         building={buildStatus === "building" && !buildSilent}
         hasBuilt={buildStatus === "success"}
@@ -350,6 +350,15 @@ export function IdeShell() {
           if (!useProfileStore.getState().isLoggedIn()) {
             setProfileOpen(true);
             return;
+          }
+          // Start a collab session if not already connected
+          if (!useCollabStore.getState().connected && profile) {
+            const roomId = window.location.hash.match(/room=([a-z0-9]+)/)?.[1]
+              ?? Math.random().toString(36).substring(2, 10);
+            useCollabStore.getState().joinSession(roomId, {
+              name: profile.username || "Anonymous",
+              color: useProfileStore.getState().accentColor,
+            });
           }
           setShareOpen(true);
         }}

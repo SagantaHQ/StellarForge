@@ -83,29 +83,17 @@ services:
 
   # --- WebSocket Collaboration Server ---
   # (§5 — Yjs WebSocket provider for cross-device realtime editing)
+  # Uses the mini-services/collab-server/ implementation (standard y-websocket protocol)
   collab:
-    image: node:22-slim
-    working_dir: /app
-    command: >
-      sh -c "
-        npm install y-websocket &&
-        node -e \"
-          const { WebSocketServer } = require('y-websocket');
-          const wss = new WebSocketServer({ port: 3001 });
-          console.log('Yjs WebSocket server running on port 3001');
-          wss.on('connection', (conn, req) => {
-            const url = new URL(req.url, 'http://localhost');
-            const room = url.searchParams.get('room') || 'default';
-            conn.on('message', (msg) => { /* broadcast to room */ });
-          });
-        \"
-      "
+    build:
+      context: ./mini-services/collab-server
+      dockerfile: Dockerfile
     ports:
-      - "3001:3001"
+      - "3002:3002"
     environment:
-      - PORT=3001
+      - PORT=3002
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3001/"]
+      test: ["CMD-SHELL", "nc -z localhost 3002 || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 3

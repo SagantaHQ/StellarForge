@@ -7,26 +7,30 @@ import type * as Monaco from "monaco-editor";
  * AI Diff Parser — extracts GitHub-style unified diffs from AI responses
  * and converts them into Monaco editor edit operations.
  *
- * Pipeline (following ChatGPT's recommendation for handling LLM uncertainty):
+ * Pipeline (primary path uses custom delimiters, fallback uses Markdown):
  *
  *   ┌─────────────────────┐
  *   │  LLM response text  │
  *   └──────────┬──────────┘
  *              │
  *              ▼
- *   ┌──────────────────────────┐
- *   │ Markdown parser (remark) │   ← reliably identifies fenced code blocks
- *   └──────────┬───────────────┘
+ *   ┌─────────────────────────────────────────┐
+ *   │ Stage 1: Custom delimiter extraction    │ ← PRIMARY — simplest + most reliable
+ *   │ Look for DIFF_START_DELIM + content +   │   (the system prompt instructs the
+ *   │ DIFF_END_DELIM. Extract content.        │    model to use these delimiters)
+ *   └──────────┬─────────────────────────────┘
  *              │
  *              ▼
  *   ┌──────────────────────────────────────┐
- *   │ Validation: try parsePatch() on each │ ← accept only if it parses
- *   └──────────┬───────────────────────────┘   AND returns ≥1 hunk
+ *   │ Stage 2: Markdown parser (remark)    │ ← FALLBACK — handles old chat
+ *   │ Walk AST for fenced code blocks.      │   history + models that ignored
+ *   │ Validation via parsePatch().          │   the delimiter instruction
+ *   └──────────┬───────────────────────────┘
  *              │
  *              ▼
  *   ┌─────────────────────────────────────┐
- *   │ Raw-text fallback (if no fenced     │ ← scan prose for unfenced
- *   │ diff was successfully parsed)       │   `diff --git` / `--- /+++`
+ *   │ Stage 3: Raw-text fallback          │ ← last resort — scans prose
+ *   │ (only if no diff was parsed above)  │   for unfenced `diff --git`
  *   └──────────┬──────────────────────────┘
  *              │
  *              ▼
@@ -34,19 +38,52 @@ import type * as Monaco from "monaco-editor";
  *   │ Merge by filePath       │ ← N diff blocks → 1 AIDiff per file
  *   └─────────────────────────┘
  *
- * Why this matters:
- *   - Markdown parsing handles all fence variants (```, ~~~, trailing
- *     whitespace, missing language tag, missing closing fence, nested
- *     fences, CRLF) — no custom regex can match the coverage of a real
- *     CommonMark parser.
- *   - parsePatch() is the validation gate: it doesn't matter what the
- *     fence language says ('diff', 'patch', 'rust', or empty) — if the
- *     content parses as a unified diff with hunks, we accept it. If it
- *     doesn't parse, we reject it. No more false positives on plain code
- *     blocks that happen to contain `---` comments.
- *   - The raw-text fallback catches the "AI didn't use a code fence"
- *     case (some models just emit the diff inline in prose).
+ * Why custom delimiters are the primary path:
+ *   - The model EXPLICITLY marks "this is the diff" vs "this is analysis"
+ *     — no ambiguity about whether a ```rust block is a diff or just code
+ *   - No fence-language ambiguity (`diff` vs `Diff` vs `patch` vs no-lang)
+ *   - No CRLF normalization / missing-close-fence tolerance needed
+ *   - Parser is trivial: find start, find end, extract — no regex
+ *   - This is the same approach used by GitHub Copilot, Continue.dev, Aider
+ *
+ * The Markdown + raw-text fallbacks are kept so old chat history (which
+ * used ```diff fences) still works, and so models that ignore the delimiter
+ * instruction still produce a parseable diff via the old path.
  */
+
+/**
+ * Custom delimiters for marking the start + end of a code/diff block.
+ *
+ * Why these specific strings:
+ *   - `>>` (arrows pointing right) at the start = "code coming IN here"
+ *   - `<<` (arrows pointing left) at the end = "code going OUT here"
+ *   - The `+` prefix makes them visually distinct + unlikely to appear
+ *     in normal code/prose (10 pluses is way more than anyone would type
+ *     by accident)
+ *   - Both delimiters are exactly the same length (24 chars) for symmetry
+ *
+ * The system prompt instructs the model to wrap every diff in these
+ * delimiters. The parser extracts whatever is between them — no fence
+ * regex, no parsePatch validation needed for extraction (validation still
+ * happens, but extraction is trivial).
+ *
+ * Example model output:
+ *
+ *   The error is caused by String::from_str not existing. Fix:
+ *
+ *   ++++++++++>>>>>>>>>>
+ *   --- a/src/lib.rs
+ *   ++++ b/src/lib.rs
+ *   @@ -10,3 +10,3 @@
+ *    context
+ *   -old line
+ *   +new line
+ *   <<<<<<<<<<++++++++++
+ *
+ *   Let me know if you need anything else.
+ */
+export const DIFF_START_DELIMITER = "++++++++++>>>>>>>>>>";
+export const DIFF_END_DELIMITER = "<<<<<<<<<<++++++++++";
 
 export interface AIDiff {
   filePath: string;
@@ -56,12 +93,13 @@ export interface AIDiff {
   isDeletedFile: boolean;
   /**
    * Provenance — where did this diff come from?
-   *   "fenced": extracted from a fenced code block in the Markdown response
-   *   "raw":    extracted from raw prose (no fence around it)
-   * Useful for debugging + telemetry — raw-source diffs are lower trust
-   * because they're more likely to include prose contamination.
+   *   "delimited": extracted via custom DIFF_START/END delimiters (PRIMARY)
+   *   "fenced":    extracted from a fenced code block in the Markdown response (FALLBACK)
+   *   "raw":       extracted from raw prose (no fence around it) (LAST RESORT)
+   * Useful for debugging + telemetry — delimited-source diffs are highest
+   * trust because the model explicitly marked them.
    */
-  source: "fenced" | "raw";
+  source: "delimited" | "fenced" | "raw";
 }
 
 // ============================================================
@@ -139,7 +177,7 @@ interface ParsedPatchResult {
   /** Raw text that was passed to parsePatch (for debugging + the `raw` field on AIDiff) */
   text: string;
   /** Source: where did this text come from? */
-  source: "fenced" | "raw";
+  source: "delimited" | "fenced" | "raw";
   /** Parsed patches (only present if ok=true) */
   patches: ReturnType<typeof parsePatch>;
 }
@@ -156,7 +194,7 @@ interface ParsedPatchResult {
  * it directly, but if the block contains multiple `diff --git` sections,
  * we split on them so each gets its own parsePatch call).
  */
-function tryParseAsDiff(text: string, source: "fenced" | "raw"): ParsedPatchResult[] {
+function tryParseAsDiff(text: string, source: "delimited" | "fenced" | "raw"): ParsedPatchResult[] {
   // Normalize whitespace: trim trailing whitespace per line + collapse
   // consecutive blank lines (LLMs sometimes add spurious blank lines that
   // confuse parsePatch's hunk body parsing).
@@ -342,6 +380,14 @@ function resolveFilePath(patch: ReturnType<typeof parsePatch>[number], knownFile
 function mergeByFilePath(parsed: ParsedPatchResult[], knownFiles?: string[]): AIDiff[] {
   const byPath = new Map<string, AIDiff>();
 
+  // Source priority for the merged AIDiff: delimited > fenced > raw.
+  // (If a file has diffs from multiple sources, the highest-trust source wins.)
+  const sourcePriority: Record<AIDiff["source"], number> = {
+    delimited: 3,
+    fenced: 2,
+    raw: 1,
+  };
+
   for (const result of parsed) {
     for (const patch of result.patches) {
       const filePath = resolveFilePath(patch, knownFiles);
@@ -359,9 +405,11 @@ function mergeByFilePath(parsed: ParsedPatchResult[], knownFiles?: string[]): AI
       if (existing) {
         existing.hunks.push(...newHunks);
         existing.raw += "\n\n" + result.text;
-        // Promote source from "raw" to "fenced" if we have at least one
-        // fenced contribution (fenced is more trustworthy).
-        if (result.source === "fenced") existing.source = "fenced";
+        // Promote source if this contribution is higher-trust than the
+        // existing one (e.g. a delimited contribution promotes a fenced one).
+        if (sourcePriority[result.source] > sourcePriority[existing.source]) {
+          existing.source = result.source;
+        }
         // Update create/delete flags
         if (!existing.isNewFile && isNewFile) existing.isNewFile = true;
         if (!existing.isDeletedFile && isDeletedFile) existing.isDeletedFile = true;
@@ -382,24 +430,120 @@ function mergeByFilePath(parsed: ParsedPatchResult[], knownFiles?: string[]): AI
 }
 
 // ============================================================
+// Stage 0: Custom-delimiter extraction (PRIMARY — simplest + most reliable)
+// ============================================================
+
+/**
+ * Extract diffs marked with custom DIFF_START_DELIMITER / DIFF_END_DELIMITER
+ * pairs. This is the PRIMARY extraction path — the system prompt instructs
+ * the model to wrap every diff in these delimiters.
+ *
+ * Why this is simpler + more reliable than Markdown fence extraction:
+ *   - No fence-language ambiguity (`diff` vs `Diff` vs `patch` vs no-lang)
+ *   - No CRLF normalization needed (we split on \n which handles \r\n too)
+ *   - No missing-close-fence tolerance needed (we scan to end of string
+ *     if no end delimiter is found)
+ *   - No Markdown AST overhead (just two indexOf() calls per block)
+ *   - The model EXPLICITLY marks "this is the diff" vs "this is analysis"
+ *
+ * Multiple delimiter pairs are supported — the model can emit one pair
+ * per file in a multi-file change. Each pair is parsed independently via
+ * tryParseAsDiff (which handles multi-section `diff --git` blocks too).
+ *
+ * Edge cases:
+ *   - Start delimiter with no end delimiter → extract to end of string
+ *     (the model may have been cut off mid-response)
+ *   - End delimiter with no start delimiter → ignored (likely a typo
+ *     or the model is showing the delimiter as an example)
+ *   - Empty content between delimiters → skipped (no diff to parse)
+ *   - Content that isn't a valid diff → tryParseAsDiff returns ok=false,
+ *     the block is silently dropped (no false positives)
+ */
+function extractDelimitedDiffs(text: string): ParsedPatchResult[] {
+  const results: ParsedPatchResult[] = [];
+
+  // Normalize CRLF → LF so the delimiter search works regardless of
+  // how the response was transported. (The delimiters themselves don't
+  // contain \r or \n, so this is just defensive.)
+  const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+
+  let searchFrom = 0;
+  while (true) {
+    const startIdx = normalized.indexOf(DIFF_START_DELIMITER, searchFrom);
+    if (startIdx === -1) break; // no more start delimiters
+
+    // Content starts AFTER the start delimiter (skip the delimiter itself
+    // + any trailing whitespace/newline on the same line)
+    const contentStart = startIdx + DIFF_START_DELIMITER.length;
+    // Skip a single trailing newline if present (common — the model puts
+    // the diff on the next line after the delimiter)
+    let contentBegin = contentStart;
+    if (normalized[contentBegin] === "\n") contentBegin++;
+    else if (normalized[contentBegin] === "\r" && normalized[contentBegin + 1] === "\n") contentBegin += 2;
+
+    // Find the matching end delimiter (search forward from content start)
+    let endIdx = normalized.indexOf(DIFF_END_DELIMITER, contentBegin);
+
+    let content: string;
+    if (endIdx === -1) {
+      // No end delimiter found — extract to end of string.
+      // (The model may have been cut off, or forgot to close the block.
+      // Better to try parsing what we have than to silently drop it.)
+      content = normalized.slice(contentBegin);
+      // Try to parse it — if it's a valid diff, great; if not, the user
+      // sees the "no diff detected" affordance and can ask the agent
+      // to retry.
+      const parsed = tryParseAsDiff(content, "delimited");
+      if (parsed.length > 0 && parsed.some((p) => p.ok)) {
+        results.push(...parsed.filter((p) => p.ok));
+      }
+      break; // no more delimiters to find
+    } else {
+      // End delimiter found — extract content between start + end.
+      // Trim trailing whitespace/newline from the content (the model
+      // often puts the end delimiter on its own line, so there's a \n
+      // right before it)
+      content = normalized.slice(contentBegin, endIdx).replace(/\s+$/, "");
+      const parsed = tryParseAsDiff(content, "delimited");
+      if (parsed.length > 0 && parsed.some((p) => p.ok)) {
+        results.push(...parsed.filter((p) => p.ok));
+      }
+      // Move search past this end delimiter for the next iteration
+      searchFrom = endIdx + DIFF_END_DELIMITER.length;
+    }
+  }
+
+  return results;
+}
+
+// ============================================================
 // Public entry point
 // ============================================================
 
 /**
  * Extracts and parses GitHub-style unified diffs from an AI response.
  *
- * Strategy (in order):
- *   1. Parse the response as Markdown (remark/CommonMark) to reliably
- *      identify all fenced code blocks — handles all fence variants
- *      (```, ~~~, no lang, trailing whitespace, missing close, CRLF).
- *   2. For each fenced block, try parsePatch() and accept it only if it
- *      parses AND returns ≥1 hunk. The fence language tag ('diff',
- *      'patch', 'rust', or empty) doesn't matter — content is the source
- *      of truth.
- *   3. If NO fenced diff was successfully parsed, fall back to scanning
- *      raw prose for unfenced `diff --git` / `--- /+++` patterns.
- *   4. Merge multiple diff blocks targeting the same file into a single
+ * Strategy (in order of priority):
+ *   0. PRIMARY: Look for custom DIFF_START_DELIMITER / DIFF_END_DELIMITER
+ *      pairs. The system prompt instructs the model to use these —
+ *      extraction is trivial (find start, find end, extract content).
+ *   1. FALLBACK: Parse the response as Markdown (remark/CommonMark) to
+ *      identify fenced code blocks. Handles old chat history + models
+ *      that ignored the delimiter instruction.
+ *   2. LAST RESORT: Scan raw prose for unfenced `diff --git` / `--- /+++`
+ *      patterns (some models emit the diff inline without any wrapping).
+ *   3. Merge multiple diff blocks targeting the same file into a single
  *      AIDiff with all hunks grouped (one Accept card per file).
+ *
+ * The delimited path is tried FIRST because:
+ *   - It's the highest-trust source (model explicitly marked the diff)
+ *   - It's the simplest + most reliable (no regex, no AST)
+ *   - If it succeeds, we don't need the Markdown/raw fallbacks
+ *
+ * The Markdown + raw-text fallbacks are kept so:
+ *   - Old chat history (which used ```diff fences) still works
+ *   - Models that ignore the delimiter instruction still produce a
+ *     parseable diff via the old path
  *
  * @param aiResponse The raw LLM response text
  * @param knownFiles  Project file paths — used to fuzzy-match LLM-claimed
@@ -409,7 +553,17 @@ function mergeByFilePath(parsed: ParsedPatchResult[], knownFiles?: string[]): AI
 export function extractAndParseDiffs(aiResponse: string, knownFiles?: string[]): AIDiff[] {
   if (!aiResponse || !aiResponse.trim()) return [];
 
-  // Stage 1: Markdown extraction
+  // Stage 0 (PRIMARY): Custom-delimiter extraction
+  const delimitedPatches = extractDelimitedDiffs(aiResponse);
+
+  // If delimited extraction found diffs, we still run the Markdown fallback
+  // + merge — the model might have used BOTH delimiters AND ```diff fences
+  // (e.g. delimited for the main diff, fenced for an example). Merging
+  // ensures we capture everything + dedupe by filePath.
+  // (If you want STRICT delimited-only mode, return early here when
+  // delimitedPatches.length > 0.)
+
+  // Stage 1 (FALLBACK): Markdown extraction
   const codeBlocks = extractCodeBlocks(aiResponse);
 
   // Stage 2: Validation — try parsePatch on every code block
@@ -421,13 +575,14 @@ export function extractAndParseDiffs(aiResponse: string, knownFiles?: string[]):
     fencedPatches.push(...tryParseAsDiff(block.value, "fenced"));
   }
 
-  // Stage 3: Raw-text fallback — only if no fenced diff was successfully parsed
+  // Stage 3 (LAST RESORT): Raw-text fallback — only if no delimited OR
+  // fenced diff was successfully parsed
   let rawPatches: ParsedPatchResult[] = [];
-  if (fencedPatches.length === 0) {
+  if (delimitedPatches.length === 0 && fencedPatches.length === 0) {
     rawPatches = scanRawTextForDiffs(aiResponse);
   }
 
-  const allPatches = [...fencedPatches, ...rawPatches];
+  const allPatches = [...delimitedPatches, ...fencedPatches, ...rawPatches];
 
   // Stage 4: Merge by filePath
   return mergeByFilePath(allPatches, knownFiles);

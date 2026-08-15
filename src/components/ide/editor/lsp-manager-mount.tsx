@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import React from "react";
 import type * as Monaco from "monaco-editor";
 
 /**
@@ -31,12 +31,12 @@ import type * as Monaco from "monaco-editor";
  */
 
 export function LspManagerMount() {
-  const [monaco, setMonaco] = useState<typeof Monaco | null>(null);
+  const [monaco, setMonaco] = React.useState<typeof Monaco | null>(null);
 
   // Poll for the Monaco instance from window.__monacoInstance (set by
   // the editor's onMount callback). We can't receive it as a prop because
   // ide-shell.tsx doesn't have direct access to the editor's monacoRef.
-  useEffect(() => {
+  React.useEffect(() => {
     if (typeof window === "undefined") return;
 
     const checkInterval = setInterval(() => {
@@ -56,7 +56,7 @@ export function LspManagerMount() {
     };
   }, []);
 
-  useEffect(() => {
+  React.useEffect(() => {
     if (!monaco) return;
 
     let cancelled = false;

@@ -2,10 +2,7 @@ import type { NextConfig } from "next";
 import path from "path";
 import MonacoWebpackPlugin from 'monaco-editor-webpack-plugin';
 
-const monacoEditorApi = path.resolve(
-  __dirname,
-  "node_modules/monaco-editor/esm/vs/editor/editor.api.js"
-);
+
 
 const nextConfig: NextConfig = {
   typescript: {
@@ -21,6 +18,8 @@ const nextConfig: NextConfig = {
     "preview-chat-*.space-z.ai",
     "localhost:3000",
     "127.0.0.1:3000",
+    "stellarforge.com",
+    "*.stellarforge.com"
   ],
   // Note: Next.js 16 removed 'watchOptions.ignored' (only pollIntervalMs is
   // accepted now). File-watcher ignore paths are configured in the webpack

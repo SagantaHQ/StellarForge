@@ -51,7 +51,7 @@ const NETWORK_PASSPHRASE: Record<string, string> = {
 
 async function findWasm(dir: string): Promise<string | null> {
   const { readdir } = await import("fs/promises");
-  const entries = await readdir(dir, { withFileTypes: true });
+  const entries = await readdir(/*turbopackIgnore: true*/ dir, { withFileTypes: true });
 
   // First pass: check files in THIS directory
   for (const entry of entries) {
@@ -105,7 +105,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Read the WASM binary + compute hash
-    const wasmBuffer = await readFile(wasmFilePath);
+    const wasmBuffer = await readFile(/*turbopackIgnore: true*/ wasmFilePath);
     const wasmHash = createHash("sha256").update(wasmBuffer).digest("hex");
 
     // Check if this contract was already deployed (upgrade scenario)

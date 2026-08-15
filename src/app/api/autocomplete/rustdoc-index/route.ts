@@ -37,7 +37,7 @@ export async function GET(req: Request) {
     // Load soroban-sdk index (always)
     let sdkIndex: { crate: string; version: string; symbols: unknown[]; total_count: number } | null = null;
     try {
-      sdkIndex = JSON.parse(await fs.readFile(sdkPath, "utf-8"));
+      sdkIndex = JSON.parse(await fs.readFile(/*turbopackIgnore: true*/ sdkPath, "utf-8"));
     } catch {
       return NextResponse.json(
         { error: "soroban-sdk index not built. Run scripts/build-soroban-rustdoc.sh" },

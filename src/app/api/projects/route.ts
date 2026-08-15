@@ -19,6 +19,7 @@ import { db } from "@/lib/db";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 15;
 
 /**
  * Free-tier storage quota: 1 GB per user.

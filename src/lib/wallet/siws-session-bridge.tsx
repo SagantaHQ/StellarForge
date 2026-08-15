@@ -75,9 +75,14 @@ async function validateServerSession(address: string): Promise<{
   metadata?: Record<string, unknown>;
 } | null> {
   try {
+    // 10s timeout — Neon cold start can be slow, but 10s is the max
+    const siwsController = new AbortController();
+    const siwsTimeout = setTimeout(() => siwsController.abort(), 10000);
     const res = await fetch(
-      `/api/siws/session?address=${encodeURIComponent(address)}`
+      `/api/siws/session?address=${encodeURIComponent(address)}`,
+      { signal: siwsController.signal }
     );
+    clearTimeout(siwsTimeout);
     if (!res.ok) return null;
     const data = await res.json();
     if (!data) return null;
@@ -89,9 +94,13 @@ async function validateServerSession(address: string): Promise<{
       // Fetch FRESH user data from the DB (not cached SIWS metadata)
       // This ensures the UI always shows the latest username, avatar, bio
       try {
+        const profileController = new AbortController();
+        const profileTimeout = setTimeout(() => profileController.abort(), 10000);
         const profileRes = await fetch(
-          `/api/auth/session?address=${encodeURIComponent(address)}`
+          `/api/auth/session?address=${encodeURIComponent(address)}`,
+          { signal: profileController.signal }
         );
+        clearTimeout(profileTimeout);
         if (profileRes.ok) {
           const profileData = await profileRes.json();
           if (profileData?.loggedIn && profileData?.profile) {

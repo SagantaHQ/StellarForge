@@ -1,7 +1,7 @@
 import path from "path";
 
-const NEXT_PUBLIC_APP_URL = "https://stellarforge.app";
-const DB_URL = ""
+import "dotenv/config";
+import { env } from "prisma/config";
 
 const bm2Config = {
   apps: [
@@ -11,11 +11,7 @@ const bm2Config = {
       script: "node_modules/next/dist/bin/next",
       args: ["start", "-p", "3700"],
       interpreter: "bun",
-      env: {
-        DATABASE_URL: DB_URL,
-        DIRECT_DATABASE_URL: DB_URL,
-        NEXT_PUBLIC_APP_URL,
-      },
+      env,
       autorestart: true,
       max_restarts: 10,
       restart_delay: 3000,
@@ -27,7 +23,7 @@ const bm2Config = {
       cwd: __dirname,
       env: {
         NODE_ENV: "production",
-        NEXT_PUBLIC_APP_URL
+        ...env
       },
       max_memory_restart: "1G",
       autorestart: true,
@@ -46,7 +42,7 @@ const bm2Config = {
       cwd: __dirname,
       env: {
         NODE_ENV: "production",
-        NEXT_PUBLIC_APP_URL
+        ...env
       },
       max_memory_restart: "1G",
       autorestart: true,

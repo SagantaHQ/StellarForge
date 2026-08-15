@@ -6,7 +6,6 @@ import {
   Play,
   ChevronDown,
   Check,
-  Users,
   Bell,
   Plus,
   Wrench,
@@ -204,9 +203,7 @@ export function TopBar({
             </div>
           )}
           {!collabConnected && collabUsers.length === 0 && (
-            <div className="flex items-center gap-1 text-xs text-[var(--text-muted)] px-1">
-              <Users size={14} strokeWidth={1.75} />
-            </div>
+            <div className="flex items-center gap-1 text-xs text-[var(--text-muted)] px-1" />
           )}
         </div>
 
@@ -260,9 +257,7 @@ export function TopBar({
         >
           {collabConnected ? (
             <span className="h-2 w-2 rounded-full bg-[var(--status-success)] animate-pulse" />
-          ) : (
-            <Users size={14} strokeWidth={1.75} />
-          )}
+          ) : null}
           <span className="hidden sm:inline">{collabConnected ? "Live" : "Collab"}</span>
         </Button>
 

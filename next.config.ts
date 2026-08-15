@@ -109,25 +109,12 @@ const nextConfig: NextConfig = {
       "monaco-editor/esm/vs/editor/editor.api.js": "monaco-editor",
     },
   },
-  async rewrites() {
-    const lspUrl = process.env.LSP_GATEWAY_URL || "http://localhost:3099";
-    const collabUrl = process.env.COLLAB_WS_URL || "http://localhost:3002";
-    return [
-      {
-        source: "/lsp",
-        destination: `${lspUrl}/lsp`,
-      },
-      {
-        source: "/workspace/:path*",
-        destination: `${lspUrl}/workspace/:path*`,
-      },
-      // WebSocket collaboration server proxy
-      {
-        source: "/collab/:path*",
-        destination: `${collabUrl}/:path*`,
-      },
-    ];
-  },
+  // No rewrites needed — collab uses BroadcastChannel (same-browser only),
+  // and the LSP server is disabled (commented out in ide-shell.tsx).
+  // When cross-device collab or LSP is re-enabled, add the rewrites back here:
+  //   /lsp → http://localhost:3099/lsp
+  //   /workspace/:path* → http://localhost:3099/workspace/:path*
+  //   /collab/:path* → http://localhost:3002/:path*
 };
 
 export default nextConfig;

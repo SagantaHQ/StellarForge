@@ -1,31 +1,20 @@
 /**
  * StellarForge — WebSocket Collaboration Server
  *
- * Uses the official y-websocket server implementation (from the y-websocket
- * npm package). This is the battle-tested server used by hundreds of projects
- * — we don't need to reinvent the protocol.
+ * Uses the standard y-websocket protocol with proper lib0 encoding.
  *
  * Port: 3002
  *
- * Run: bun mini-services/collab-server/index.ts
- * Or via PM2: pm2 start ecosystem.services.cjs --only stellarforge-collab
- *
  * Protocol (y-websocket standard):
- *   Message type 0: SYNC — bidirectional state sync
- *   Message type 1: AWARENESS — cursor/presence
- *   Message type 2: QUERY_AWARENESS — request awareness from all
- *   Message type 3: UPDATE — broadcast document update
+ *   Message type 0 (SYNC): bidirectional state sync (sync-step1 + sync-step2)
+ *   Message type 1 (AWARENESS): cursor/presence updates
+ *   Message type 2 (QUERY_AWARENESS): request all awareness states
+ *   Message type 3 (UPDATE): raw document update (broadcast to other clients)
  *
- * Room naming: the client connects to ws://host:3002/stellarforge-<roomId>
- * The room ID is derived from the share token.
- *
- * Persistence: rooms are kept in memory. When all clients leave, the room
- * is destroyed after a 60-second grace period (in case the user reconnects).
- *
- * Auth: the client sends the share token as the room name. The server
- * trusts any room name (auth is handled by the share API + the fact that
- * you need the token to know the room name). For production, add token
- * verification via /api/share/access on connection.
+ * The KEY fix: we listen on `room.doc.on("update", ...)` to broadcast
+ * document changes to all other clients. The previous code tried to
+ * manually slice the raw message bytes — which is incorrect because
+ * the sync protocol has its own framing inside the payload.
  */
 
 import { WebSocketServer, WebSocket } from "ws";
@@ -40,7 +29,6 @@ const PORT = 3002;
 const PING_INTERVAL = 30000;
 const ROOM_GRACE_PERIOD = 60000;
 
-// y-websocket message types
 const MESSAGE_SYNC = 0;
 const MESSAGE_AWARENESS = 1;
 const MESSAGE_QUERY_AWARENESS = 2;
@@ -68,6 +56,22 @@ function getRoom(roomId: string): Room {
     room = { doc, awareness, connections: new Set(), cleanupTimer: null };
     rooms.set(roomId, room);
     console.log(`[collab] room created: ${roomId}`);
+
+    // ─── KEY: listen for doc updates and broadcast to all clients ──
+    // When any client applies an update (via sync-step2 or direct UPDATE),
+    // the doc fires an "update" event. We broadcast the update to ALL
+    // other clients in the room. This is the standard y-websocket pattern.
+    doc.on("update", (update: Uint8Array, origin: unknown) => {
+      const encoder = encoding.createEncoder();
+      encoding.writeVarUint(encoder, MESSAGE_UPDATE);
+      encoding.writeVarUint8Array(encoder, update);
+      const message = encoding.toUint8Array(encoder);
+      for (const ws of room!.connections) {
+        if (ws !== origin && ws.readyState === WebSocket.OPEN) {
+          ws.send(message);
+        }
+      }
+    });
   }
   // Cancel any pending cleanup
   if (room.cleanupTimer) {
@@ -104,34 +108,46 @@ function broadcast(roomId: string, message: Uint8Array, exclude?: WebSocket) {
 }
 
 wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
-  // Extract room ID from the URL path
-  // Format: /stellarforge-<roomId>
   const url = req.url || "";
-  const match = url.match(/stellarforge-([a-z0-9]+)/i);
+  // Match everything after "stellarforge-" until the end or a query string.
+  // Previous regex [a-z0-9] didn't match hyphens → "iso-A" and "iso-B"
+  // both resolved to room "iso" (same room!). Now matches [a-z0-9-].
+  const match = url.match(/stellarforge-([a-z0-9-]+)/i);
   const roomId = match ? match[1] : "default";
 
   const room = getRoom(roomId);
   room.connections.add(ws);
   console.log(`[collab] client joined room ${roomId} (${room.connections.size} total)`);
 
-  // ─── Send initial sync (sync step 1) ──────────────────────
-  // The standard y-websocket protocol: server sends a sync-step1 message
-  // containing the server's document state. The client responds with
-  // sync-step2 containing the diff.
-  const encoder = encoding.createEncoder();
-  encoding.writeVarUint(encoder, MESSAGE_SYNC);
-  syncProtocol.writeSyncStep1(encoder, room.doc);
-  ws.send(encoding.toUint8Array(encoder));
+  // ─── Send sync-step1 AND sync-step2 on connection ─────────
+  // sync-step1: asks the client "what state do you have?" → client
+  //   responds with sync-step2 (its state) → server applies to room.doc
+  // sync-step2: sends the SERVER's full state to the client → client
+  //   applies it. This is how late joiners get the existing document.
+  //
+  // IMPORTANT: send as TWO SEPARATE messages, not one concatenated.
+  // readSyncMessage() only reads ONE sync message per call. If both
+  // are in a single message, the second is silently ignored.
+  const syncStep1Encoder = encoding.createEncoder();
+  encoding.writeVarUint(syncStep1Encoder, MESSAGE_SYNC);
+  syncProtocol.writeSyncStep1(syncStep1Encoder, room.doc);
+  ws.send(encoding.toUint8Array(syncStep1Encoder));
+
+  const syncStep2Encoder = encoding.createEncoder();
+  encoding.writeVarUint(syncStep2Encoder, MESSAGE_SYNC);
+  syncProtocol.writeSyncStep2(syncStep2Encoder, room.doc);
+  ws.send(encoding.toUint8Array(syncStep2Encoder));
 
   // ─── Send current awareness states ────────────────────────
-  if (room.awareness.getStates().size > 0) {
+  const awarenessStates = room.awareness.getStates();
+  if (awarenessStates.size > 0) {
     const awarenessEncoder = encoding.createEncoder();
     encoding.writeVarUint(awarenessEncoder, MESSAGE_AWARENESS);
     encoding.writeVarUint8Array(
       awarenessEncoder,
       awarenessProtocol.encodeAwarenessUpdate(
         room.awareness,
-        Array.from(room.awareness.getStates().keys())
+        Array.from(awarenessStates.keys())
       )
     );
     ws.send(encoding.toUint8Array(awarenessEncoder));
@@ -153,24 +169,23 @@ wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
 
       switch (messageType) {
         case MESSAGE_SYNC: {
-          // Client sent a sync message — let y-protocols handle it
-          syncProtocol.readSyncMessage(decoder, encoding.createEncoder(), room.doc, ws);
-
-          // If the sync message contained an update (sync-step2), broadcast
-          // it to all other clients in the room
-          // (readSyncMessage may have applied an update to the doc)
-          if (uint8.length > 1) {
-            // Broadcast the update to other clients
-            const updateEncoder = encoding.createEncoder();
-            encoding.writeVarUint(updateEncoder, MESSAGE_UPDATE);
-            encoding.writeVarUint8Array(updateEncoder, uint8.slice(1));
-            broadcast(roomId, encoding.toUint8Array(updateEncoder), ws);
+          // readSyncMessage handles BOTH sync-step1 (server asks client)
+          // and sync-step2 (client sends its state). If sync-step2, the
+          // update is applied to room.doc, which triggers the "update"
+          // listener → broadcasts to other clients. We don't need to
+          // manually re-broadcast here.
+          const encoder = encoding.createEncoder();
+          syncProtocol.readSyncMessage(decoder, encoder, room.doc, ws);
+          // Send any response back to the client (e.g. sync-step2 response)
+          const response = encoding.toUint8Array(encoder);
+          if (response.length > 1) {
+            ws.send(response);
           }
           break;
         }
 
         case MESSAGE_AWARENESS: {
-          // Client sent awareness (cursor, presence) — apply + broadcast
+          // Client sent awareness (cursor/presence) — apply + broadcast
           const awarenessUpdate = decoding.readVarUint8Array(decoder);
           awarenessProtocol.applyAwarenessUpdate(
             room.awareness,
@@ -183,7 +198,7 @@ wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
         }
 
         case MESSAGE_QUERY_AWARENESS: {
-          // Client requests all awareness states — send them
+          // Client requests all awareness states
           const awarenessEncoder = encoding.createEncoder();
           encoding.writeVarUint(awarenessEncoder, MESSAGE_AWARENESS);
           encoding.writeVarUint8Array(
@@ -198,10 +213,10 @@ wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
         }
 
         case MESSAGE_UPDATE: {
-          // Client sent a document update — apply + broadcast
+          // Raw document update from client — apply to room.doc.
+          // The "update" listener will broadcast to other clients.
           const update = decoding.readVarUint8Array(decoder);
           Y.applyUpdate(room.doc, update, ws);
-          broadcast(roomId, uint8, ws);
           break;
         }
 
@@ -220,16 +235,16 @@ wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
     console.log(`[collab] client left room ${roomId} (${room.connections.size} remaining)`);
 
     // Remove this client's awareness state
-    awarenessProtocol.removeAwarenessStates(
-      room.awareness,
-      Array.from(room.awareness.getStates().keys()).filter(
-        (clientId) => room.awareness.meta.get(clientId)?._ws === ws
-      ),
-      ws
+    const statesToRemove = Array.from(room.awareness.getStates().keys()).filter(
+      (clientId) => {
+        const meta = room.awareness.meta.get(clientId);
+        return meta?.cookie === ws || meta?._ws === ws;
+      }
     );
+    if (statesToRemove.length > 0) {
+      awarenessProtocol.removeAwarenessStates(room.awareness, statesToRemove, ws);
 
-    // Broadcast updated awareness
-    if (room.connections.size > 0) {
+      // Broadcast updated awareness to remaining clients
       const awarenessEncoder = encoding.createEncoder();
       encoding.writeVarUint(awarenessEncoder, MESSAGE_AWARENESS);
       encoding.writeVarUint8Array(
@@ -242,7 +257,6 @@ wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
       broadcast(roomId, encoding.toUint8Array(awarenessEncoder));
     }
 
-    // Schedule cleanup if room is empty
     if (room.connections.size === 0) {
       scheduleCleanup(roomId);
     }

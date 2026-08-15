@@ -151,12 +151,12 @@ export async function POST(req: NextRequest) {
   let workspaceDir: string;
   try {
     workspaceDir = path.join(BUILDS_DIR, body.projectId);
-    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(/*turbopackIgnore: true*/ workspaceDir, { recursive: true });
     if (body.files && body.files.length > 0) {
       for (const file of body.files) {
         const filePath = path.join(workspaceDir, file.path);
-        await fs.mkdir(path.dirname(filePath), { recursive: true });
-        await fs.writeFile(filePath, file.content, "utf-8");
+        await fs.mkdir(/*turbopackIgnore: true*/ path.dirname(filePath), { recursive: true });
+        await fs.writeFile(/*turbopackIgnore: true*/ filePath, file.content, "utf-8");
       }
     }
   } catch (err) {

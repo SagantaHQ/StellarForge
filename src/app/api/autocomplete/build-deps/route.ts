@@ -81,7 +81,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, deps: [], indexes: [] });
     }
 
-    await fs.mkdir(INDEX_DIR, { recursive: true });
+    await fs.mkdir(/*turbopackIgnore: true*/ INDEX_DIR, { recursive: true });
 
     const results: Array<{ name: string; version: string; status: string; symbolCount?: number }> = [];
     const indexes: Array<{ crate: string; version: string; symbols: unknown[]; total_count: number }> = [];
@@ -96,7 +96,7 @@ export async function POST(req: NextRequest) {
 
       // Check cache first
       try {
-        const data = await fs.readFile(indexFile, "utf-8");
+        const data = await fs.readFile(/*turbopackIgnore: true*/ indexFile, "utf-8");
         const parsed = JSON.parse(data);
         results.push({ name: dep.name, version: dep.version, status: "cached", symbolCount: parsed.total_count });
         indexes.push(parsed);
@@ -113,7 +113,7 @@ export async function POST(req: NextRequest) {
         });
 
         try {
-          const data = await fs.readFile(indexFile, "utf-8");
+          const data = await fs.readFile(/*turbopackIgnore: true*/ indexFile, "utf-8");
           const parsed = JSON.parse(data);
           results.push({ name: dep.name, version: dep.version, status: "generated", symbolCount: parsed.total_count });
           indexes.push(parsed);

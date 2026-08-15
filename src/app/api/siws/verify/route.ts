@@ -156,7 +156,7 @@ export async function POST(req: NextRequest) {
     try {
       await db.auditLog.create({
         data: {
-          projectId: "default",
+          projectId: null // No project context for login/profile actions,
           userId: user.id,
           action: "SHARE_GRANTED",
           targetType: "user",

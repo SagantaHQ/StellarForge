@@ -313,8 +313,8 @@ enum ShareType {
 
 model AuditLog {
   id          String   @id @default(cuid())
-  projectId   String
-  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId   String?  // Nullable — audit logs for non-project actions (login, profile) have no project
+  project     Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
   userId      String?
   user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
   action      AuditAction

@@ -20,6 +20,7 @@ import {
   type Comment,
   type CommentPriority,
 } from "@/stores/comments-store";
+import { useProfileStore } from "@/stores/profile-store";
 import { cn } from "@/lib/utils";
 
 const PRIORITIES: CommentPriority[] = ["urgent", "high", "normal", "low", "suggestion"];
@@ -46,6 +47,7 @@ export function CommentsPanel({
   const resolveComment = useCommentsStore((s) => s.resolveComment);
   const unresolveComment = useCommentsStore((s) => s.unresolveComment);
   const deleteComment = useCommentsStore((s) => s.deleteComment);
+  const profile = useProfileStore((s) => s.profile);
   const focusComment = useCommentsStore((s) => s.focusComment);
   const focusedCommentId = useCommentsStore((s) => s.focusedCommentId);
 
@@ -210,8 +212,8 @@ export function CommentsPanel({
             isFocused={focusedCommentId === c.id}
             onClick={() => handleClickComment(c)}
             onResolve={() => resolveComment(c.id, "You")}
-            onDelete={() => deleteComment(c.id, "local-user")}
-            canDelete={c.authorId === "local-user"}
+            onDelete={() => deleteComment(c.id, profile?.address ?? "local-user")}
+            canDelete={c.authorId === (profile?.address ?? "local-user")}
           />
         ))}
 

@@ -179,7 +179,7 @@ export function ShareDialog({ open, onClose }: ShareDialogProps) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             projectId: selectedProjectId,
-            ownerId: sessionData.user.id,
+            walletAddress: profile.address,
             mode: "public",
             role,
           }),
@@ -204,7 +204,7 @@ export function ShareDialog({ open, onClose }: ShareDialogProps) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               projectId: selectedProjectId,
-              ownerId: sessionData.user.id,
+              walletAddress: profile.address,
               mode: "private",
               role,
               guestUsername: guest,

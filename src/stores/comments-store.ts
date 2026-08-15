@@ -83,11 +83,24 @@ interface CommentsState {
   getHighestPriorityForLine: (filePath: string, line: number) => CommentPriority | null;
 }
 
-const CURRENT_USER = {
-  id: "local-user",
-  name: "You",
-  avatarColor: "#4F8C8C",
-};
+// Dynamically resolve the current user from the profile store.
+// Previously this was hardcoded as { id: "local-user", ... } which caused:
+//   - FK violations on resolve (resolvedById="local-user" doesn't exist in User table)
+//   - 403 on delete (requesterId="local-user" doesn't match authorId=wallet address)
+// Now we read the real user ID from the profile store at call time.
+function getCurrentUser() {
+  try {
+    const profileStore = (window as unknown as { __profileStore?: { profile: { address: string; username: string } | null } }).__profileStore;
+    if (profileStore?.profile?.address) {
+      return {
+        id: profileStore.profile.address, // Use wallet address as user ID
+        name: profileStore.profile.username || "You",
+        avatarColor: colorFromAddress(profileStore.profile.address),
+      };
+    }
+  } catch {}
+  return { id: "local-user", name: "You", avatarColor: "#4F8C8C" };
+}
 
 function colorFromAddress(addr: string): string {
   const palette = ["#4F8C8C", "#C5794B", "#7B96B3", "#6FA885", "#A88FB3", "#C9A66B", "#D29464", "#9A88A8"];
@@ -132,9 +145,9 @@ export const useCommentsStore = create<CommentsState>()(
           lineNumber: input.lineNumber,
           lineSnapshot: input.lineSnapshot,
           anchorCrdtPos: `${input.filePath}:${input.lineNumber}`,
-          authorId: profile?.address ?? CURRENT_USER.id,
-          authorName: profile?.username ?? CURRENT_USER.name,
-          authorAvatarColor: profile ? colorFromAddress(profile.address) : CURRENT_USER.avatarColor,
+          authorId: profile?.address ?? getCurrentUser().id,
+          authorName: profile?.username ?? getCurrentUser().name,
+          authorAvatarColor: profile ? colorFromAddress(profile.address) : getCurrentUser().avatarColor,
           body: input.body,
           priority: input.priority,
           status: "open",
@@ -180,7 +193,7 @@ export const useCommentsStore = create<CommentsState>()(
                   ...c,
                   status: "resolved",
                   resolvedAt: Date.now(),
-                  resolvedById: CURRENT_USER.id,
+                  resolvedById: getCurrentUser().id,
                   resolvedByName: resolverName,
                   updatedAt: Date.now(),
                 }
@@ -188,7 +201,7 @@ export const useCommentsStore = create<CommentsState>()(
           ),
         }));
         // §6.5 — Sync resolve to Postgres
-        patchCommentOnServer(id, { status: "RESOLVED", resolvedById: CURRENT_USER.id }).catch(() => {});
+        patchCommentOnServer(id, { status: "RESOLVED", resolvedById: getCurrentUser().id }).catch(() => {});
       },
 
       unresolveComment: (id) => {

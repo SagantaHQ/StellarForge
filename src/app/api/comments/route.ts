@@ -135,7 +135,7 @@ export async function POST(req: NextRequest) {
 export async function PATCH(req: NextRequest) {
   try {
     const body = await req.json();
-    const { id, status, resolvedById, priority } = body;
+    const { id, status, resolvedById, priority, body: commentBody } = body;
 
     if (!id) {
       return NextResponse.json({ error: "Missing comment id" }, { status: 400 });
@@ -150,6 +150,7 @@ export async function PATCH(req: NextRequest) {
       }
     }
     if (priority) updateData.priority = priority;
+    if (commentBody !== undefined) updateData.body = commentBody;
 
     const comment = await db.comment.update({
       where: { id },

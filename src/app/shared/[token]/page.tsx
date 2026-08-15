@@ -32,7 +32,7 @@ export default function SharedProjectPage() {
         if (data?.hasAccess) {
           setProjectInfo({
             name: data.projectName ?? "Shared Project",
-            ownerName: data.ownerName ?? "Unknown",
+            ownerName: data.ownerUsername ?? "Unknown",
           });
           setStatus("granted");
         } else {

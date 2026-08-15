@@ -62,13 +62,21 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Derive the expected domain from the request Origin/Host header
+    // Derive the expected domain from the request Origin/Host header.
+    //
+    // IMPORTANT: Do NOT strip the port! The SIWS message issued by the client
+    // includes the full origin (e.g. "localhost:3000") as the domain. If we
+    // strip the port (via .split(":")[0]), we get "localhost" which doesn't
+    // match the message's domain → "Domain mismatch" error.
+    //
+    // RFC 6454 (Web Origin Concept) includes the port when it's non-default.
+    // The SIWS spec follows the same convention — the domain field should
+    // match the origin the user's browser shows.
     const origin = req.headers.get("origin") || req.headers.get("host") || "";
     const expectedDomain = origin
       .replace(/^https?:\/\//, "")
       .replace(/^\/+/, "")
-      .split("/")[0]
-      .split(":")[0];
+      .split("/")[0];  // Keep the port! e.g. "localhost:3000"
 
     // Verify the SIWS signature using the official library
     const result = await verifySiws(

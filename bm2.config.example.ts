@@ -8,7 +8,7 @@ const bm2Config = {
       name: "stellarforge",
       cwd: __dirname,
       script: "node_modules/next/dist/bin/next",
-      args: "start -p 3700",
+      args: "-p 3700",
       interpreter: "bun",
       interpreter_args: "--bun",
       env: {
@@ -20,7 +20,6 @@ const bm2Config = {
       max_restarts: 10,
       restart_delay: 3000,
       watch: false,
-      time: true,
     },
     {
       name: "stellarforge-collab",

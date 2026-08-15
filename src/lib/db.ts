@@ -7,18 +7,15 @@ if (!connectionString) {
   throw new Error("DATABASE_URL is not set");
 }
 
-const globalForPrisma = globalThis as unknown as {
-  db: PrismaClient | undefined;
-};
+const adapter = new PrismaPg({
+  connectionString,
+  max: 20,
+  connectionTimeoutMillis: 5000,
+  idleTimeoutMillis: 30000,
+});
 
-const db =
-  globalForPrisma.db ??
-  new PrismaClient({
-    adapter: new PrismaPg({ connectionString }),
-  });
-
-if (process.env.NODE_ENV !== "production") {
-  globalForPrisma.db = db;
-}
+const db = new PrismaClient({
+  adapter,
+});
 
 export { db };

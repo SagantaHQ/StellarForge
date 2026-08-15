@@ -5,23 +5,25 @@ const DB_URL = ""
 
 const bm2Config = {
   apps: [
-    {
-      name: "stellarforge",
-      cwd: __dirname,
-      // Change this to an absolute path:
-      script: path.join(__dirname, "node_modules/next/dist/bin/next"),
-      args: "start -p 3700", // Added explicit "start" command
-      interpreter: "bun",
-      interpreter_args: "--bun",
-      env: {
-        DATABASE_URL: DB_URL,
-        DIRECT_DATABASE_URL: DB_URL,
-        NEXT_PUBLIC_APP_URL,
-      },
-      autorestart: true,
-      max_restarts: 10,
-      restart_delay: 3000,
-      watch: false,
+    module.exports = {
+      apps: [
+        {
+          name: "stellarforge",
+          cwd: __dirname,
+          script: "node_modules/next/dist/bin/next",
+          args: ["start", "-p", "3700"],
+          interpreter: "bun",
+          env: {
+            DATABASE_URL: DB_URL,
+            DIRECT_DATABASE_URL: DB_URL,
+            NEXT_PUBLIC_APP_URL,
+          },
+          autorestart: true,
+          max_restarts: 10,
+          restart_delay: 3000,
+          watch: false,
+        },
+      ],
     },
     {
       name: "stellarforge-collab",

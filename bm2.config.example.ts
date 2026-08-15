@@ -1,3 +1,7 @@
+
+const NEXT_PUBLIC_APP_URL = "https://stellarforge.app";
+const DB_URL = ""
+
 const bm2Config = {
   apps: [
     {
@@ -6,8 +10,9 @@ const bm2Config = {
       args: "--bun next start -p 3700",
       "env": {
         "NODE_ENV": "production",
-        "DATABASE_URL": "",
-        "DIRECT_DATABASE_URL": ""
+        DATABASE_URL: DB_URL,
+        DIRECT_DATABASE_URL: DB_URL,
+        NEXT_PUBLIC_APP_URL
       }
     },
     {
@@ -16,6 +21,7 @@ const bm2Config = {
       cwd: __dirname,
       env: {
         NODE_ENV: "production",
+        NEXT_PUBLIC_APP_URL
       },
       max_memory_restart: "1G",
       autorestart: true,
@@ -34,6 +40,7 @@ const bm2Config = {
       cwd: __dirname,
       env: {
         NODE_ENV: "production",
+        NEXT_PUBLIC_APP_URL
       },
       max_memory_restart: "1G",
       autorestart: true,

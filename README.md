@@ -1,153 +1,329 @@
 # StellarForge
 
 > Agentic, browser-based IDE for Soroban smart contract development.
-> The Soroban equivalent of Remix IDE for Ethereum — but better: fully agentic, realtime collaborative, local-first, PWA-installable, and polished to a standard that exceeds VS Code's web experience.
+> Build, test, deploy, and collaborate on Stellar smart contracts — without leaving your browser.
 
-This is the **M1 Foundation + M2 IDE shell** deliverable — a working vertical slice demonstrating the design system, theme engine, IDE layout, Monaco editor with Soroban syntax, file explorer, terminal, command palette, settings, mobile responsive layout, and PWA shell.
-
----
-
-## Status — what's working now
-
-### M1 — Foundation ✅
-- **Design system** (§4): token-based, both dark & light, no gradients/neons. Custom scrollbars, focus rings, hairline borders, restrained accent.
-- **Theme engine** (§4.1): 10 built-in themes (Midnight, Daybreak, Slate, Frost, Parchment, Ember, Forest, Harbor, Mono, Contrast). JSON theme definitions drive CSS variables + Monaco themes + xterm themes — all in sync. Theme switcher with visual theme cards.
-- **PWA shell** (§8): `manifest.webmanifest`, service worker with app-shell caching, standalone display mode, theme-color.
-- **Environment contract** (§15.3): typed config module with zod validation, fail-fast on missing vars. `.env.example` documents every variable.
-- **Database schema** (§2): Prisma schema with User, Profile, Project, File, Comment, CollabSession, SharePermission, AuditLog — Postgres-compatible.
-
-### M2 — IDE core ✅ (partial)
-- **Monaco Editor** with custom Rust/Soroban language: tokenizer, keywords, snippets (`#[contract]`, `#[contractimpl]`, env.storage patterns), hover docs.
-- **File Explorer**: tree view, file-type icons (Rust/TOML/TS/JSON/MD), context menu (new file/folder, rename, delete), git-status badges.
-- **Terminal panel**: collapsible, multiple tabs, command history (↑/↓), simulated PTY responses for `cargo build/test`, `stellar contract build`, etc. "Fix with AI" button on errors.
-- **Command Palette** (⌘K): all theme switches, file ops, view toggles.
-- **Settings dialog**: theme picker with visual cards, font size, autosave, format-on-save, keybindings cheatsheet, BYOK AI providers, sync & offline config.
-- **Mobile responsive** (§3.1): bottom tab nav (Files / Editor / Terminal / Agent), full-screen panels on mobile.
-- **Sample Soroban contract** pre-loaded: a hello-world contract demonstrating the typical Soroban structure.
+StellarForge is a full-featured web IDE for developing Soroban smart contracts on the Stellar network. It combines a Monaco-based code editor with Rust/Soroban syntax highlighting, real `stellar contract build` compilation, wallet-based contract deployment, an AI agent for code fixes, and live collaboration — all in the browser.
 
 ---
 
-## Tech stack
-- **Framework**: Next.js 16 (App Router) + TypeScript 5
-- **Editor**: Monaco Editor via `@monaco-editor/react`
-- **Styling**: Tailwind CSS 4 + custom design system (no off-the-shelf UI kit look)
-- **State**: Zustand (client state) + TanStack Query (server state)
-- **Database**: Prisma ORM + PostgreSQL (Neon)
-- **Realtime**: WebSocket via socket.io (mini-service, to be wired)
-- **PWA**: manifest + service worker
+## Features
+
+### IDE Core
+- **Monaco Editor** with custom Rust/Soroban language tokenizer, keywords, snippets (`#[contract]`, `#[contractimpl]`, `env.storage()` patterns), and hover docs
+- **File Explorer** with tree view, context menu (new file/folder, rename, delete), and git-status badges
+- **Build Output Panel** with streaming `stellar contract build` output, "Fix with AI" button on errors
+- **Command Palette** (⌘K) for all actions: theme switches, file ops, view toggles, deploy
+- **Settings Dialog** with 6 sections: Appearance, Editor, AI Provider, Keybindings, Notifications, Sync
+- **10 built-in themes** (Midnight, Daybreak, Slate, Frost, Parchment, Ember, Forest, Harbor, Mono, Contrast) — drives CSS vars + Monaco themes + xterm themes in sync
+- **PWA-installable** with service worker + standalone display mode
+- **Mobile responsive** — bottom tab nav (Files / Editor / Terminal / Agent) on mobile
+
+### Build & Deploy
+- **Real compilation** — `stellar contract build` runs server-side in a pseudo-TTY for streaming output
+- **Auto-build on deploy** — if the project isn't built, it builds automatically before deploying
+- **Two-phase deploy** via stellar-appkit wallet signing:
+  1. Phase A: `uploadContractWasm` → wallet signs → WASM installed on-chain
+  2. Phase B: `createCustomContract` (new) or `updateContractWasm` (upgrade) → wallet signs → contract live
+- **Upgrade confirmation modal** — warns before redeploying an already-deployed contract
+- **Remix-style contract interaction** — after deploy, shows all public functions with:
+  - Auto-generated forms based on the contract spec (parsed from Rust source)
+  - `read` badge for view functions, `write` badge for state-modifying functions
+  - **Query** button (read-only simulation, free, no transaction)
+  - **Transact** button (write, requires wallet signing)
+- **Explorer links** — [stellarchain.io](https://stellarchain.io) integration (testnet/mainnet/futurenet)
+- **Contract ID extraction** — walks the SDK's `GetTransactionResponse` to extract the contract ID from `returnValue`, `resultMetaXdr`, and `resultXdr`
+
+### AI Agent
+- **12 BYOK providers**: OpenAI, Anthropic (proxied), Gemini, DeepSeek, Kimi, OpenRouter, Bedrock (proxied), Cloudflare, Z-AI, Ollama, custom-OpenAI, and generic
+- **Intelligent diff parser** — extracts GitHub-style unified diffs from LLM responses:
+  - Tries `parsePatch()` on every fenced code block, fuzzy-delimiter section, and raw text
+  - **`fixHunkLineCounts()`** — rewrites `@@` headers to match actual body line counts (LLMs are terrible at counting lines — this is the #1 fix for "Accept button not showing")
+  - Merges multiple diff blocks for the same file into one approval card
+  - Handles CRLF, missing closing fences, wrong fence language tags, and custom delimiters
+- **Accept/Reject flow** — each proposed diff shows as a card with Accept (applies to file) or Reject
+- **Attribution** — AI edits are logged in the audit trail as "{user} via AI agent ({provider}/{model})"
+- **"Fix with AI"** button in the build output panel — sends the build error + file contents to the agent
+
+### Collaboration
+- **Live collaborative editing** via Yjs CRDT — changes sync in real-time across browsers
+- **WebSocket collab server** (port 3002) using the standard y-websocket protocol:
+  - `lib0/encoding` + `lib0/decoding` for proper message framing
+  - Sync-step1 + sync-step2 on connection (late joiners get existing state)
+  - Awareness broadcasting (cursor positions, user presence)
+  - Room isolation, 60s grace period before destroying empty rooms
+  - Auto-reconnect with 3s backoff
+- **BroadcastChannel fallback** — same-browser multi-tab sync without network round-trip
+- **Share dialog** — create public links or private invites (by username) with VIEWER or EDITOR roles
+- **Comments** — file-level line comments with priority levels (urgent, high, normal, low, suggestion):
+  - Draggable comment panel with anchored line previews
+  - Resolve/unresolve workflow
+  - Auto-re-anchoring when files are edited (±10 line fuzzy match)
+  - Per-user attribution with avatar colors derived from wallet address
+
+### LSP (Language Server Protocol)
+- **rust-analyzer integration** via WebSocket LSP server (port 3099):
+  - Go-to-definition
+  - Hover documentation
+  - Autocomplete with type inference
+  - Diagnostics (errors + warnings inline in the editor)
+- **Autocomplete** with 15s TTL cache, per-model request-id tracking (discards stale responses), and structural trigger characters only
+
+### Identity & Auth
+- **SIWS (Sign-In With Stellar)** — wallet-based authentication via stellar-appkit SDK
+- **Auto-generated usernames** — new users get a unique username; can customize once
+- **Profile system** — avatar upload, bio, preferred theme, accent color
+- **GitHub OAuth** — connect GitHub account for repo import + commit features
+
+### Templates
+- **Real, compilable Soroban contract templates** — not stubs:
+  - Hello World, Token, Counter, Custom Types, DAO, Governance, Escrow, Vault, etc.
+- Each template ships with full `Cargo.toml`, `src/lib.rs`, `src/test.rs`, `README.md`, `.gitignore`
+- Blank project option with minimal starter code
+- Import from GitHub repo or ZIP file
+
+### Project Management
+- **Local-first** — files stored in IndexedDB, sync to Postgres when logged in
+- **Project switcher** in the top bar with quick switch
+- **WASM version history** — tracks every deployed version with hash, size, and upgrade count
+- **Audit log** — all file changes, comments, deploys, and shares are logged
 
 ---
 
-## Local development
+## Tech Stack
 
-### Quick start (recommended — BM2 process manager)
-
-```bash
-# 1. Install deps + BM2
-bun install
-bun add -g bm2
-
-# 2. Copy env and fill in values
-cp .env.example .env
-
-# 3. Push database schema
-bun run db:push
-
-# 4. Start dev server via BM2 (stable, auto-restart on crash)
-bun run dev:bm2
-# → http://localhost:3000 lands directly in the IDE
-```
-
-### BM2 commands
-
-```bash
-bun run dev:bm2           # Start dev server (managed by BM2)
-bun run dev:bm2:status    # Check status
-bun run dev:bm2:logs      # View recent logs
-bun run dev:bm2:restart   # Restart server
-bun run dev:bm2:stop      # Stop server
-```
-
-### Fallback (plain bun)
-
-```bash
-bun run dev               # Direct next dev (no process manager)
-```
-
-**Why BM2?** The Next.js dev server with Turbopack + Monaco editor + Yjs can be memory-intensive. BM2 provides auto-restart on crash, memory limits (`maxMemoryRestart: 3G`), and log management — keeping the dev server stable even under heavy load.
+| Layer | Technology |
+|---|---|
+| Framework | Next.js 16 (App Router, Turbopack) |
+| Language | TypeScript 5 |
+| Editor | Monaco Editor via `@monaco-editor/react` |
+| Styling | Tailwind CSS 4 + custom design system |
+| UI primitives | shadcn/ui + Radix UI |
+| State | Zustand (client) + TanStack Query (server) |
+| Database | Prisma ORM + PostgreSQL (Neon) |
+| Realtime | Yjs CRDT + WebSocket (y-websocket protocol) |
+| LSP | rust-analyzer via WebSocket (monaco-languageclient) |
+| Wallet | `@saganta/stellar-appkit` (Freighter, xBull, Albedo, Ledger) |
+| Stellar SDK | `@stellar/stellar-sdk` v16 |
+| PWA | manifest + service worker + standalone mode |
+| Process manager | BM2 (dev) / BM2 (production) |
 
 ---
 
-## Project structure
+## Installation
+
+### Prerequisites
+
+- **Node.js** 20+ or **Bun** 1.1+
+- **PostgreSQL** (local or [Neon](https://neon.tech) cloud)
+- **Rust toolchain** (for building Soroban contracts server-side):
+  ```bash
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+  rustup target add wasm32v1-none
+  ```
+- **Stellar CLI** (for contract compilation):
+  ```bash
+  cargo install --locked stellar-cli
+  ```
+
+### Steps
+
+1. **Clone the repository**
+   ```bash
+   git clone https://github.com/SagantaHQ/StellarForge.git
+   cd StellarForge
+   ```
+
+2. **Install dependencies**
+   ```bash
+   bun install
+   ```
+
+3. **Set up environment variables**
+   ```bash
+   cp .env.example .env
+   ```
+   Edit `.env` and fill in:
+   - `DATABASE_URL` — PostgreSQL connection string
+   - `DIRECT_DATABASE_URL` — direct connection (for Prisma migrations)
+   - `SESSION_SECRET` — random 32+ char string
+   - `NEXT_PUBLIC_APP_URL` — your app URL (e.g. `http://localhost:3000`)
+
+4. **Push the database schema**
+   ```bash
+   bun run db:push
+   ```
+
+5. **Start the dev server**
+   ```bash
+   bun run dev
+   ```
+   → Open `http://localhost:3000`
+
+### Production
+
+1. **Build**
+   ```bash
+   bun run build
+   ```
+
+2. **Start the app** (port 3700)
+   ```bash
+   bun run start
+   ```
+
+3. **Start the side services** (collab + LSP)
+
+   Copy the example BM2 config and fill in your env:
+   ```bash
+   cp bm2.config.example.ts bm2.config.ts
+   # Edit bm2.config.ts — fill in DATABASE_URL, DIRECT_DATABASE_URL
+   ```
+
+   Start all services:
+   ```bash
+   bun run dev:bm2
+   # or: bm2 start bm2.config.ts
+   ```
+
+   Or start services individually:
+   ```bash
+   # Collab server (port 3002)
+   cd mini-services/collab-server && bun install && cd ../..
+   bun mini-services/collab-server/index.ts
+
+   # LSP server (port 3099)
+   cd mini-services/lsp-server && bun install && cd ../..
+   bun mini-services/lsp-server/index.ts
+   ```
+
+4. **Nginx reverse proxy**
+
+   ```bash
+   sudo cp deploy/nginx.conf /etc/nginx/sites-available/stellarforge.app
+   sudo ln -s /etc/nginx/sites-available/stellarforge.app /etc/nginx/sites-enabled/
+   sudo certbot --nginx -d stellarforge.app -d www.stellarforge.app
+   sudo nginx -t && sudo systemctl reload nginx
+   ```
+
+   The nginx config handles:
+   - HTTP → HTTPS (via certbot)
+   - `/` → Next.js app (port 3700)
+   - `/api/` → Next.js API routes (no caching, rate-limited)
+   - `/collab/` → WebSocket collab server (port 3002, 24h timeout)
+   - `/lsp` → WebSocket LSP server (port 3099, 24h timeout)
+   - `/workspace/` → LSP workspace files (port 3099)
+   - Gzip compression, security headers, rate limiting
+
+---
+
+## Project Structure
 
 ```
 src/
 ├── app/
-│   ├── layout.tsx           # Root layout: fonts, theme init script, ThemeProvider
-│   ├── page.tsx             # Mounts <IdeShell/> — homepage IS the IDE
-│   └── globals.css          # Design tokens + 10 themes via [data-theme="..."]
+│   ├── layout.tsx              # Root layout: fonts, theme init, wallet provider
+│   ├── page.tsx                # Mounts <IdeShell/> — homepage IS the IDE
+│   ├── api/                    # API routes
+│   │   ├── auth/               # SIWS session management
+│   │   ├── build/              # stellar contract build (streaming)
+│   │   ├── contracts/         # deploy-tx, create-tx, submit, invoke, list
+│   │   ├── comments/           # CRUD for file-level comments
+│   │   ├── share/              # create, access, list, revoke
+│   │   ├── github/             # OAuth, repos, files, commit
+│   │   ├── ai-proxy/           # Anthropic + Bedrock CORS passthrough
+│   │   └── autocomplete/       # rustdoc index, build-deps
+│   └── shared/[token]/page.tsx # Share link receiver
 ├── components/
-│   ├── ide/
-│   │   ├── ide-shell.tsx        # Top-level layout: TopBar, panels, StatusBar
-│   │   ├── theme-provider.tsx   # Applies tokens to CSS vars, syncs Monaco
-│   │   ├── topbar/
-│   │   │   ├── activity-bar.tsx # Left icon rail (Explorer/Search/Git/Deploy/Agent/Collab/Settings)
-│   │   │   └── top-bar.tsx      # Logo + project + branch + collab avatars + network + share + deploy + wallet
-│   │   ├── explorer/
-│   │   │   └── file-explorer.tsx  # Tree view, context menu, git badges
-│   │   ├── editor/
-│   │   │   ├── monaco-editor.tsx  # Monaco wrapper, theme-aware
-│   │   │   ├── editor-area.tsx    # Tab bar + editor
-│   │   │   └── use-monaco.ts      # Soroban language registration
-│   │   ├── terminal/
-│   │   │   └── terminal-panel.tsx  # Multi-tab, command history, simulated PTY
-│   │   └── panels/
-│   │       ├── right-panel.tsx     # Agent / Compile / Test / Deploy / Git views
-│   │       ├── status-bar.tsx      # Branch, sync, errors, toolchain, network, cursor
-│   │       ├── command-palette.tsx # ⌘K palette with all actions + theme switches
-│   │       └── settings-dialog.tsx # 6 sections: Appearance/Editor/AI/Keybindings/Notifications/Sync
-│   └── ui/                  # shadcn/ui primitives (Button, Dialog, etc.)
+│   └── ide/
+│       ├── ide-shell.tsx       # Top-level layout (1079 lines — the brain)
+│       ├── editor/             # Monaco editor, language registration, LSP
+│       ├── explorer/           # File explorer with context menu
+│       ├── terminal/           # Multi-tab terminal with simulated PTY
+│       ├── panels/             # Agent, Build, Deploy, Inspect, Settings
+│       ├── comments/           # Comments panel + inline input
+│       ├── collab/             # Share dialog
+│       └── topbar/             # Activity bar + top bar
 ├── lib/
-│   ├── config.ts            # Typed env config with zod validation
-│   ├── themes/
-│   │   ├── types.ts         # ThemeDefinition + ThemeTokens
-│   │   ├── registry.ts      # 10 built-in themes
-│   │   ├── mappers.ts       # buildMonacoTheme() + buildXtermTheme()
-│   │   └── builtins/        # One file per theme
-│   └── soroban/
-│       └── sample-project.ts  # Initial file tree + sample Soroban contract
-├── stores/
-│   ├── theme-store.ts         # Zustand + persist: themeId, fontSize, customThemes
-│   ├── file-system-store.ts   # Tree, active file, CRUD ops
-│   └── editor-tabs-store.ts   # Open tabs, dirty state, reorder
+│   ├── ai/
+│   │   ├── ai-diff-parser.ts   # Intelligent diff extraction (parsePatch + fixHunkLineCounts)
+│   │   ├── context-assembler.ts# System prompt + context assembly for AI
+│   │   └── providers.ts        # 12 BYOK provider implementations
+│   ├── soroban/                # Spec parser, sample project, security linter
+│   ├── wallet/                 # stellar-appkit provider, SIWS bridge
+│   ├── themes/                 # 10 theme definitions + mappers
+│   └── config.ts               # Typed env config with zod validation
+├── stores/                     # Zustand stores (persisted to IndexedDB)
 └── prisma/
-    └── schema.prisma          # User, Profile, Project, File, Comment, etc.
+    └── schema.prisma           # User, Profile, Project, File, Comment, etc.
+
+mini-services/
+├── collab-server/              # WebSocket Yjs collab server (port 3002)
+└── lsp-server/                 # WebSocket rust-analyzer LSP server (port 3099)
+
+deploy/
+└── nginx.conf                  # Nginx reverse proxy config
 ```
 
 ---
 
-## Roadmap — what's next
+## Database Schema
 
-The full build prompt (§1–§15) defines 7 milestones. M1 + M2 are largely complete. Remaining work:
+The Prisma schema includes:
 
-- **M3 — Remix parity**: real `soroban contract build`/`deploy` execution (requires Docker container with Rust toolchain — see `scripts/setup.sh`), spec-driven invoke UI generation, tx log.
-- **M4 — Collab & comments**: Yjs + y-monaco CRDT editing, presence, line attribution, file-level comments with all §6 features (draggable panel, priorities, resolve/delete), §5.4 hardening rules.
-- **M5 — AI agent**: knowledge prefetch, BYOK providers (12 listed in §9.2), proxy passthrough, diff approval flow, prompt caching, "Fix with AI" wiring.
-- **M6 — Templates & identity**: stellar-appkit wallet connect, profile flow with unique username check, template gallery (soroban-examples + 5 OZ wizard templates) each with adapter-stellar React UI.
-- **M7 — Polish**: local-first sync hardening (IndexedDB via Dexie), loading-state audit, a11y pass, Playwright E2E suite, performance budget.
+| Model | Purpose |
+|---|---|
+| `User` | Wallet-based identity + GitHub OAuth |
+| `Profile` | Username, avatar, bio, theme preferences |
+| `Project` | Smart contract projects (owned, shared) |
+| `File` | File tree within a project |
+| `Comment` | File-level line comments with priority + CRDT anchoring |
+| `DeployedContract` | On-chain contract deployments (network, contract ID) |
+| `WasmVersion` | Versioned WASM binaries (hash, size, upgrade tracking) |
+| `CollabSession` | Active collaboration sessions |
+| `SharePermission` | Public links + private invites |
+| `AuditLog` | All file/comment/deploy/share actions |
 
 ---
 
-## Git workflow (§1)
+## BM2 Configuration
 
-Per the build prompt: every meaningful change is committed and pushed to `https://github.com/SagantaHQ/soroban.build` as author `ra-sun-god`. **Note**: the GitHub token was redacted in the source brief — fill in `GIT_PUSH_TOKEN` in `.env` to enable push.
+The `bm2.config.example.ts` manages all three services:
+
+| Service | Port | Purpose |
+|---|---|---|
+| `stellarforge` | 3700 | Next.js app (production) |
+| `stellarforge-collab` | 3002 | WebSocket Yjs collaboration server |
+| `stellarforge-lsp` | 3099 | WebSocket rust-analyzer LSP server |
+
+```bash
+# Start all
+bm2 start bm2.config.ts
+
+# Status
+bm2 list
+
+# Logs
+bm2 logs stellarforge --lines 50
+bm2 logs stellarforge-collab --lines 50
+bm2 logs stellarforge-lsp --lines 50
+
+# Restart
+bm2 restart stellarforge
+
+# Stop
+bm2 delete stellarforge
+```
 
 ---
 
-## References
-- [Monaco Editor](https://github.com/microsoft/monaco-editor)
-- [Stellar docs](https://developers.stellar.org/docs/build)
-- [Soroban examples](https://github.com/stellar/soroban-examples)
-- [OpenZeppelin Stellar skills](https://github.com/OpenZeppelin/openzeppelin-skills/blob/main/skills/setup-stellar-contracts/SKILL.md)
-- [OpenZeppelin adapter-stellar](https://github.com/OpenZeppelin/openzeppelin-adapters/tree/main/packages/adapter-stellar)
-- [SagantaHQ stellar-appkit](https://github.com/SagantaHQ/stellar-appkit)
+## License
+
+MIT
+
+## Links
+
+- [Stellar Docs](https://developers.stellar.org/docs/build)
+- [Soroban Examples](https://github.com/stellar/soroban-examples)
+- [SagantaHQ Stellar AppKit](https://github.com/SagantaHQ/stellar-appkit)
+- [stellarchain.io Explorer](https://stellarchain.io)

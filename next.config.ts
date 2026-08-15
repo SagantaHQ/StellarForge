@@ -2,8 +2,6 @@ import type { NextConfig } from "next";
 import path from "path";
 import MonacoWebpackPlugin from 'monaco-editor-webpack-plugin';
 
-
-
 const nextConfig: NextConfig = {
   typescript: {
     ignoreBuildErrors: true,

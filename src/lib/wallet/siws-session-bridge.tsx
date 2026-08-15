@@ -154,29 +154,47 @@ export function SiwsSessionBridge() {
   }, []);
 
   // ── 2. Sync SIWS session changes → profile store ───────────────────
-  // Also validates the session against the server and fetches FRESH user
-  // data from the DB on every reload.
+  // Fetch FRESH user data from the DB — do NOT use cached SIWS metadata
+  // for username/avatar/bio. The cached metadata can be stale (e.g. user
+  // changed their username, but the SIWS session in localStorage still
+  // has the old one).
   useEffect(() => {
     if (siwsSession) {
       if (lastSyncedAddress.current !== siwsSession.address) {
         lastSyncedAddress.current = siwsSession.address;
 
-        // Optimistically set from the SIWS session (instant)
+        // Set ONLY the wallet address + network immediately (so the UI
+        // shows "connected" status). Do NOT set username/avatar/bio from
+        // the cached SIWS metadata — fetch fresh from the DB instead.
         syncFromSiwsSession({
           address: siwsSession.address,
           network: siwsSession.network,
           expiry: siwsSession.expiry,
-          metadata: siwsSession.metadata,
+          // Don't pass metadata — the store will use defaults until the
+          // fresh fetch completes. This prevents the old username flash.
+          metadata: undefined,
         });
 
-        // Then validate + fetch FRESH data from the DB
-        // This overwrites the optimistic data with the latest DB state
+        // Fetch FRESH user data from the DB (not cached SIWS metadata).
+        // This is the ONLY source of truth for username, avatar, bio.
         validateServerSession(siwsSession.address).then((freshSession) => {
           if (freshSession) {
-            // Re-sync with fresh DB data (updates username, avatar, bio, isCustomUsername)
+            // Sync with fresh DB data — this overwrites the placeholder
+            // from above with the real username, avatar, bio.
             syncFromSiwsSession(freshSession);
           }
-        }).catch(() => {});
+        }).catch(() => {
+          // Server fetch failed — fall back to SIWS metadata as last resort
+          // (better than showing nothing)
+          if (siwsSession.metadata) {
+            syncFromSiwsSession({
+              address: siwsSession.address,
+              network: siwsSession.network,
+              expiry: siwsSession.expiry,
+              metadata: siwsSession.metadata,
+            });
+          }
+        });
       }
     } else {
       // Session cleared — but only clear if we previously had one

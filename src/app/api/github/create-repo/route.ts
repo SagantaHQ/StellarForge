@@ -65,7 +65,7 @@ export async function POST(req: NextRequest) {
         Authorization: `Bearer ${token}`,
         Accept: "application/vnd.github+json",
         "Content-Type": "application/json",
-        "User-Agent": "Soroban.Build",
+        "User-Agent": "StellarForge",
       },
       body: JSON.stringify({
         name,

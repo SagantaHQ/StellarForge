@@ -90,7 +90,7 @@ export async function GET(req: NextRequest) {
         headers: {
           Authorization: `Bearer ${token}`,
           Accept: "application/vnd.github+json",
-          "User-Agent": "Soroban.Build",
+          "User-Agent": "StellarForge",
         },
         // Don't cache — we want fresh repo list
         cache: "no-store",

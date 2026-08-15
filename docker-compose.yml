@@ -1,5 +1,5 @@
 # ============================================================
-# Soroban.Build — Docker Compose (§7)
+# StellarForge — Docker Compose (§7)
 #
 # Services:
 #   app      — Next.js IDE (port 3000)
@@ -54,7 +54,7 @@ services:
       # Persist knowledge base
       - knowledge-data:/app/knowledge
       # Workspace for user projects (terminal builds)
-      - workspace:/tmp/soroban-builds
+      - workspace:/tmp/stellarforge-builds
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/"]
       interval: 30s

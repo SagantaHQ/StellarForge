@@ -282,7 +282,7 @@ export function ProfileModal({ open, onClose, onComplete, existingProfile, walle
           <h2 className="text-sm font-semibold text-[var(--text-primary)]">
             {step === "wallet" && "Connect Wallet"}
             {step === "profile" && "Complete Your Profile"}
-            {step === "done" && "Welcome to Soroban.Build"}
+            {step === "done" && "Welcome to StellarForge"}
           </h2>
           <button
             onClick={onClose}

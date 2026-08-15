@@ -1,6 +1,6 @@
 {
-  "name": "Soroban.Build",
-  "short_name": "Soroban.Build",
+  "name": "StellarForge",
+  "short_name": "StellarForge",
   "description": "Agentic Web IDE for Soroban smart contract development.",
   "start_url": "/",
   "scope": "/",

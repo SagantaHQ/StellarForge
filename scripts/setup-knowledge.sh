@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Soroban.Build — Knowledge Base Setup (§9.4)
+# StellarForge — Knowledge Base Setup (§9.4)
 #
 # Clones all the skills, docs, and example repos listed in the master build
 # prompt into a `knowledge/` directory. The AI agent uses these to build
@@ -16,7 +16,7 @@ set -euo pipefail
 KNOWLEDGE_DIR="${1:-./knowledge}"
 
 echo "============================================================"
-echo "  Soroban.Build — Knowledge Base Setup"
+echo "  StellarForge — Knowledge Base Setup"
 echo "  Target: $KNOWLEDGE_DIR"
 echo "============================================================"
 echo ""
@@ -76,7 +76,7 @@ echo "============================================================"
 # The AI agent's context assembler uses this to include relevant docs
 INDEX_FILE="index.md"
 {
-  echo "# Soroban.Build Knowledge Base Index"
+  echo "# StellarForge Knowledge Base Index"
   echo ""
   echo "Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo ""

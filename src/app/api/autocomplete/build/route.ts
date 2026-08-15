@@ -21,7 +21,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
-const BUILDS_DIR = "/tmp/soroban-builds";
+const BUILDS_DIR = "/tmp/stellarforge-builds";
 
 interface CompletionItem {
   label: string;

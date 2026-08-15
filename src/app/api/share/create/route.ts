@@ -105,7 +105,7 @@ export async function POST(req: NextRequest) {
 
       if (!guestUser) {
         return NextResponse.json(
-          { error: `User '${guestUsername}' not found. They must have a Soroban.Build account.` },
+          { error: `User '${guestUsername}' not found. They must have a StellarForge account.` },
           { status: 404 }
         );
       }

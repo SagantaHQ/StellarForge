@@ -1,5 +1,5 @@
 {
-  "name": "soroban-build-lsp-server",
+  "name": "stellarforge-lsp-server",
   "version": "1.0.0",
   "private": true,
   "scripts": {

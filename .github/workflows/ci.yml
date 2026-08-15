@@ -1,5 +1,5 @@
 # ============================================================
-# Soroban.Build — CI Pipeline (§15.2)
+# StellarForge — CI Pipeline (§15.2)
 #
 # On every push: install → lint → typecheck → unit tests → Next.js build
 # On PR to main: + Docker build + Playwright E2E (headless)
@@ -79,7 +79,7 @@ jobs:
           context: .
           file: ./Dockerfile
           push: false
-          tags: soroban-build:ci
+          tags: stellarforge:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

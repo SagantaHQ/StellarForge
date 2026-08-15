@@ -59,7 +59,7 @@ export async function GET() {
   }
 
   // Check that the workspace dir is writable
-  const buildsDir = "/tmp/soroban-builds";
+  const buildsDir = "/tmp/stellarforge-builds";
   let writable = false;
   try {
     const fs = await import("fs/promises");

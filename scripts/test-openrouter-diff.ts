@@ -52,7 +52,7 @@ async function test() {
   // Step 1: Call OpenRouter with the build error + file content
   console.log("Step 1: Calling OpenRouter API...");
 
-  const systemPrompt = `You are the Soroban.Build AI agent — a senior Soroban smart contract engineer.
+  const systemPrompt = `You are the StellarForge AI agent — a senior Soroban smart contract engineer.
 
 🛑 CRITICAL RULE — READ FIRST 🛑
 

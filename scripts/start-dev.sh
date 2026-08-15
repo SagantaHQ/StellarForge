@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start the Soroban.Build dev server manually (no pm2, no auto-restart).
+# Start the StellarForge dev server manually (no pm2, no auto-restart).
 #
 # Next.js dev server has its own HMR (Hot Module Replacement) — we don't
 # need pm2's auto-restart on top of that. pm2's auto-restart + Next.js HMR

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Lightweight watchdog for the Soroban.Build dev server.
+# Lightweight watchdog for the StellarForge dev server.
 #
 # This is NOT pm2 — it's a simple bash loop that:
 #   1. Checks if the dev server process (from .zscripts/dev.pid) is alive

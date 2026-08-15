@@ -84,7 +84,7 @@ export async function checkRepoAccess(
         headers: {
           Authorization: `Bearer ${token}`,
           Accept: "application/vnd.github+json",
-          "User-Agent": "Soroban.Build",
+          "User-Agent": "StellarForge",
         },
       }
     );

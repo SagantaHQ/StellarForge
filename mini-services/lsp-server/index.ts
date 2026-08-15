@@ -1,5 +1,5 @@
 /**
- * Soroban.Build — LSP WebSocket Gateway
+ * StellarForge — LSP WebSocket Gateway
  *
  * Bridges Monaco (in the browser) ↔ rust-analyzer (server-side stdio).
  *
@@ -7,7 +7,7 @@
  *   Browser ──WebSocket──> this gateway ──stdio──> rust-analyzer
  *
  * Per workspace (project ID), the gateway:
- *   1. Writes the project files to /tmp/soroban-builds/<projectId>/
+ *   1. Writes the project files to /tmp/stellarforge-builds/<projectId>/
  *   2. Spawns `rust-analyzer` with that dir as the workspace root
  *   3. Forwards LSP messages between the WebSocket and rust-analyzer's stdio
  *   4. Idles out after 10 minutes of no WebSocket connections
@@ -18,7 +18,7 @@
  *
  * Security:
  *   - Workspace paths are sanitized (no path traversal)
- *   - Each workspace is isolated under /tmp/soroban-builds/<projectId>
+ *   - Each workspace is isolated under /tmp/stellarforge-builds/<projectId>
  *   - rust-analyzer runs with CARGO_HOME + RUSTUP_HOME pointing to the shared
  *     cargo cache so deps are downloaded once and reused across workspaces
  */
@@ -33,7 +33,7 @@ import { randomUUID } from "crypto";
 // ── Config ────────────────────────────────────────────────────────────
 const PORT = parseInt(process.env.LSP_PORT || "3001", 10);
 const HOME = process.env.HOME || "/home/z";
-const BUILDS_DIR = "/tmp/soroban-builds";
+const BUILDS_DIR = "/tmp/stellarforge-builds";
 const CARGO_HOME = `${HOME}/.cargo`;
 const RUSTUP_HOME = `${HOME}/.rustup`;
 const RUST_ANALYZER_BIN = `${CARGO_HOME}/bin/rust-analyzer`;

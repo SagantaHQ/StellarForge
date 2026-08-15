@@ -24,7 +24,7 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Soroban.Build — Agentic Web IDE for Soroban Smart Contracts",
+  title: "StellarForge — Agentic Web IDE for Soroban Smart Contracts",
   description:
     "Browser-based IDE for Soroban smart contract development. Compile, deploy, collaborate, and ship — without leaving your browser.",
   keywords: [
@@ -37,12 +37,12 @@ export const metadata: Metadata = {
     "Blockchain",
   ],
   authors: [{ name: "SagantaHQ" }],
-  applicationName: "Soroban.Build",
+  applicationName: "StellarForge",
   manifest: "/manifest.webmanifest",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
-    title: "Soroban.Build",
+    title: "StellarForge",
   },
   icons: {
     icon: [
@@ -54,9 +54,9 @@ export const metadata: Metadata = {
     apple: "/apple-touch-icon.png?v=2",
   },
   openGraph: {
-    title: "Soroban.Build",
+    title: "StellarForge",
     description: "Agentic Web IDE for Soroban Smart Contracts",
-    siteName: "Soroban.Build",
+    siteName: "StellarForge",
     type: "website",
   },
 };

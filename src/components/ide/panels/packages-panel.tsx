@@ -74,7 +74,7 @@ export function PackagesPanel() {
       for (const crate of OZ_CRATES) {
         try {
           const res = await fetch(`https://crates.io/api/v1/crates/${crate.name}`, {
-            headers: { "User-Agent": "Soroban.Build IDE" },
+            headers: { "User-Agent": "StellarForge IDE" },
           });
           if (res.ok) {
             const data = await res.json();

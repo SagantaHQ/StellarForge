@@ -17,7 +17,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-const BUILDS_DIR = "/tmp/soroban-builds";
+const BUILDS_DIR = "/tmp/stellarforge-builds";
 
 interface BuildLine {
   type: "stdout" | "stderr";

@@ -746,8 +746,8 @@ class LspClient {
   private async initialize(): Promise<void> {
     const result = await this.sendRequest("initialize", {
       processId: null,
-      clientInfo: { name: "soroban-build", version: "1.0" },
-      rootUri: `file:///tmp/soroban-builds/${this.workspaceId}`,
+      clientInfo: { name: "stellarforge", version: "1.0" },
+      rootUri: `file:///tmp/stellarforge-builds/${this.workspaceId}`,
       capabilities: {
         textDocument: {
           synchronization: { didOpen: true, didChange: true, didClose: true },
@@ -959,7 +959,7 @@ export function registerLspProvider(monaco: typeof Monaco, workspaceId: string):
       if (token.isCancellationRequested) return { suggestions: [] };
 
       const source = model.getValue();
-      const uri = `file:///tmp/soroban-builds/${workspaceId}/${model.uri.path.split("/").pop() === "lib.rs" ? "src/lib.rs" : model.uri.path.replace("/", "")}`;
+      const uri = `file:///tmp/stellarforge-builds/${workspaceId}/${model.uri.path.split("/").pop() === "lib.rs" ? "src/lib.rs" : model.uri.path.replace("/", "")}`;
 
       // Sync document to LSP server
       if (lspClient) {

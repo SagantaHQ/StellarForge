@@ -590,7 +590,7 @@ export const useProjectsStore = create<ProjectsState>()(
       },
     }),
     {
-      name: "soroban-build:projects-meta",
+      name: "stellarforge:projects-meta",
       storage: createJSONStorage(() => localStorage),
       // Only persist the lightweight meta — files live in IDB
       partialize: (s) => ({

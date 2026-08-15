@@ -19,7 +19,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300; // 5 min max for cargo builds
 
-const BUILDS_DIR = "/tmp/soroban-builds";
+const BUILDS_DIR = "/tmp/stellarforge-builds";
 
 // §15.4 — egress allowlist (domains the sandboxed terminal may reach)
 const EGRESS_ALLOWLIST = [

@@ -18,7 +18,7 @@ import "@saganta/stellar-appkit-ui-web";
  * Reads its `client` from the StellarAppKitProvider context automatically.
  * Other components open it via the `useWalletModal()` hook below.
  *
- * Theme tokens are overridden to match the Soroban.Build design system.
+ * Theme tokens are overridden to match the StellarForge design system.
  */
 
 export function WalletModalHost() {
@@ -41,7 +41,7 @@ export function WalletModalHost() {
       mode="auto"
       theme="dark"
       branding="default"
-      title="Soroban.Build"
+      title="StellarForge"
       logoSrc="/icon.svg"
       stellarExpertAvatars={true}
       autoRetryNetwork={true}

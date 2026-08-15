@@ -23,7 +23,7 @@ import type { ReactNode } from "react";
  */
 
 const APP_METADATA = {
-  name: "Soroban.Build",
+  name: "StellarForge",
   description: "Agentic Web IDE for Soroban Smart Contracts",
   // url is auto-derived from window.location.origin in the browser
 };
@@ -36,7 +36,7 @@ const config: StellarAppKitProviderConfig = {
   // Built-in SIWS — the modal auto-triggers sign-in after wallet connect.
   // All four callbacks hit our server endpoints under /api/siws/*.
   siws: {
-    statement: "Sign in to Soroban.Build",
+    statement: "Sign in to StellarForge",
     signoutOnDisconnect: true, // call /logout before disconnecting
     disconnectOnFail: true, // disconnect wallet if SIWS fails + modal closed
     maxRetries: 3,

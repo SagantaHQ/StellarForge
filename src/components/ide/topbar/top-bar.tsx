@@ -113,7 +113,7 @@ export function TopBar({
         {/* Saganta logo — Orbitron Bold S on brand green rounded square */}
         <img
           src="/saganta-logo.png"
-          alt="Soroban.Build"
+          alt="StellarForge"
           className="h-7 w-7 shrink-0 rounded-md"
           draggable={false}
         />

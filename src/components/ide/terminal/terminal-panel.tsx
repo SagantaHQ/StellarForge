@@ -23,7 +23,7 @@ const INITIAL_TABS: TerminalTab[] = [
     id: "tab-1",
     name: "bash",
     lines: [
-      { type: "system", text: "Soroban.Build terminal — sandboxed session" },
+      { type: "system", text: "StellarForge terminal — sandboxed session" },
       { type: "system", text: "Toolchain: rustc 1.81.0 · stellar-cli 22.0.0" },
       { type: "system", text: "Network: testnet (rpc.testnet.stellar.gateway.io)" },
       { type: "output", text: "" },
@@ -186,7 +186,7 @@ export function TerminalPanel({ collapsed, onToggleCollapse, onFixWithAI }: Term
       id,
       name: "bash",
       lines: [
-        { type: "system", text: "Soroban.Build terminal — sandboxed session" },
+        { type: "system", text: "StellarForge terminal — sandboxed session" },
         { type: "output", text: "" },
       ],
       history: [],

@@ -379,7 +379,7 @@ function EmptyEditorState() {
       </div>
       <div className="space-y-1">
         <h3 className="text-sm font-medium text-[var(--text-secondary)]">
-          Soroban.Build
+          StellarForge
         </h3>
         <p className="text-xs text-[var(--text-muted)] max-w-sm">
           Select a file from the explorer to start editing, or press{" "}

@@ -72,7 +72,7 @@ export function WelcomePage({
           <div className="mb-4 flex justify-center">
             <img
               src="/saganta-logo.png"
-              alt="Soroban.Build"
+              alt="StellarForge"
               className="h-14 w-14 rounded-xl ring-1 ring-[var(--border-subtle)]"
               draggable={false}
             />

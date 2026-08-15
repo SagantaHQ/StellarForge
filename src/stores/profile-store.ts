@@ -336,7 +336,7 @@ export const useProfileStore = create<ProfileState>()(
       },
     }),
     {
-      name: "soroban-build:profile",
+      name: "stellarforge:profile",
       storage: createJSONStorage(() => localStorage),
       // CRITICAL: Do NOT persist walletConnected, profile, or siwsValidated.
       //

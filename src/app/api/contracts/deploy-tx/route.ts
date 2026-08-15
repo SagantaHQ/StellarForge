@@ -33,7 +33,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-const BUILDS_DIR = "/tmp/soroban-builds";
+const BUILDS_DIR = "/tmp/stellarforge-builds";
 
 const NETWORK_RPC: Record<string, string> = {
   mainnet: "https://soroban-mainnet.stellar.org",

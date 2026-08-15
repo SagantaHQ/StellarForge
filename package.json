@@ -5,9 +5,9 @@
   "scripts": {
     "dev": "next dev -p 3000 2>&1 | tee dev.log",
     "dev:bm2": "bm2 start bm2.config.json",
-    "dev:bm2:stop": "bm2 delete soroban-build-dev",
-    "dev:bm2:restart": "bm2 restart soroban-build-dev",
-    "dev:bm2:logs": "bm2 logs soroban-build-dev --lines 50",
+    "dev:bm2:stop": "bm2 delete stellarforge-dev",
+    "dev:bm2:restart": "bm2 restart stellarforge-dev",
+    "dev:bm2:logs": "bm2 logs stellarforge-dev --lines 50",
     "dev:bm2:status": "bm2 list",
     "build": "next build && cp -r .next/static .next/standalone/.next/ && cp -r public .next/standalone/",
     "start": "NODE_ENV=production bun .next/standalone/server.js 2>&1 | tee server.log",

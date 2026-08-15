@@ -9,7 +9,7 @@ async function main() {
   // Create a test user with walletAddress
   const user = await db.user.create({
     data: { 
-      email: "test@soroban.build", 
+      email: "test@stellarforge.app", 
       walletAddress: "GTEST1234567890"
     }
   })

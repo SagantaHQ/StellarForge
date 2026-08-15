@@ -15,7 +15,7 @@ import { openDB, type IDBPDatabase } from "idb";
  *   3. Wrapping all operations in a retry that reopens on failure
  */
 
-const DB_NAME = "soroban-build";
+const DB_NAME = "stellarforge";
 const DB_VERSION = 2;
 
 export type StoreName = "files" | "comments" | "tabs" | "meta" | "projects";

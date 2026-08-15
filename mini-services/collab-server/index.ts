@@ -1,5 +1,5 @@
 /**
- * §5 — Soroban.Build WebSocket Collaboration Server
+ * §5 — StellarForge WebSocket Collaboration Server
  *
  * A y-websocket-compatible server that enables cross-browser/cross-device
  * realtime collaborative editing. Uses the standard y-protocols/sync
@@ -44,7 +44,7 @@ const rooms = new Map<string, Room>();
 const server = http.createServer();
 const wss = new WebSocketServer({ server });
 
-console.log(` Soroban.Build collab server running on ws://localhost:${PORT}`);
+console.log(` StellarForge collab server running on ws://localhost:${PORT}`);
 
 function getRoom(roomId: string): Room {
   let room = rooms.get(roomId);
@@ -80,9 +80,9 @@ function cleanupRoom(roomId: string) {
 }
 
 wss.on("connection", (ws: WebSocket, req) => {
-  // Parse room ID from URL: /soroban-build-<roomId>
+  // Parse room ID from URL: /stellarforge-<roomId>
   const url = req.url || "";
-  const match = url.match(/soroban-build-([a-z0-9]+)/);
+  const match = url.match(/stellarforge-([a-z0-9]+)/);
   if (!match) {
     ws.close(4000, "Invalid room ID");
     return;

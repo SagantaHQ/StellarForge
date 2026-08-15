@@ -1,4 +1,4 @@
-# Soroban.Build
+# StellarForge
 
 > Agentic, browser-based IDE for Soroban smart contract development.
 > The Soroban equivalent of Remix IDE for Ethereum — but better: fully agentic, realtime collaborative, local-first, PWA-installable, and polished to a standard that exceeds VS Code's web experience.

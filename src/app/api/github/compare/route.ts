@@ -73,7 +73,7 @@ async function githubFetch(path: string, token: string, options: RequestInit = {
     headers: {
       Authorization: `Bearer ${token}`,
       Accept: "application/vnd.github+json",
-      "User-Agent": "Soroban.Build",
+      "User-Agent": "StellarForge",
       ...(options.body ? { "Content-Type": "application/json" } : {}),
     },
   });

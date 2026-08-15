@@ -82,7 +82,7 @@ async function githubFetch(path: string, token: string, options: RequestInit = {
     headers: {
       Authorization: `Bearer ${token}`,
       Accept: "application/vnd.github+json",
-      "User-Agent": "Soroban.Build",
+      "User-Agent": "StellarForge",
       ...(options.body ? { "Content-Type": "application/json" } : {}),
     },
   });
@@ -254,8 +254,8 @@ export async function POST(req: NextRequest) {
     // When using the server PAT, the commit is attributed to the server
     // token's owner (GitHub uses the token owner as the committer).
     const commitAuthor = {
-      name: tokenResult.username || user.githubUsername || user.email || "Soroban.Build User",
-      email: user.email || (tokenResult.username ? `${tokenResult.username}@users.noreply.github.com` : "noreply@soroban.build"),
+      name: tokenResult.username || user.githubUsername || user.email || "StellarForge User",
+      email: user.email || (tokenResult.username ? `${tokenResult.username}@users.noreply.github.com` : "noreply@stellarforge.app"),
       date: new Date().toISOString(),
     };
 

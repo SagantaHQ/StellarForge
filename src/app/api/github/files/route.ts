@@ -73,7 +73,7 @@ export async function GET(req: NextRequest) {
         headers: {
           Authorization: `Bearer ${token}`,
           Accept: "application/vnd.github+json",
-          "User-Agent": "Soroban.Build",
+          "User-Agent": "StellarForge",
         },
       }
     );
@@ -101,7 +101,7 @@ export async function GET(req: NextRequest) {
         headers: {
           Authorization: `Bearer ${token}`,
           Accept: "application/vnd.github+json",
-          "User-Agent": "Soroban.Build",
+          "User-Agent": "StellarForge",
         },
       }
     );
@@ -131,7 +131,7 @@ export async function GET(req: NextRequest) {
           headers: {
             Authorization: `Bearer ${token}`,
             Accept: "application/vnd.github+json",
-            "User-Agent": "Soroban.Build",
+            "User-Agent": "StellarForge",
           },
         });
 

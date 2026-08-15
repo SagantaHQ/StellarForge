@@ -88,7 +88,7 @@ export const useEditorTabsStore = create<EditorTabsState>()(
         }),
     }),
     {
-      name: "soroban-build:editor-tabs",
+      name: "stellarforge:editor-tabs",
       storage: createJSONStorage(() => createIDBStorage()),
       partialize: (s) => ({
         tabs: s.tabs,

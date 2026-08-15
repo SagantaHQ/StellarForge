@@ -90,7 +90,7 @@ export const useAIKeysStore = create<AIKeysState>()(
       },
     }),
     {
-      name: "soroban-build:ai-keys",
+      name: "stellarforge:ai-keys",
       storage: createJSONStorage(() => localStorage),
       partialize: (s) => ({
         providers: s.providers,

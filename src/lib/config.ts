@@ -1,5 +1,5 @@
 /**
- * Soroban.Build — typed config module.
+ * StellarForge — typed config module.
  *
  * Single source of truth for environment configuration.
  * Validates at boot and fails fast with a clear, named error
@@ -124,7 +124,7 @@ export function loadConfig(): AppConfig {
       return `  - ${path}: ${i.message}`;
     });
     const msg =
-      "Soroban.Build failed to start — invalid environment configuration:\n" +
+      "StellarForge failed to start — invalid environment configuration:\n" +
       issues.join("\n") +
       "\n\nCheck .env against .env.example and try again.";
     throw new Error(msg);

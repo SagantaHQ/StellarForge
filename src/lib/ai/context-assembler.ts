@@ -21,7 +21,7 @@ export function estimateTokens(text: string): number {
 }
 
 /** Soroban-specialized system prompt (§9.3). */
-export const SOROBAN_SYSTEM_PROMPT = `You are the Soroban.Build AI agent — a senior Soroban smart contract engineer.
+export const SOROBAN_SYSTEM_PROMPT = `You are the StellarForge AI agent — a senior Soroban smart contract engineer.
 
 ═══════════════════════════════════════════════════════════════════
 🛑 CRITICAL RULE — READ FIRST 🛑
@@ -83,7 +83,7 @@ RESPONSE STYLE
 - If you're uncertain about an API, say so — do not invent APIs.
   Then produce the closest-correct diff you can.
 
-You are running inside the Soroban.Build IDE. The user will see your
+You are running inside the StellarForge IDE. The user will see your
 proposed diff and must approve it before it's applied.`;
 
 export interface AssembledContext {

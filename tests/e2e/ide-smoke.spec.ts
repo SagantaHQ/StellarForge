@@ -57,7 +57,7 @@ test.describe("IDE Smoke Tests", () => {
     await page.goto("/");
 
     // Terminal should be visible at the bottom
-    await expect(page.locator("text=Soroban.Build terminal")).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator("text=StellarForge terminal")).toBeVisible({ timeout: 15_000 });
   });
 
   test("status bar shows network and toolchain info", async ({ page }) => {

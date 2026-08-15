@@ -112,7 +112,7 @@ class SimpleAwareness {
 
 /** Create a BroadcastChannel-based provider for same-origin tab sync. */
 function createBroadcastProvider(roomId: string, ydoc: Y.Doc): CollabProvider {
-  const channel = new BroadcastChannel(`soroban-build-collab-${roomId}`);
+  const channel = new BroadcastChannel(`stellarforge-collab-${roomId}`);
   const awareness = new SimpleAwareness(ydoc);
 
   // Store the update handler so we can remove it in destroy()

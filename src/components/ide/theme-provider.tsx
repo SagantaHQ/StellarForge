@@ -123,7 +123,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 export const themeInitScript = `
 (function() {
   try {
-    var stored = JSON.parse(localStorage.getItem('soroban-build:theme') || '{}');
+    var stored = JSON.parse(localStorage.getItem('stellarforge:theme') || '{}');
     var state = stored.state || {};
     var themeId = state.themeId;
     // Default to midnight — user can switch in Settings

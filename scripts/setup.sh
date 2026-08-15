@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Soroban.Build — Setup Script (§7)
+# StellarForge — Setup Script (§7)
 #
 # Installs the latest versions of:
 #   1. Rust (via rustup, stable toolchain, plus wasm32v1-none target)
@@ -15,7 +15,7 @@
 set -euo pipefail
 
 echo "============================================================"
-echo "  Soroban.Build — Toolchain Setup"
+echo "  StellarForge — Toolchain Setup"
 echo "============================================================"
 echo ""
 

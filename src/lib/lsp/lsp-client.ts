@@ -23,7 +23,7 @@ const CloseAction = { DoNotRestart: 1, Restart: 2 } as const;
 const ErrorAction = { Continue: 1, Shutdown: 2 } as const;
 
 /**
- * LSP client for Soroban.Build — connects Monaco to the rust-analyzer
+ * LSP client for StellarForge — connects Monaco to the rust-analyzer
  * LSP gateway via WebSocket.
  *
  * Architecture:
@@ -212,7 +212,7 @@ export function createLspClient(opts: LspClientOptions): LspClient {
       // Initialize rust-analyzer with the workspace root
       initializationOptions: {
         // Tell rust-analyzer about the workspace
-        workspaceRoot: `/tmp/soroban-builds/${workspaceId}`,
+        workspaceRoot: `/tmp/stellarforge-builds/${workspaceId}`,
         // Enable cargo check on save for diagnostics
         checkOnSave: {
           command: "clippy",
@@ -304,20 +304,20 @@ export function createLspClient(opts: LspClientOptions): LspClient {
 
 /**
  * Convert a Monaco file path to an LSP file URI.
- * e.g. "src/lib.rs" → "file:///tmp/soroban-builds/<workspaceId>/src/lib.rs"
+ * e.g. "src/lib.rs" → "file:///tmp/stellarforge-builds/<workspaceId>/src/lib.rs"
  */
 export function pathToLspUri(workspaceId: string, filePath: string): string {
   // Remove leading slash if present
   const cleanPath = filePath.startsWith("/") ? filePath.slice(1) : filePath;
-  return `file:///tmp/soroban-builds/${workspaceId}/${cleanPath}`;
+  return `file:///tmp/stellarforge-builds/${workspaceId}/${cleanPath}`;
 }
 
 /**
  * Convert an LSP file URI back to a Monaco file path.
- * e.g. "file:///tmp/soroban-builds/<id>/src/lib.rs" → "src/lib.rs"
+ * e.g. "file:///tmp/stellarforge-builds/<id>/src/lib.rs" → "src/lib.rs"
  */
 export function lspUriToPath(workspaceId: string, uri: string): string {
-  const prefix = `file:///tmp/soroban-builds/${workspaceId}/`;
+  const prefix = `file:///tmp/stellarforge-builds/${workspaceId}/`;
   if (uri.startsWith(prefix)) {
     return uri.slice(prefix.length);
   }

@@ -5,7 +5,7 @@ import { extractAndParseDiffs, applyDiffToContent } from "../src/lib/ai/ai-diff-
 const AI_KEY = process.env.OPENROUTER_API_KEY || "";
 const MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free";
 
-const systemPrompt = `You are the Soroban.Build AI agent — a senior Soroban smart contract engineer.
+const systemPrompt = `You are the StellarForge AI agent — a senior Soroban smart contract engineer.
 
 🛑 CRITICAL RULE — READ FIRST 🛑
 

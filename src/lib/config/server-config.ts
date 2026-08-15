@@ -1,5 +1,5 @@
 /**
- * Server-side configuration for Soroban.Build IDE.
+ * Server-side configuration for StellarForge IDE.
  *
  * This file is editable by admins only. It controls features that affect
  * server resources (e.g. autocomplete mode, LSP server).

@@ -305,7 +305,7 @@ export const useCommentsStore = create<CommentsState>()(
       },
     }),
     {
-      name: "soroban-build:comments",
+      name: "stellarforge:comments",
       storage: createJSONStorage(() => createIDBStorage()),
       partialize: (s) => ({
         comments: s.comments,

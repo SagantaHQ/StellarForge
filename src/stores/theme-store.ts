@@ -96,7 +96,7 @@ export const useThemeStore = create<ThemeState>()(
       },
     }),
     {
-      name: "soroban-build:theme",
+      name: "stellarforge:theme",
       storage: createJSONStorage(() => localStorage),
       partialize: (s) => ({
         themeId: s.themeId,

@@ -4,7 +4,7 @@
 @custom-variant dark (&:is(.dark *));
 
 /* ============================================================
-   Soroban.Build Design System
+   StellarForge Design System
    Token-based theme engine — every theme maps onto these vars.
    §4 rules: NO gradients, NO neons, flat solid fills only.
    ============================================================ */

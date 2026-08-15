@@ -59,7 +59,7 @@ export const useSnapshotStore = create<SnapshotState>()(
       clearAll: () => set({ snapshots: [] }),
     }),
     {
-      name: "soroban-build:snapshots",
+      name: "stellarforge:snapshots",
       storage: createJSONStorage(() => createIDBStorage()),
     }
   )

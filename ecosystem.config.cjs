@@ -3,7 +3,7 @@
 module.exports = {
   apps: [
     {
-      name: 'soroban-build-dev',
+      name: 'stellarforge-dev',
       script: 'node_modules/next/dist/bin/next',
       args: 'dev -p 3000 --webpack',
       cwd: '/home/z/my-project',

@@ -27,7 +27,7 @@ export const test = base.extend({
     await page.evaluate(() => {
       return new Promise<void>((resolve) => {
         try {
-          const req = indexedDB.deleteDatabase("soroban-build");
+          const req = indexedDB.deleteDatabase("stellarforge");
           req.onsuccess = () => resolve();
           req.onerror = () => resolve();
           req.onblocked = () => resolve();

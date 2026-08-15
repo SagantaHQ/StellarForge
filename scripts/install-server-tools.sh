@@ -1,7 +1,7 @@
 #!/bin/bash
 # scripts/install-server-tools.sh
 #
-# Comprehensive installer for all server-side tools needed by Soroban.Build.
+# Comprehensive installer for all server-side tools needed by StellarForge.
 #
 # Installs:
 #   1. Rust toolchain (latest stable) via rustup
@@ -41,7 +41,7 @@ fail()   { echo -e "${RED}  ✗ $1${NC}"; exit 1; }
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════════════╗"
-echo "║  Soroban.Build — Server Tools Installer                          ║"
+echo "║  StellarForge — Server Tools Installer                          ║"
 echo "║                                                                  ║"
 echo "║  • Rust toolchain (latest stable)                                ║"
 echo "║  • wasm32v1-none target (Soroban contracts)                      ║"

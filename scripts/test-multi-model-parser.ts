@@ -29,7 +29,7 @@ const MODELS = [
   "nvidia/nemotron-3.5-lightning:free",
 ];
 
-const SYSTEM_PROMPT = `You are the Soroban.Build AI agent — a senior Soroban smart contract engineer.
+const SYSTEM_PROMPT = `You are the StellarForge AI agent — a senior Soroban smart contract engineer.
 
 🛑 CRITICAL RULE — READ FIRST 🛑
 

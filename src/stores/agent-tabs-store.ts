@@ -152,7 +152,7 @@ export const useAgentTabsStore = create<AgentTabsState>()(
         }),
     }),
     {
-      name: "soroban-build:agent-tabs",
+      name: "stellarforge:agent-tabs",
       storage: createJSONStorage(() => localStorage),
       // Persist messages + tab metadata, but NOT pendingDiffs.
       // pendingDiffs are transient — they should only exist while the user

@@ -42,7 +42,7 @@ export async function GET() {
   const result: Record<string, { installed: boolean; path?: string; version?: string; searched: string[] }> = {};
 
   for (const [bin, paths] of Object.entries(searched)) {
-    const found = paths.find((p) => existsSync(p));
+    const found = paths.find((p) => existsSync(/*turbopackIgnore: true*/ p));
     let version: string | undefined;
     if (found) {
       try {
@@ -63,9 +63,9 @@ export async function GET() {
   let writable = false;
   try {
     const fs = await import("fs/promises");
-    await fs.mkdir(buildsDir, { recursive: true });
-    await fs.writeFile(`${buildsDir}/.write-test`, "ok");
-    await fs.unlink(`${buildsDir}/.write-test`);
+    await fs.mkdir(/*turbopackIgnore: true*/ buildsDir, { recursive: true });
+    await fs.writeFile(/*turbopackIgnore: true*/ `${buildsDir}/.write-test`, "ok");
+    await fs.unlink(/*turbopackIgnore: true*/ `${buildsDir}/.write-test`);
     writable = true;
   } catch {
     writable = false;

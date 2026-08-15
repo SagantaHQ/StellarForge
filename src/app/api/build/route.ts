@@ -57,7 +57,7 @@ async function resolveBinary(name: string): Promise<string | null> {
     `/bin/${name}`,
   ];
   for (const c of candidates) {
-    if (existsSync(c)) return c;
+    if (existsSync(/*turbopackIgnore: true*/ c)) return c;
   }
   return null;
 }
@@ -144,13 +144,13 @@ export async function POST(req: NextRequest) {
     workspaceDir = path.join(BUILDS_DIR, body.projectId);
     // DON'T delete the workspace — that would wipe target/ (cargo cache).
     // Just ensure the dir exists + overwrite source files.
-    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(/*turbopackIgnore: true*/ workspaceDir, { recursive: true });
     for (const file of body.files) {
       // Skip files under target/ — those are cargo's build artifacts
       if (file.path.startsWith("target/") || file.path.startsWith("target\\")) continue;
       const filePath = path.join(workspaceDir, file.path);
-      await fs.mkdir(path.dirname(filePath), { recursive: true });
-      await fs.writeFile(filePath, file.content, "utf-8");
+      await fs.mkdir(/*turbopackIgnore: true*/ path.dirname(filePath), { recursive: true });
+      await fs.writeFile(/*turbopackIgnore: true*/ filePath, file.content, "utf-8");
     }
   } catch (err) {
     return NextResponse.json(
@@ -273,7 +273,7 @@ export async function POST(req: NextRequest) {
                   finalWasmPath = path.join(wasmDir, `${slug}.wasm`);
                   if (finalWasmPath !== wasmPath) {
                     try {
-                      await fs.copyFile(wasmPath, finalWasmPath);
+                      await fs.copyFile(/*turbopackIgnore: true*/ wasmPath, finalWasmPath);
                     } catch {
                       // If copy fails (e.g. name collision), keep the original
                       finalWasmPath = wasmPath;
@@ -282,7 +282,7 @@ export async function POST(req: NextRequest) {
                 }
               }
 
-              const stat = await fs.stat(finalWasmPath);
+              const stat = await fs.stat(/*turbopackIgnore: true*/ finalWasmPath);
               job.wasmInfo = {
                 path: finalWasmPath.replace(workspaceDir + "/", ""),
                 sizeBytes: stat.size,
@@ -315,7 +315,7 @@ export async function POST(req: NextRequest) {
     // Dependency WASMs are in target/wasm32v1-none/release/deps/ — we don't
     // want those. So check files in the current dir first, then recurse
     // (skipping the deps/ directory).
-    const entries = await fs.readdir(dir, { withFileTypes: true });
+    const entries = await fs.readdir(/*turbopackIgnore: true*/ dir, { withFileTypes: true });
 
     // First pass: check files in THIS directory
     for (const entry of entries) {

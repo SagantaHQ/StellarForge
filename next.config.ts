@@ -8,7 +8,6 @@ const monacoEditorApi = path.resolve(
 );
 
 const nextConfig: NextConfig = {
-  output: "standalone",
   typescript: {
     ignoreBuildErrors: true,
   },

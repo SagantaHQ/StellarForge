@@ -65,7 +65,7 @@ export async function POST(req: NextRequest) {
     let bedrockRuntime: any;
     try {
       // @ts-ignore
-      bedrockRuntime = await import("@aws-sdk/client-bedrock-runtime");
+      bedrockRuntime = await import(/* webpackIgnore: true */ /* turbopackIgnore: true */ "@aws-sdk/client-bedrock-runtime");
     } catch {
       return NextResponse.json(
         {

@@ -57,7 +57,7 @@ async function resolveBinary(name: string): Promise<string | null> {
     `/bin/${name}`,
   ];
   for (const c of candidates) {
-    if (existsSync(c)) return c;
+    if (existsSync(/*turbopackIgnore: true*/ c)) return c;
   }
   return null;
 }
@@ -282,7 +282,7 @@ export async function POST(req: NextRequest) {
                 }
               }
 
-              const stat = await fs.stat(finalWasmPath);
+              const stat = await fs.stat(/*turbopackIgnore: true*/ finalWasmPath);
               job.wasmInfo = {
                 path: finalWasmPath.replace(workspaceDir + "/", ""),
                 sizeBytes: stat.size,

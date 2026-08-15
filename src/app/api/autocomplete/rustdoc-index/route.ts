@@ -63,7 +63,7 @@ export async function GET(req: Request) {
     for (const dir of [TMP_INDEX_DIR, DATA_INDEX_DIR]) {
       let files: string[] = [];
       try {
-        files = await fs.readdir(dir);
+        files = await fs.readdir(/*turbopackIgnore: true*/ dir);
       } catch {
         continue; // dir doesn't exist yet
       }
@@ -72,7 +72,7 @@ export async function GET(req: Request) {
         if (!file.endsWith(".json")) continue;
         if (file === "soroban-sdk-index.json" || file === "std-index.json" || file.startsWith("std-")) continue;
         try {
-          const data = JSON.parse(await fs.readFile(path.join(dir, file), "utf-8"));
+          const data = JSON.parse(await fs.readFile(/*turbopackIgnore: true*/ /* @vite-ignore */ path.join(/*turbopackIgnore: true*/ dir, file), "utf-8"));
           depIndexes.push(data);
           seenFiles.add(file);
         } catch {}

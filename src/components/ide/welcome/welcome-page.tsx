@@ -66,7 +66,7 @@ export function WelcomePage({
 
   return (
     <div className="flex-1 overflow-y-auto bg-[var(--surface-app)]">
-      <div className="mx-auto max-w-5xl px-6 py-12 sm:px-8 sm:py-16">
+      <div className="mx-auto max-w-5xl px-6 py-12 pb-24 sm:px-8 sm:py-16">
         {/* Hero */}
         <div className="mb-10 text-center">
           <div className="mb-4 flex justify-center">

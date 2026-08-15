@@ -734,6 +734,21 @@ export function IdeShell() {
             isCustomUsername: true, // mark as locked after save
           });
 
+          // Update the cached SIWS session metadata in localStorage so
+          // the SiwsSessionBridge doesn't overwrite the new username with
+          // the old one from the cached session.
+          try {
+            const raw = localStorage.getItem("saganta-appkit:siws-session");
+            if (raw) {
+              const session = JSON.parse(raw);
+              if (session?.metadata) {
+                session.metadata.username = p.username;
+                session.metadata.isCustomUsername = true;
+                localStorage.setItem("saganta-appkit:siws-session", JSON.stringify(session));
+              }
+            }
+          } catch {}
+
           // Re-fetch the profile from the server to ensure sync
           fetch(`/api/auth/session?address=${encodeURIComponent(p.address)}`)
             .then(r => r.ok ? r.json() : null)

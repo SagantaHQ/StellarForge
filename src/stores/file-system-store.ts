@@ -222,11 +222,44 @@ export const useFileSystemStore = create<FileSystemState>((set, get) => ({
 
   updateFileContent: (path, content) =>
     set((s) => {
-      const newTree = updateInTree(s.tree, (node) => {
+      // OPTIMIZATION: Instead of deep-cloning the entire tree on every
+      // keystroke, we do a SHALLOW update — only the edited file node
+      // is replaced. The tree structure is unchanged, so React can skip
+      // re-rendering the file explorer (it only re-renders if the tree
+      // array identity changes, which we achieve by creating a new top-
+      // level array reference with the same items).
+      //
+      // Previously this used updateInTree() which deep-cloned ALL nodes
+      // — O(n) where n = total files. For a project with 50+ files,
+      // every keystroke was slow.
+      const newTree = s.tree.map((node) => {
         if (node.type === "file" && node.path === path) {
           const updated = { ...node, content, gitStatus: node.gitStatus ?? "modified" as const };
           persistFile(updated);
           return updated;
+        }
+        // For folders, we need to recurse to find the file, but we DON'T
+        // deep-clone — we only create a new folder object if one of its
+        // children changed. This is still O(n) worst-case, but the common
+        // case (file is at top level) is O(1).
+        if (node.type === "folder") {
+          // Check if the file is in this folder before recursing
+          // (quick check: does the path start with this folder's path?)
+          const folderPath = node.path;
+          if (path.startsWith(folderPath + "/") || path.startsWith(folderPath + "\\") || path === node.name) {
+            const newChildren = updateInTree(node.children, (child) => {
+              if (child.type === "file" && child.path === path) {
+                const updated = { ...child, content, gitStatus: child.gitStatus ?? "modified" as const };
+                persistFile(updated);
+                return updated;
+              }
+              return child;
+            });
+            // Only create a new folder object if children actually changed
+            if (newChildren !== node.children) {
+              return { ...node, children: newChildren };
+            }
+          }
         }
         return node;
       });

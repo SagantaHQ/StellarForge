@@ -111,6 +111,16 @@ export function MonacoEditor({
     editorRef.current = editor;
     monacoRef.current = monaco;
 
+    // Expose the Monaco instance on window so the LSP manager (which is
+    // a separate dynamically-loaded component) can use the SAME Monaco
+    // instance. If the LSP client uses a different Monaco instance
+    // (e.g. via import("monaco-editor")), it throws:
+    //   "Default api is not ready yet, do not forget to import
+    //    'vscode/localExtensionHost'"
+    if (typeof window !== "undefined") {
+      (window as unknown as { __monacoInstance?: typeof Monaco }).__monacoInstance = monaco;
+    }
+
     const theme = getActiveTheme();
     monaco.editor.defineTheme(theme.id, buildMonacoTheme(theme));
     monaco.editor.setTheme(theme.id);

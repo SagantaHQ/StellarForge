@@ -21,9 +21,11 @@ import { SettingsDialog } from "./panels/settings-dialog";
 import { NewProjectModal } from "./templates/new-project-modal";
 import { ProfileModal } from "./profile/profile-modal";
 // LSP manager — connects Monaco to the rust-analyzer LSP server.
-// Requires the LSP server running on port 3099 (via PM2 or manually):
-//   pm2 start ecosystem.services.cjs --only stellarforge-lsp
+// Requires the LSP server running on port 3099 (via BM2 or manually):
+//   bm2 start bm2.config.ts
 // The /lsp and /workspace/ paths are proxied via next.config.ts rewrites.
+// The LspManagerMount reads the Monaco instance from window.__monacoInstance
+// (set by the editor's onMount callback).
 import dynamic from "next/dynamic";
 const LspManagerMount = dynamic(
   () => import("./editor/lsp-manager-mount").then((m) => m.LspManagerMount),

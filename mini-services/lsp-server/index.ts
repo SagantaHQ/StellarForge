@@ -31,7 +31,7 @@ import path from "path";
 import { randomUUID } from "crypto";
 
 // ── Config ────────────────────────────────────────────────────────────
-const PORT = parseInt(process.env.LSP_PORT || "3001", 10);
+const PORT = parseInt(process.env.LSP_PORT || "3099", 10);
 const HOME = process.env.HOME || "/home/z";
 const BUILDS_DIR = "/tmp/stellarforge-builds";
 const CARGO_HOME = `${HOME}/.cargo`;

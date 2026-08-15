@@ -145,12 +145,17 @@ export function createLspClient(opts: LspClientOptions): LspClient {
   }
 
   async function syncFiles(files: { path: string; content: string }[]): Promise<void> {
-    // Use the same host as the page (Next.js rewrites /workspace → LSP gateway)
-    await fetch(`${window.location.origin}/workspace/${encodeURIComponent(workspaceId)}/sync`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ files }),
-    });
+    try {
+      await fetch(`${window.location.origin}/workspace/${encodeURIComponent(workspaceId)}/sync`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ files }),
+      });
+    } catch {
+      // LSP server not running — silently ignore. File sync is only
+      // needed for rust-analyzer features (autocomplete, go-to-def).
+      // The app works without LSP — it just uses the simpler autocomplete.
+    }
   }
 
   async function start(): Promise<void> {
@@ -159,11 +164,12 @@ export function createLspClient(opts: LspClientOptions): LspClient {
     setStatus("connecting");
 
     const url = getLspWebSocketUrl(workspaceId);
-    console.log(`[lsp] connecting to ${url}`);
 
     webSocket = new BrowserWebSocketAdapter(url);
 
-    // Wait for the WebSocket to open
+    // Wait for the WebSocket to open — fail gracefully if the LSP
+    // server isn't running. The app works without LSP (falls back to
+    // the simpler autocomplete provider).
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
         reject(new Error("WebSocket connection timeout"));
@@ -171,7 +177,6 @@ export function createLspClient(opts: LspClientOptions): LspClient {
 
       const onOpen = () => {
         clearTimeout(timeout);
-        webSocket?.dispose; // noop — we just need to remove these listeners
         resolve();
       };
       const onError = (err: unknown) => {
@@ -183,6 +188,13 @@ export function createLspClient(opts: LspClientOptions): LspClient {
       const ws = (webSocket as unknown as { ws: WebSocket }).ws as WebSocket;
       ws.addEventListener("open", onOpen, { once: true });
       ws.addEventListener("error", onError, { once: true });
+    }).catch((err) => {
+      // LSP server not available — log once and set status to error.
+      // Don't spam the console — the user may not have the LSP server
+      // running, and that's fine (the app works without it).
+      console.warn("[lsp] server not available — LSP features disabled. Start it with: bm2 start bm2.config.ts");
+      setStatus("error");
+      throw err;
     });
 
     setStatus("initializing");

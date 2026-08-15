@@ -303,6 +303,13 @@ export function TopBar({
                   src={profile.avatarUrl}
                   alt={profile.username}
                   className="h-6 w-6 rounded-full object-cover"
+                  onError={(e) => {
+                    // Avatar URL is broken (404) — hide the img and fall
+                    // back to the boring-avatar below. This happens when
+                    // the avatar was uploaded to a different server or
+                    // the file was deleted.
+                    (e.target as HTMLImageElement).style.display = "none";
+                  }}
                 />
               ) : (
                 <Suspense fallback={<div className="h-6 w-6 rounded-full bg-[var(--surface-raised)]" />}>

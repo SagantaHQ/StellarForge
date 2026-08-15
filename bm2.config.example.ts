@@ -7,8 +7,9 @@ const bm2Config = {
     {
       name: "stellarforge",
       cwd: __dirname,
-      script: "node_modules/next/dist/bin/next",
-      args: "-p 3700",
+      // Change this to an absolute path:
+      script: path.join(__dirname, "node_modules/next/dist/bin/next"),
+      args: "start -p 3700", // Added explicit "start" command
       interpreter: "bun",
       interpreter_args: "--bun",
       env: {

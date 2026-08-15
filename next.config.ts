@@ -21,6 +21,8 @@ const nextConfig: NextConfig = {
     "preview-chat-*.space-z.ai",
     "localhost:3000",
     "127.0.0.1:3000",
+    "stellarforge.com",
+    "*.stellarforge.com"
   ],
   serverExternalPackages: [
     "@prisma/client",

@@ -20,14 +20,15 @@ import { CommandPalette } from "./panels/command-palette";
 import { SettingsDialog } from "./panels/settings-dialog";
 import { NewProjectModal } from "./templates/new-project-modal";
 import { ProfileModal } from "./profile/profile-modal";
-// LSP manager — temporarily disabled to reduce memory pressure on 4GB sandbox.
-// The monaco-editor + monaco-languageclient import adds ~200MB to the client
-// bundle, which causes OOM-restart loops (502 errors on all chunks).
-// TODO: Re-enable with a lighter-weight autocomplete approach.
-// const LspManagerMount = dynamic(
-//   () => import("./editor/lsp-manager-mount").then((m) => m.LspManagerMount),
-//   { ssr: false, loading: () => null }
-// );
+// LSP manager — connects Monaco to the rust-analyzer LSP server.
+// Requires the LSP server running on port 3099 (via PM2 or manually):
+//   pm2 start ecosystem.services.cjs --only stellarforge-lsp
+// The /lsp and /workspace/ paths are proxied via next.config.ts rewrites.
+import dynamic from "next/dynamic";
+const LspManagerMount = dynamic(
+  () => import("./editor/lsp-manager-mount").then((m) => m.LspManagerMount),
+  { ssr: false, loading: () => null }
+);
 import { ShareDialog } from "./collab/share-dialog";
 import { DeleteProjectModal } from "./projects/delete-project-modal";
 import { ImportProjectModal } from "./projects/import-project-modal";
@@ -752,7 +753,7 @@ export function IdeShell() {
 
       {/* LSP manager — temporarily disabled to reduce memory pressure.
           TODO: Re-enable with lighter-weight autocomplete. */}
-      {/* <LspManagerMount /> */}
+      <LspManagerMount />
     </div>
   );
 }

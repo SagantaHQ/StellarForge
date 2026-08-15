@@ -3,11 +3,13 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "bun --hot index.ts"
+    "dev": "bun --hot index.ts",
+    "start": "bun index.ts"
   },
   "dependencies": {
-    "y-websocket": "^2.0.4",
-    "yjs": "^13.6.0",
-    "ws": "^8.16.0"
+    "lib0": "^0.2.93",
+    "ws": "^8.21.3",
+    "y-protocols": "^1.0.6",
+    "yjs": "^13.6.0"
   }
 }

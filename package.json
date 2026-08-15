@@ -1,24 +1,19 @@
 {
-  "name": "nextjs_tailwind_shadcn_ts",
+  "name": "stellarforge",
   "version": "0.2.1",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 3000 2>&1 | tee dev.log",
-    "dev:bm2": "bm2 start bm2.config.json",
-    "dev:bm2:stop": "bm2 delete stellarforge-dev",
-    "dev:bm2:restart": "bm2 restart stellarforge-dev",
-    "dev:bm2:logs": "bm2 logs stellarforge-dev --lines 50",
-    "dev:bm2:status": "bm2 list",
-    "build": "next build && cp -r .next/static .next/standalone/.next/ && cp -r public .next/standalone/",
-    "start": "NODE_ENV=production bun .next/standalone/server.js 2>&1 | tee server.log",
+    "dev": "bun --bun next dev -p 3000 2>&1 | tee dev.log",
+    "build": "bun --bun next build",
+    "start": "bun --bun next start",
     "lint": "eslint .",
-    "test:e2e": "npx playwright test",
-    "test:e2e:ui": "npx playwright test --ui",
+    "test:e2e": "bunx playwright test",
+    "test:e2e:ui": "bunx playwright test --ui",
     "test:e2e:report": "npx playwright show-report",
     "db:push": "prisma db push --accept-data-loss",
-    "db:generate": "prisma generate",
-    "db:migrate": "prisma migrate dev",
-    "db:reset": "prisma migrate reset"
+    "db:generate": "bunx prisma --bun generate",
+    "db:migrate": "bunx prisma --bun migrate dev",
+    "db:reset": "bunx prisma --bun migrate reset"
   },
   "dependencies": {
     "@albedo-link/intent": "^0.13.0",

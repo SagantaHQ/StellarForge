@@ -38,6 +38,7 @@ import { consumeNonce } from "../nonce/route";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 30; // SIWS verify does DB upsert + profile create — needs more time
 
 // Session expiry: 7 days
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;

@@ -19,7 +19,7 @@ import { db } from "@/lib/db";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 15;
+export const maxDuration = 30; // Neon cold start can be slow
 
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 

@@ -186,7 +186,14 @@ export const useProjectsStore = create<ProjectsState>()(
 
       syncFromServer: async (ownerId) => {
         try {
-          const res = await fetch(`/api/projects?ownerId=${encodeURIComponent(ownerId)}`);
+          // Fetch the project LIST with a 10s timeout. This is fast —
+          // it only queries project metadata (no file contents).
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 10000);
+          const res = await fetch(`/api/projects?ownerId=${encodeURIComponent(ownerId)}`, {
+            signal: controller.signal,
+          });
+          clearTimeout(timeout);
           if (!res.ok) return;
           const data = (await res.json()) as {
             projects: {
@@ -204,8 +211,6 @@ export const useProjectsStore = create<ProjectsState>()(
           };
 
           // Merge server projects into local list.
-          // For projects that already have a serverProjectId link, update metadata.
-          // For new server projects, create a local stub (files will lazy-load on switch).
           const local = get().projects;
           const merged: ProjectMeta[] = [...local];
 
@@ -223,7 +228,7 @@ export const useProjectsStore = create<ProjectsState>()(
                 updatedAt: new Date(sp.updatedAt).getTime(),
               };
             } else {
-              // New server project — create local stub
+              // New server project — create local stub (no files yet)
               const stubId = genId();
               const stub: ProjectMeta = {
                 id: stubId,
@@ -236,9 +241,6 @@ export const useProjectsStore = create<ProjectsState>()(
                 updatedAt: new Date(sp.updatedAt).getTime(),
               };
               merged.push(stub);
-
-              // Lazy: don't fetch files yet — they'll be pulled on first switch
-              // Persist the stub to IDB so it survives reload
               await projectSet({
                 id: stubId,
                 name: sp.name,
@@ -257,22 +259,27 @@ export const useProjectsStore = create<ProjectsState>()(
             projects: merged.sort((a, b) => b.updatedAt - a.updatedAt),
           });
 
-          // EAGERLY fetch files for all server projects. This way, when the
-          // user selects a project, the files are already in IDB + load
-          // instantly. We fetch in parallel (batches of 3) for speed.
-          const projectsNeedingFiles = merged.filter((p) => p.serverProjectId);
+          // DON'T eagerly fetch files for all projects — that was causing
+          // 30s+ hangs because each project requires a separate DB query
+          // (and Neon can cold-start). Instead, files are LAZY-loaded when
+          // the user switches to a project (see switchProject()).
+          //
+          // Only fetch files for the MOST RECENTLY UPDATED project (the one
+          // the user is most likely to open first), with a 10s timeout.
+          const mostRecent = merged
+            .filter((p) => p.serverProjectId)
+            .sort((a, b) => b.updatedAt - a.updatedAt)[0];
 
-          // Fetch files in batches of 3
-          const BATCH_SIZE = 3;
-          for (let i = 0; i < projectsNeedingFiles.length; i += BATCH_SIZE) {
-            const batch = projectsNeedingFiles.slice(i, i + BATCH_SIZE);
-            await Promise.all(batch.map(async (p) => {
-              if (!p.serverProjectId) return;
-              // Check if we already have files cached in IDB
-              const cached = await projectGet(p.id);
-              if (cached && cached.files && cached.files.length > 0) return; // already cached
+          if (mostRecent?.serverProjectId) {
+            const cached = await projectGet(mostRecent.id);
+            if (!cached || !cached.files || cached.files.length === 0) {
               try {
-                const fileRes = await fetch(`/api/projects/${p.serverProjectId}`);
+                const fileController = new AbortController();
+                const fileTimeout = setTimeout(() => fileController.abort(), 10000);
+                const fileRes = await fetch(`/api/projects/${mostRecent.serverProjectId}`, {
+                  signal: fileController.signal,
+                });
+                clearTimeout(fileTimeout);
                 if (fileRes.ok) {
                   const fileData = await fileRes.json();
                   const serverFiles = (fileData.project.files ?? []).map(
@@ -282,23 +289,22 @@ export const useProjectsStore = create<ProjectsState>()(
                       language: f.language,
                     })
                   );
-                  // Cache in IDB for next time
                   await projectSet({
-                    id: p.id,
-                    name: p.name,
-                    slug: p.slug,
-                    description: p.description,
-                    ownerId: p.ownerId,
-                    serverProjectId: p.serverProjectId,
+                    id: mostRecent.id,
+                    name: mostRecent.name,
+                    slug: mostRecent.slug,
+                    description: mostRecent.description,
+                    ownerId: mostRecent.ownerId,
+                    serverProjectId: mostRecent.serverProjectId,
                     files: serverFiles,
-                    createdAt: p.createdAt,
+                    createdAt: mostRecent.createdAt,
                     updatedAt: Date.now(),
                   });
                 }
               } catch {
-                // Best-effort — if one project fails, continue with others
+                // Timeout or network error — files will lazy-load on switch
               }
-            }));
+            }
           }
         } catch {
           // Silently fail — local-first means we work offline
@@ -456,7 +462,14 @@ export const useProjectsStore = create<ProjectsState>()(
             if (meta?.serverProjectId) {
               set({ syncingFromCloud: true });
               try {
-                const res = await fetch(`/api/projects/${meta.serverProjectId}`);
+                // 10s timeout — Neon cold start can be slow, but
+                // 10s is the max we'll make the user wait.
+                const cloudController = new AbortController();
+                const cloudTimeout = setTimeout(() => cloudController.abort(), 10000);
+                const res = await fetch(`/api/projects/${meta.serverProjectId}`, {
+                  signal: cloudController.signal,
+                });
+                clearTimeout(cloudTimeout);
                 if (res.ok) {
                   const data = await res.json();
                   const serverFiles = (data.project.files ?? []).map(

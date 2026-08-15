@@ -1,3 +1,4 @@
+import path from "path";
 
 const NEXT_PUBLIC_APP_URL = "https://stellarforge.app";
 const DB_URL = ""

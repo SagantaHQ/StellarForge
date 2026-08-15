@@ -1,7 +1,6 @@
-import path from "path";
-
 import "dotenv/config";
-import { env } from "prisma/config";
+
+const env = process.env ?? {};
 
 const bm2Config = {
   apps: [
@@ -22,8 +21,8 @@ const bm2Config = {
       script: "mini-services/collab-server/index.ts",
       cwd: __dirname,
       env: {
+         ...env,
         NODE_ENV: "production",
-        ...env
       },
       max_memory_restart: "1G",
       autorestart: true,
@@ -41,8 +40,8 @@ const bm2Config = {
       script: "mini-services/lsp-server/index.ts",
       cwd: __dirname,
       env: {
+         ...env,
         NODE_ENV: "production",
-        ...env
       },
       max_memory_restart: "1G",
       autorestart: true,

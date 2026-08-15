@@ -507,11 +507,24 @@ function ProviderKeyInput({
       )}
       <div className="flex items-center gap-1.5">
         <input
-          type={showKey ? "text" : "password"}
+          type={showKey ? "text" : "text"}
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
           placeholder={providerId === "ollama" ? "(no key needed for local)" : "API key"}
-          className="flex-1 rounded border border-[var(--border-subtle)] bg-[var(--surface-panel)] px-2 py-1 text-[11px] font-mono text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
+          // Use text type + autocomplete=off to avoid Chrome's password
+          // manager prompt. When hidden, we mask via CSS -webkit-text-security
+          // instead of type="password" (which triggers the browser's password
+          // save dialog on every keypress).
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="off"
+          spellCheck={false}
+          data-lpignore="true"  // LastPass
+          data-1p-ignore=""     // 1Password
+          className={cn(
+            "flex-1 rounded border border-[var(--border-subtle)] bg-[var(--surface-panel)] px-2 py-1 text-[11px] font-mono text-[var(--text-primary)] outline-none focus:border-[var(--accent)]",
+            !showKey && "[-webkit-text-security:disc] [text-security:disc]"
+          )}
         />
         <button
           onClick={() => setShowKey((v) => !v)}

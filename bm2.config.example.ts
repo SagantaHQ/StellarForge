@@ -6,7 +6,7 @@ const bm2Config = {
   apps: [
     {
       name: "stellarforge",
-      script: "bun",
+      script: "/root/.bun/bin/bun",
       args: "--bun next start -p 3700",
       "env": {
         "NODE_ENV": "production",

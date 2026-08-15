@@ -15,7 +15,7 @@
     "test:e2e": "bunx playwright test",
     "test:e2e:ui": "bunx playwright test --ui",
     "test:e2e:report": "npx playwright show-report",
-    "db:push": "prisma --bun db push",
+    "db:push": "bunx --bun prisma db push",
     "db:generate": "bunx --bun prisma generate",
     "db:migrate": "bunx --bun prisma  migrate"
   },

@@ -15,10 +15,9 @@
     "test:e2e": "bunx playwright test",
     "test:e2e:ui": "bunx playwright test --ui",
     "test:e2e:report": "npx playwright show-report",
-    "db:push": "prisma db push --accept-data-loss",
-    "db:generate": "bunx prisma --bun generate",
-    "db:migrate": "bunx prisma --bun migrate dev",
-    "db:reset": "bunx prisma --bun migrate reset"
+    "db:push": "prisma --bun db push",
+    "db:generate": "bunx --bun prisma generate",
+    "db:migrate": "bunx --bun prisma  migrate"
   },
   "dependencies": {
     "@albedo-link/intent": "^0.13.0",

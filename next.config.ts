@@ -1,21 +1,16 @@
 import type { NextConfig } from "next";
 import path from "path";
-
-// MonacoWebpackPlugin is only needed for webpack-based dev mode.
-// In production (next build + next start with Turbopack), it's not
-// needed and may not be installed. Load it dynamically.
-let MonacoWebpackPlugin: any = null;
-try {
-  MonacoWebpackPlugin = require('monaco-editor-webpack-plugin');
-} catch {
-  // Module not installed — fine for production builds.
-}
+import MonacoWebpackPlugin from 'monaco-editor-webpack-plugin';
 
 const nextConfig: NextConfig = {
   typescript: {
     ignoreBuildErrors: true,
   },
   reactStrictMode: false,
+  // Allow cross-origin requests from the preview URL (space-z.ai) to /_next/*
+  // Without this, Next.js detects cross-origin requests in dev mode and
+  // can trigger full page reloads. The preview is served from
+  // preview-chat-<id>.space-z.ai but makes requests to the dev server.
   allowedDevOrigins: [
     "*.space-z.ai",
     "preview-chat-*.space-z.ai",
@@ -24,6 +19,9 @@ const nextConfig: NextConfig = {
     "stellarforge.com",
     "*.stellarforge.com"
   ],
+  // Note: Next.js 16 removed 'watchOptions.ignored' (only pollIntervalMs is
+  // accepted now). File-watcher ignore paths are configured in the webpack
+  // config below via config.snapshot + config.watchOptions.ignored.
   serverExternalPackages: [
     "@prisma/client",
     "@node-rs/argon2",
@@ -36,6 +34,11 @@ const nextConfig: NextConfig = {
     "vscode-languageclient",
     "vscode-ws-jsonrpc",
   ],
+  // Webpack config — used when running with --webpack flag.
+  // Aliases Trezor packages to an empty stub (we don't use Trezor wallets,
+  // and their ESM exports are broken with webpack).
+  // Also configures the file watcher to ignore non-source directories so
+  // writes to data/, download/, etc. don't trigger dev-mode recompiles.
   webpack: (config, { isServer, dev }) => {
     const stubPath = path.resolve(__dirname, "src/stubs/empty.ts");
     config.resolve = config.resolve || {};
@@ -48,9 +51,18 @@ const nextConfig: NextConfig = {
       "@trezor/transport-webusb": stubPath,
       "@trezor/transport-webhid": stubPath,
       "@trezor/hw-app-str": stubPath,
+      // y-monaco imports 'monaco-editor/esm/vs/editor/editor.api.js' but
+      // monaco-editor's package.json exports map rewrites this to a
+      // non-existent double path (./esm/vs/esm/vs/editor/editor.api.js).
+      // Alias directly to the actual file on disk.
       "monaco-editor/esm/vs/editor/editor.api.js": "monaco-editor",
     };
 
+    // In dev mode, configure the file watcher to ignore non-source dirs.
+    // This prevents writes to data/rustdoc-index/ (by /api/autocomplete/build-deps),
+    // download/, .zscripts/, upload/, db/, scripts/ from triggering full
+    // page reloads. Without this, every build-deps API call writes JSON files
+    // → Next.js detects them → recompiles → reloads the page → loop.
     if (dev) {
       const existing = config.watchOptions?.ignored;
       const ignorePaths = [
@@ -73,16 +85,15 @@ const nextConfig: NextConfig = {
       };
     }
 
-    // Only add MonacoWebpackPlugin if it's available (dev mode with webpack)
-    if (MonacoWebpackPlugin) {
-      config.plugins = [
-        ...config.plugins,
-        new MonacoWebpackPlugin()
-      ];
-    }
+    config.plugins = [
+      ...config.plugins,
+      new MonacoWebpackPlugin()
+    ]
 
     return config;
   },
+  // Turbopack config — used by default in Next.js 16 dev mode.
+  // Alias Trezor packages to the empty stub here too.
   turbopack: {
     resolveAlias: {
       "@trezor/connect-web": path.resolve(__dirname, "src/stubs/empty.ts"),
@@ -107,6 +118,7 @@ const nextConfig: NextConfig = {
         source: "/workspace/:path*",
         destination: `${lspUrl}/workspace/:path*`,
       },
+      // WebSocket collaboration server proxy
       {
         source: "/collab/:path*",
         destination: `${collabUrl}/:path*`,

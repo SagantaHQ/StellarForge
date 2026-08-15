@@ -8,7 +8,7 @@ const bm2Config = {
       name: "stellarforge",
       cwd: __dirname,
       script: "node_modules/next/dist/bin/next",
-      args: "-p 3700",
+      args: "start -p 3700",
       interpreter: "bun",
       interpreter_args: "--bun",
       env: {

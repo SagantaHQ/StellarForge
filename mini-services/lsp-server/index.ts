@@ -297,7 +297,37 @@ const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse
 });
 
 // ── WebSocket server (LSP transport) ──────────────────────────────────
-const wss = new WebSocketServer({ server: httpServer, path: "/lsp" });
+// §Fix (2026-08-16) — use noServer mode + handle the HTTP 'upgrade' event
+// manually so we can accept BOTH "/lsp" and "/lsp/" as valid upgrade paths.
+//
+// Why both? The deployed nginx config redirects "/lsp" → "/lsp/" (301)
+// when its location block is "location /lsp/" (with trailing slash).
+// WebSocket clients cannot follow 301 redirects during the handshake,
+// so any client that connects to "/lsp" gets the 301 and fails. We need
+// the server to accept whichever path the client actually arrives at.
+//
+// Using noServer mode + handleUpgrade gives us full control over which
+// paths get upgraded, instead of the ws library's single `path` string
+// match.
+const wss = new WebSocketServer({ noServer: true });
+
+/** Returns true if the request path is a valid LSP WebSocket endpoint. */
+function isLspUpgradePath(pathname: string): boolean {
+  return pathname === "/lsp" || pathname === "/lsp/";
+}
+
+httpServer.on("upgrade", (req: IncomingMessage, socket, head) => {
+  const url = new URL(req.url || "/", `http://localhost:${PORT}`);
+  if (!isLspUpgradePath(url.pathname)) {
+    // Not an LSP path — destroy the socket so the client gets a clean
+    // rejection instead of a hang.
+    socket.destroy();
+    return;
+  }
+  wss.handleUpgrade(req, socket, head, (ws) => {
+    wss.emit("connection", ws, req);
+  });
+});
 
 wss.on("connection", async (ws: WebSocket, req: IncomingMessage) => {
   const url = new URL(req.url || "/", `http://localhost:${PORT}`);

@@ -85,8 +85,18 @@ function getLspWebSocketUrl(workspaceId: string): string {
   // In both dev and production, we use the same host as the page
   // (Next.js rewrites /lsp → the LSP gateway server).
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  // Use window.location.host (includes port) so it works with Next.js rewrites
-  return `${protocol}//${window.location.host}/lsp?workspace=${encodeURIComponent(workspaceId)}`;
+  // Use window.location.host (includes port) so it works with Next.js rewrites.
+  //
+  // §Fix (2026-08-16) — use "/lsp/" (WITH trailing slash). The deployed
+  // nginx config auto-redirects "/lsp" → "/lsp/" (301) because its
+  // location block is "location /lsp/" (with trailing slash). WebSocket
+  // clients cannot follow 301 redirects during the handshake — they
+  // fail with "Unexpected response code: 301". Using the trailing-slash
+  // form directly avoids the redirect entirely.
+  //
+  // The LSP server (mini-services/lsp-server) accepts upgrades on both
+  // "/lsp" and "/lsp/" for backward compatibility.
+  return `${protocol}//${window.location.host}/lsp/?workspace=${encodeURIComponent(workspaceId)}`;
 }
 
 /** Options for the LSP client. */

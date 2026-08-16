@@ -323,8 +323,8 @@ export function IdeShell() {
       <LoadingOverlay
         visible={projectsBusy}
         variant="fullscreen"
-        message="Working…"
-        submessage="Saving files and syncing project state"
+        message="Creating your project…"
+        submessage="Setting up files and syncing to cloud"
       />
       {/* Initial hydration loading — shown once while the projects store loads from IDB */}
       <LoadingOverlay
@@ -638,26 +638,40 @@ export function IdeShell() {
         open={newProjectOpen}
         onClose={() => setNewProjectOpen(false)}
         onSelectTemplate={async (template: Template, projectName: string) => {
-          // Scaffold the template files into a new project (local + server)
-          const files = template.files.map((f) => ({
-            path: f.path,
-            content: f.content,
-            language: f.language,
-          }));
-          const ownerId = await resolveOwnerId(profile?.address);
-          await projectsCreate({
-            name: projectName,
-            description: template.description,
-            files,
-            ownerId,
-          });
-          // Open the first file
-          const firstFile = template.files[0];
-          if (firstFile) {
-            useEditorTabsStore.getState().openTab(firstFile.path, firstFile.path.split("/").pop() ?? firstFile.path);
+          // Close the modal immediately + show the loading overlay
+          setNewProjectOpen(false);
+          // Set busy immediately so the loading overlay shows BEFORE the
+          // async resolveOwnerId + projectsCreate calls complete. Without
+          // this, there's a 3-5s gap where neither the modal nor the
+          // overlay is visible.
+          useProjectsStore.setState({ busy: true });
+
+          try {
+            const files = template.files.map((f) => ({
+              path: f.path,
+              content: f.content,
+              language: f.language,
+            }));
+            const ownerId = await resolveOwnerId(profile?.address);
+            await projectsCreate({
+              name: projectName,
+              description: template.description,
+              files,
+              ownerId,
+            });
+            // Open the first file
+            const firstFile = template.files[0];
+            if (firstFile) {
+              useEditorTabsStore.getState().openTab(firstFile.path, firstFile.path.split("/").pop() ?? firstFile.path);
+            }
+          } finally {
+            useProjectsStore.setState({ busy: false });
           }
         }}
         onSelectBlank={async (projectName: string) => {
+          setNewProjectOpen(false);
+          useProjectsStore.setState({ busy: true });
+          try {
           const slug = projectName.replace(/[^a-z0-9-]/gi, "-").toLowerCase();
           const files = [
             {
@@ -692,6 +706,9 @@ export function IdeShell() {
             files,
             ownerId,
           });
+          } finally {
+            useProjectsStore.setState({ busy: false });
+          }
         }}
       />
 

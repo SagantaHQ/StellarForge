@@ -691,7 +691,23 @@ class LspClient {
 
     this.connecting = true;
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const url = `${protocol}//${window.location.host}/lsp?workspace=${encodeURIComponent(this.workspaceId)}`;
+    // §Fix (2026-08-16) — use "/lsp/" (WITH trailing slash) to bypass
+    // nginx's auto-redirect on /lsp → /lsp/ (301). WebSocket clients
+    // cannot follow 301 redirects during the handshake.
+    // The LSP server now accepts both paths, but the client should use
+    // the trailing-slash form directly to avoid the redirect entirely.
+    const url = `${protocol}//${window.location.host}/lsp/?workspace=${encodeURIComponent(this.workspaceId)}`;
+
+    // §Fix (2026-08-16) — sync project files to the server filesystem
+    // BEFORE connecting. rust-analyzer needs Cargo.toml + source files
+    // on disk to index the crate; without them, it starts but can't
+    // provide any completions (silent failure — the WS connects, the
+    // initialize request is sent, but no completion items come back).
+    //
+    // We fetch the file tree from the file-system store and POST it
+    // to /workspace/<id>/sync. The LSP server writes these files to
+    // /tmp/stellarforge-builds/<id>/ before spawning rust-analyzer.
+    await this.syncProjectFiles();
 
     return new Promise((resolve, reject) => {
       this.ws = new WebSocket(url);
@@ -758,6 +774,16 @@ class LspClient {
             },
           },
           hover: { contentFormat: ["markdown", "plaintext"] },
+        },
+        // §Fix (2026-08-16) — declare workspace file-watching capability
+        // so rust-analyzer knows we'll send workspace/didChangeWatchedFiles
+        // notifications when files are synced to disk via /workspace/:id/sync.
+        // Without this, RA won't re-index when we add Cargo.toml + sources
+        // after it has already started.
+        workspace: {
+          didChangeWatchedFiles: {
+            dynamicRegistration: false,
+          },
         },
       },
       initializationOptions: {
@@ -839,6 +865,69 @@ class LspClient {
       textDocument: { uri: this.fileUri, version: this.fileVersion },
       contentChanges: [{ text }],
     });
+  }
+
+  /**
+   * §Fix (2026-08-16) — Sync project files to the LSP server's filesystem.
+   *
+   * rust-analyzer needs Cargo.toml + source files on disk to index the
+   * crate. Without them, it starts but can't provide completions.
+   *
+   * This POSTs the current file tree to /workspace/<id>/sync, which the
+   * LSP server writes to /tmp/stellarforge-builds/<id>/ before spawning
+   * rust-analyzer.
+   *
+   * Should be called:
+   *   1. BEFORE initialize (so RA can index on startup)
+   *   2. Whenever the file tree changes (so RA picks up new/changed files)
+   *
+   * Uses a dynamic import of the file-system store to avoid a circular
+   * dependency at module load time.
+   */
+  async syncProjectFiles(): Promise<void> {
+    try {
+      const { useFileSystemStore } = await import("@/stores/file-system-store");
+      const { flattenFiles } = await import("@/lib/soroban/sample-project");
+
+      const tree = useFileSystemStore.getState().tree;
+      const files = flattenFiles(tree).map((f) => ({
+        path: f.path,
+        content: f.content,
+      }));
+
+      if (files.length === 0) {
+        console.warn("[lsp] no files to sync — file tree is empty");
+        return;
+      }
+
+      const res = await fetch(
+        `${window.location.origin}/workspace/${encodeURIComponent(this.workspaceId)}/sync`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ files }),
+        }
+      );
+
+      if (!res.ok) {
+        console.warn(`[lsp] file sync failed: HTTP ${res.status}`);
+        return;
+      }
+
+      // Notify rust-analyzer that the workspace files changed, so it
+      // re-indexes. Without this, RA won't know about new files written
+      // to disk after it started.
+      this.sendNotification("workspace/didChangeWatchedFiles", {
+        changes: files.map((f) => ({
+          uri: `file:///tmp/stellarforge-builds/${this.workspaceId}/${f.path}`,
+          type: 2, // Changed
+        })),
+      });
+
+      console.log(`[lsp] synced ${files.length} files to LSP server`);
+    } catch (err) {
+      console.warn("[lsp] syncProjectFiles failed:", err);
+    }
   }
 
   async getCompletion(uri: string, line: number, character: number): Promise<LspCompletionItem[]> {

@@ -105,6 +105,33 @@ function startRustAnalyzer(session: LspSession): void {
 
   console.log(`[lsp] starting rust-analyzer for ${session.workspaceId} (cwd: ${session.workspaceDir})`);
 
+  // §Fix (2026-08-16) — verify rust-analyzer binary exists BEFORE spawning.
+  // Previously, if the binary was missing, spawn() would emit an 'error'
+  // event asynchronously, and the client would silently hang waiting for
+  // a response that never came. Now we check synchronously and notify
+  // all connected WS clients immediately with a clear error message.
+  const fsSync = require("fs");
+  if (!fsSync.existsSync(RUST_ANALYZER_BIN)) {
+    const errMsg = `rust-analyzer binary not found at ${RUST_ANALYZER_BIN}. Install with: rustup component add rust-analyzer`;
+    console.error(`[lsp] ${errMsg}`);
+    // Notify all connected WS clients with a JSON-RPC error notification
+    // so the client can show a meaningful message instead of hanging.
+    const errorNotification = JSON.stringify({
+      jsonrpc: "2.0",
+      method: "window/showMessage",
+      params: {
+        type: 1, // Error
+        message: `StellarForge LSP: ${errMsg}`,
+      },
+    });
+    for (const ws of session.wsClients) {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(errorNotification);
+      }
+    }
+    return;
+  }
+
   const child = spawn(RUST_ANALYZER_BIN, [], {
     cwd: session.workspaceDir,
     env,
@@ -157,12 +184,45 @@ function startRustAnalyzer(session: LspSession): void {
   child.on("error", (err) => {
     console.error(`[lsp] rust-analyzer error for ${session.workspaceId}:`, err);
     session.process = null;
+    // §Fix (2026-08-16) — notify all WS clients that rust-analyzer failed.
+    // Without this, the client would silently hang waiting for a response.
+    const errorNotification = JSON.stringify({
+      jsonrpc: "2.0",
+      method: "window/showMessage",
+      params: {
+        type: 1, // Error
+        message: `StellarForge LSP: rust-analyzer failed to start — ${err.message}. See server logs for details.`,
+      },
+    });
+    for (const ws of session.wsClients) {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(errorNotification);
+      }
+    }
   });
 
   child.on("close", (code) => {
     console.log(`[lsp] rust-analyzer exited for ${session.workspaceId} (code: ${code})`);
     session.process = null;
     session.initialized = false;
+    // §Fix (2026-08-16) — if RA exits with non-zero code immediately after
+    // starting, that's a strong signal something is wrong (missing Cargo.toml,
+    // wrong target, etc.). Notify clients.
+    if (code !== null && code !== 0) {
+      const errorNotification = JSON.stringify({
+        jsonrpc: "2.0",
+        method: "window/showMessage",
+        params: {
+          type: 1,
+          message: `StellarForge LSP: rust-analyzer exited unexpectedly (code ${code}). The workspace may be missing Cargo.toml or have dependency resolution errors.`,
+        },
+      });
+      for (const ws of session.wsClients) {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(errorNotification);
+        }
+      }
+    }
   });
 
   // Send any pending messages that were queued before RA was ready

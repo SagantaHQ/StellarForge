@@ -7,6 +7,7 @@ import { AppKitProvider } from "@/lib/wallet/appkit-provider";
 import { SiwsSessionBridge } from "@/lib/wallet/siws-session-bridge";
 import { WalletModalHost } from "@/lib/wallet/wallet-modal-host";
 import { ClientOnly } from "@/components/ide/client-only";
+import { chunkErrorRecoveryScript } from "@/lib/chunk-error-recovery";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -79,6 +80,11 @@ export default function RootLayout({
       <head>
         {/* Inline theme init — runs BEFORE paint to prevent flash of wrong theme */}
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+        {/* §Fix (2026-08-16) — ChunkLoadError recovery. Must run BEFORE any
+            chunks load so the listener is in place before the first error
+            can fire. Detects stale-chunk 404s after redeploy and forces a
+            cache-busting reload (one-shot, no loop). */}
+        <script dangerouslySetInnerHTML={{ __html: chunkErrorRecoveryScript }} />
       </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} ${jetbrainsMono.variable} antialiased`}

@@ -226,25 +226,53 @@ function startRustAnalyzer(session: LspSession): void {
   session.process = child;
   session.intentionalStop = false;
 
-  // Buffer for incomplete LSP messages (Content-Length framing)
-  let stdoutBuffer = "";
+  // §Fix (2026-08-16) — Buffer-based LSP message framing (was string-based).
+  //
+  // LSP frames messages as "Content-Length: N\r\n\r\n" + N BYTES.
+  // The previous code did `stdoutBuffer += chunk.toString()` (UTF-8 string)
+  // then used `stdoutBuffer.slice(start, start + N)` where N is BYTES — but
+  // string.slice operates on CHARACTERS. For messages with multi-byte UTF-8
+  // (smart quotes, accented chars, emoji in docs), the slice overshoots the
+  // JSON body and grabs the start of the next message's "Content-Length:"
+  // header. JSON.parse then fails with:
+  //   "Unexpected non-whitespace character after JSON at position N"
+  // This is exactly what was happening with large completion responses.
+  //
+  // Fix: keep stdoutBuffer as a Buffer. Use Buffer.indexOf / subarray which
+  // operate on BYTES. Convert to string ONLY for the parsed message, AFTER
+  // correct byte-accurate slicing.
+  let stdoutBuffer = Buffer.alloc(0);
   let stderrBuffer = "";
 
   // Parse LSP messages from rust-analyzer's stdout and forward to WS clients
   child.stdout.on("data", (chunk: Buffer) => {
-    stdoutBuffer += chunk.toString();
+    stdoutBuffer = Buffer.concat([stdoutBuffer, chunk]);
+
     while (true) {
+      // Find the end of the headers section (CRLF CRLF).
+      // Buffer.indexOf works on bytes, so "\r\n\r\n" is byte-accurate.
       const headerEnd = stdoutBuffer.indexOf("\r\n\r\n");
       if (headerEnd === -1) break;
-      const header = stdoutBuffer.slice(0, headerEnd);
+
+      // Parse headers as ASCII (headers are always ASCII per LSP spec).
+      const header = stdoutBuffer.subarray(0, headerEnd).toString("ascii");
       const match = header.match(/Content-Length:\s*(\d+)/i);
       if (!match) break;
-      const contentLength = parseInt(match[1], 10);
-      const messageStart = headerEnd + 4;
+
+      const contentLength = parseInt(match[1], 10); // BYTES
+      const messageStart = headerEnd + 4; // length of "\r\n\r\n"
       const messageEnd = messageStart + contentLength;
+
+      // Wait until we have the full message body (byte-accurate check).
       if (stdoutBuffer.length < messageEnd) break;
-      const message = stdoutBuffer.slice(messageStart, messageEnd);
-      stdoutBuffer = stdoutBuffer.slice(messageEnd);
+
+      // §Fix — slice the EXACT byte range, then decode as UTF-8.
+      // Previously this was a character slice → multi-byte chars caused
+      // the slice to overshoot, corrupting the message.
+      const message = stdoutBuffer.subarray(messageStart, messageEnd).toString("utf-8");
+      stdoutBuffer = stdoutBuffer.subarray(messageEnd);
+
+      // Forward to all connected WS clients
       for (const ws of session.wsClients) {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(message);

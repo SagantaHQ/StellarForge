@@ -668,13 +668,20 @@ class LspClient {
   private pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   private initialized = false;
   private connecting = false;
-  private workspaceId: string;
+  // §Fix (2026-08-16) — made public so registerLspProvider can check if
+  // an existing client matches the requested workspace before reusing it.
+  readonly workspaceId: string;
   private fileUri: string | null = null;
   private fileVersion = 0;
   private diagnosticsHandler: ((diags: Array<{ line: number; message: string; severity: number }>) => void) | null = null;
 
   constructor(workspaceId: string) {
     this.workspaceId = workspaceId;
+  }
+
+  /** Returns true if the WebSocket is open AND the client is initialized. */
+  isConnected(): boolean {
+    return !!this.ws && this.ws.readyState === WebSocket.OPEN && this.initialized;
   }
 
   onDiagnostics(handler: (diags: Array<{ line: number; message: string; severity: number }>) => void) {
@@ -1045,13 +1052,42 @@ const LSP_KIND_MAP: Record<number, number> = {
 };
 
 export function registerLspProvider(monaco: typeof Monaco, workspaceId: string): { dispose: () => void } {
-  // Create LSP client
-  lspClient = new LspClient(workspaceId);
+  // §Fix (2026-08-16) — REUSE the existing LspClient if one already exists
+  // for this workspace. Previously, every call to registerLspProvider created
+  // a NEW LspClient and overwrote the module-level singleton. The OLD
+  // client's WebSocket stayed open, so we ended up with multiple WS
+  // connections to the same workspace. Each client sent `initialize`,
+  // and rust-analyzer rejected the second one with "unknown request"
+  // because it was already initialized from the first.
+  //
+  // This happens because the autocomplete provider is registered multiple
+  // times: once on initial editor mount, and again on HMR / StrictMode
+  // double-mount. The existing guards (autocompleteProviderRef +
+  // window.__sorobanAutocomplete) dispose the PROVIDER, but the LspClient
+  // singleton was still being recreated.
+  if (lspClient && lspClient.workspaceId === workspaceId) {
+    console.log(`[lsp] reusing existing LspClient for workspace: ${workspaceId}`);
+    // Make sure it's connected (might have been disposed and recreated)
+    if (!lspClient.isConnected()) {
+      lspClient.connect().catch(err => {
+        console.warn("[lsp] failed to reconnect:", err);
+      });
+    }
+  } else {
+    // Different workspace, or first time — create a new client
+    if (lspClient) {
+      // Different workspace — dispose the old one first
+      console.log(`[lsp] switching workspace: ${lspClient.workspaceId} → ${workspaceId}`);
+      lspClient.dispose();
+    }
+    lspClient = new LspClient(workspaceId);
+    console.log(`[lsp] created new LspClient for workspace: ${workspaceId}`);
 
-  // Connect in background (don't block)
-  lspClient.connect().catch(err => {
-    console.warn("[lsp] failed to connect:", err);
-  });
+    // Connect in background (don't block)
+    lspClient.connect().catch(err => {
+      console.warn("[lsp] failed to connect:", err);
+    });
+  }
 
   // Also keep the simple provider as fallback (snippets + SDK symbols)
   const fallback = registerAutocompleteProvider(monaco);

@@ -572,6 +572,70 @@ wss.on("connection", async (ws: WebSocket, req: IncomingMessage) => {
       session.pendingMessages.push(message);
       return;
     }
+
+    // §Fix (2026-08-16) — filter out duplicate `initialize` requests.
+    // Multiple WS clients can connect to the same workspace (e.g. multiple
+    // browser tabs, HMR re-mounts, or React StrictMode double-mount). Each
+    // client sends `initialize` on connect, but rust-analyzer only accepts
+    // ONE initialize per session — a second one crashes RA with:
+    //   "expected initialized notification, got: Request initialize"
+    //
+    // Solution: if RA is already initialized (session.initialized === true)
+    // and we receive another `initialize` request, swallow it and send back
+    // a fake "success" response so the client thinks it initialized. This
+    // is the standard pattern used by multi-client LSP gateways.
+    if (session.initialized) {
+      try {
+        const parsed = JSON.parse(message);
+        if (parsed.method === "initialize" && parsed.id !== undefined) {
+          console.log(`[lsp] swallowing duplicate initialize from ${workspaceId} (RA already initialized)`);
+          // Send a minimal InitializeResult back to the client so it can
+          // proceed to send `initialized` notification + start making requests.
+          const fakeResponse = JSON.stringify({
+            jsonrpc: "2.0",
+            id: parsed.id,
+            result: {
+              capabilities: {
+                textDocumentSync: 1, // Full sync
+                completionProvider: { triggerCharacters: [".", ":", "/"] },
+                hoverProvider: true,
+                definitionProvider: true,
+                typeDefinitionProvider: true,
+                referencesProvider: true,
+                documentSymbolProvider: true,
+                workspaceSymbolProvider: true,
+                renameProvider: true,
+                codeActionProvider: true,
+                foldingRangeProvider: true,
+                selectionRangeProvider: true,
+                semanticTokensProvider: { legend: { tokenTypes: [], tokenModifiers: [] } },
+              },
+              serverInfo: { name: "rust-analyzer", version: "multi-client-proxy" },
+            },
+          });
+          ws.send(fakeResponse);
+          return;
+        }
+      } catch {
+        // If parse fails, fall through and forward the message as-is
+      }
+    }
+
+    // §Fix (2026-08-16) — track when RA receives the `initialized`
+    // notification so we know to filter duplicate `initialize` requests
+    // from new WS clients connecting later. Without this, the second
+    // client's `initialize` would crash RA.
+    try {
+      const parsed = JSON.parse(message);
+      if (parsed.method === "initialized") {
+        // Mark session as initialized AFTER forwarding to RA
+        session.initialized = true;
+        console.log(`[lsp] RA marked as initialized for ${workspaceId}`);
+      }
+    } catch {
+      // Not a JSON message — ignore
+    }
+
     writeLspMessage(session.process.stdin, message);
   });
 

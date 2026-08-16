@@ -490,6 +490,32 @@ function TestPanel() {
             {error}
           </div>
         )}
+
+        {/* Fix with AI button — shown when tests fail */}
+        {status === "failed" && (
+          <button
+            onClick={() => {
+              const errorOutput = lines
+                .map((l) => l.text)
+                .join("\n");
+              window.dispatchEvent(
+                new CustomEvent("soroban-fix-with-ai", {
+                  detail: {
+                    command: "cargo test",
+                    errorOutput,
+                  },
+                })
+              );
+              window.dispatchEvent(
+                new CustomEvent("soroban-switch-right-panel", { detail: "agent" })
+              );
+            }}
+            className="mt-2 flex items-center gap-1.5 rounded-md border border-[var(--accent)] bg-[var(--accent)]/10 px-2.5 py-1.5 text-[11px] font-medium text-[var(--accent)] hover:bg-[var(--accent)]/20 transition-colors w-full justify-center"
+          >
+            <Sparkles size={11} strokeWidth={1.75} />
+            Fix with AI
+          </button>
+        )}
       </div>
     </div>
   );

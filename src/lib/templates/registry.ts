@@ -103,7 +103,7 @@ export const TEMPLATES: Template[] = [
         language: "rust",
         content: `#![no_std]
 
-use soroban_sdk::{contract, contractimpl, Env, String, Vec};
+use soroban_sdk::{contract, contractimpl, Env, String, Bytes, Vec};
 
 const GREETING_KEY: &str = "Greeting";
 
@@ -138,11 +138,27 @@ impl HelloWorld {
         if name.is_empty() {
             return greeting;
         }
-        // Soroban String doesn't support + / concat. For a simple greeting,
-        // we store the combined string in instance storage when set_greeting
-        // is called, and just return the greeting here.
-        // (A full implementation would use Bytes + try_from_bytes.)
-        greeting
+        // Soroban SDK 22+ String doesn't have concat. We build the
+        // combined string using Bytes (which supports push_back) and
+        // then convert to String via try_from_val.
+        let mut bytes = Bytes::new(&env);
+        // Append greeting bytes
+        for b in greeting.to_array() {
+            bytes.push_back(b);
+        }
+        // Append ", "
+        for b in b", " {
+            bytes.push_back(*b);
+        }
+        // Append name bytes
+        for b in name.to_array() {
+            bytes.push_back(b);
+        }
+        // Append "!"
+        bytes.push_back(b'!');
+
+        // Convert Bytes to String
+        String::try_from_val(&env, &bytes).unwrap_or_else(|| greeting)
     }
 }
 `,

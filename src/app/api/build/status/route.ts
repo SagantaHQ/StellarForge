@@ -48,6 +48,33 @@ export async function GET(req: NextRequest) {
 
     const lines = since > 0 ? job.lines.filter((l) => l.ts > since) : job.lines;
 
+    // Parse test results from the output lines (for cargo test runs)
+    // Look for lines like: "test test_fn_name ... ok" or "test test_fn_name ... FAILED"
+    let testResults: { name: string; passed: boolean; message?: string }[] | undefined;
+    if (job.status === "success" || job.status === "failed") {
+      testResults = [];
+      for (const line of job.lines) {
+        // Match: "test <name> ... ok"
+        const okMatch = line.text.match(/^test\s+(\S+)\s+\.\.\.\s+ok$/);
+        if (okMatch) {
+          testResults.push({ name: okMatch[1], passed: true });
+          continue;
+        }
+        // Match: "test <name> ... FAILED"
+        const failMatch = line.text.match(/^test\s+(\S+)\s+\.\.\.\s+FAILED$/);
+        if (failMatch) {
+          testResults.push({ name: failMatch[1], passed: false });
+          continue;
+        }
+        // Match: "test <name> ... ignored"
+        const ignMatch = line.text.match(/^test\s+(\S+)\s+\.\.\.\s+ignored$/);
+        if (ignMatch) {
+          testResults.push({ name: ignMatch[1], passed: true, message: "ignored" });
+          continue;
+        }
+      }
+    }
+
     return NextResponse.json({
       id: job.id,
       status: job.status,
@@ -57,6 +84,8 @@ export async function GET(req: NextRequest) {
       startedAt: job.startedAt,
       finishedAt: job.finishedAt,
       lineCount: job.lines.length,
+      // Include testResults only if we found any (cargo test output)
+      ...(testResults && testResults.length > 0 ? { testResults } : {}),
     });
   } catch (err) {
     return NextResponse.json(

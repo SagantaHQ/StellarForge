@@ -67,7 +67,7 @@ export async function POST(req: NextRequest) {
     projectId: string;
     projectName?: string;
     files: { path: string; content: string }[];
-    command?: "stellar" | "cargo";
+    command?: "stellar" | "cargo" | "test";
   };
   try {
     body = await req.json();
@@ -109,10 +109,15 @@ export async function POST(req: NextRequest) {
   // Determine the build command:
   // - "stellar" (default): `stellar contract build` — the canonical Soroban build
   // - "cargo": `cargo build` — compiles dependencies without producing a wasm
-  //   Useful for checking that Cargo.toml changes compile correctly
-  const useCargo = body.command === "cargo";
+  // - "test": `cargo test` — runs the contract's test suite
+  const commandType = body.command ?? "stellar";
+  const useCargo = commandType === "cargo" || commandType === "test";
   const buildCommand = useCargo ? "cargo" : "stellar";
-  const args = useCargo ? ["build"] : ["contract", "build"];
+  const args = commandType === "cargo"
+    ? ["build"]
+    : commandType === "test"
+    ? ["test"]
+    : ["contract", "build"];
 
   // Verify the CLI is installed — return HTTP 503 so the client can show
   // the error immediately instead of polling a non-existent build job.

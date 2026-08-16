@@ -4,8 +4,12 @@ import { create } from "zustand";
 import { flattenFiles, type TreeNode } from "@/lib/soroban/sample-project";
 
 /**
- * Test state — runs `cargo test` via POST /api/build/test, then polls
- * GET /api/build/test?id=<testId> for output lines + parsed test results.
+ * Test state — runs `cargo test` via POST /api/build (with command: "test"),
+ * then polls GET /api/build/status?id=<testId> for output lines.
+ *
+ * Previously tried to use /api/build/test which doesn't exist — that's
+ * why the Test button did nothing (404 → res.ok was false → silent failure).
+ * Now we reuse the existing /api/build endpoint with command: "test".
  */
 
 export type TestStatus = "idle" | "running" | "success" | "failed";
@@ -58,12 +62,13 @@ export const useTestStore = create<TestState>((set, get) => ({
     const files = flattenFiles(tree).map((f) => ({ path: f.path, content: f.content }));
 
     try {
-      const res = await fetch("/api/build/test", {
+      const res = await fetch("/api/build", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           projectId: "local-project",
           files,
+          command: "test",
         }),
       });
 
@@ -119,7 +124,7 @@ async function pollTestStatus(
     try {
       const state = get();
       const since = state.lines.length > 0 ? state.lines[state.lines.length - 1].ts : 0;
-      const res = await fetch(`/api/build/test?id=${testId}&since=${since}`);
+      const res = await fetch(`/api/build/status?id=${testId}&since=${since}`);
 
       if (res.status === 502 || res.status === 503 || res.status === 504) {
         retryCount++;

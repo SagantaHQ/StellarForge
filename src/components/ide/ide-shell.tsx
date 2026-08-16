@@ -785,9 +785,17 @@ export function IdeShell() {
         }}
       />
 
-      {/* LSP manager — temporarily disabled to reduce memory pressure.
-          TODO: Re-enable with lighter-weight autocomplete. */}
-      <LspManagerMount />
+      {/* LSP manager — DISABLED to prevent duplicate initialize crash.
+          The inline LspClient in use-monaco.ts (registered by the
+          autocomplete provider) already connects to the LSP server
+          and handles completions. If LspManagerMount is also mounted,
+          BOTH clients connect to /lsp?workspace=<id>, both send
+          `initialize`, and rust-analyzer crashes with:
+            "expected initialized notification, got: Request initialize"
+          See: https://github.com/SagantaHQ/StellarForge/issues —
+          the comment below said "temporarily disabled" but the
+          component was still mounted. Now actually disabled. */}
+      {/* <LspManagerMount /> */}
     </div>
   );
 }

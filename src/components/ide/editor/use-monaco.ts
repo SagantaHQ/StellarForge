@@ -682,7 +682,27 @@ class LspClient {
   }
 
   async connect(): Promise<void> {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) return;
+    // §Fix (2026-08-16) — if the WS is still open but `this.initialized`
+    // is false (because RA crashed and the server sent a window/showMessage
+    // notification which reset the flag), we need to re-initialize on the
+    // EXISTING WS connection instead of opening a new one. Opening a new
+    // WS would create a duplicate connection to the same workspace, which
+    // would cause RA to crash again on the second `initialize`.
+    if (this.ws && this.ws.readyState === WebSocket.OPEN && this.initialized) {
+      return; // already connected + initialized
+    }
+    if (this.ws && this.ws.readyState === WebSocket.OPEN && !this.initialized) {
+      // WS is open but RA restarted — re-initialize on the existing connection.
+      console.log("[lsp] WS open but not initialized — re-initializing on existing connection");
+      try {
+        await this.initialize();
+        console.log("[lsp] re-initialized after RA restart");
+      } catch (err) {
+        console.warn("[lsp] re-initialize failed:", err);
+        throw err;
+      }
+      return;
+    }
     if (this.connecting) {
       // Wait for ongoing connection
       while (this.connecting) await new Promise(r => setTimeout(r, 100));
@@ -818,6 +838,36 @@ class LspClient {
         severity: d.severity || 1,
       }));
       this.diagnosticsHandler?.(diags);
+      return;
+    }
+
+    // §Fix (2026-08-16) — handle window/showMessage notifications sent by
+    // the LSP server when rust-analyzer crashes or fails to start. Without
+    // this, the client never learns that RA restarted and keeps sending
+    // completion requests to a fresh RA process that hasn't received
+    // `initialize` yet → "expected initialize request, got completion".
+    if (msg.method === "window/showMessage") {
+      const message = msg.params?.message || "";
+      const type = msg.params?.type ?? 1;
+      console.log(`[lsp] server message (type=${type}): ${message}`);
+
+      // If RA crashed/restarted, reset initialized so the next
+      // getCompletion call will re-connect + re-initialize.
+      // The server sends these messages when:
+      //   - "rust-analyzer exited unexpectedly (code N)"
+      //   - "rust-analyzer failed to start — ..."
+      //   - "rust-analyzer has failed to start N times..."
+      if (message.includes("rust-analyzer") && (
+          message.includes("exited") ||
+          message.includes("failed") ||
+          message.includes("crashed"))) {
+        console.warn("[lsp] rust-analyzer crashed/restarted — resetting initialized flag, will re-connect on next request");
+        this.initialized = false;
+        // Don't close the WS — the server will auto-restart RA. The next
+        // getCompletion call will see !this.initialized and call connect()
+        // again, which re-sends initialize to the new RA process.
+      }
+      return;
     }
   }
 

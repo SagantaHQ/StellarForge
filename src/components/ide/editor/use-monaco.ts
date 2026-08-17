@@ -6,6 +6,13 @@ import { useThemeStore } from "@/stores/theme-store";
 import { buildMonacoTheme } from "@/lib/themes/mappers";
 import { useAutocompleteStore, type CompletionItem } from "@/stores/autocomplete-store";
 import { buildAutoImportEdit } from "@/lib/autocomplete/auto-import";
+import {
+  getTypeMembers,
+  getTypeCrate,
+  lookupVariableType,
+  clearTypeCache,
+  type TypeMember,
+} from "@/lib/autocomplete/type-members";
 
 // Monaco must be loaded client-side only via dynamic import in the consumer.
 // This hook sets up: theme registration, Rust/Soroban language config, dispose.
@@ -547,17 +554,17 @@ export function registerAutocompleteProvider(monaco: typeof Monaco): { dispose: 
 
       // Layer 1: Rustdoc symbols
       if (rustdocSymbols) {
-        // §Fix (2026-08-16) — when after `::` or `.`, DON'T add rustdoc
-        // symbols. The rustdoc index is FLAT (no parent-child relationships),
-        // so we can't know which symbols are members of the type before
-        // `::` or `.`. Adding all 1855 symbols makes `String::` show the
-        // same results as `Vec::` or `anything::` — completely useless.
+        // §Intelligent (2026-08-16) — when after `::` or `.`, use the
+        // curated type-members knowledge base to show ONLY the actual
+        // members of the type before `::` / `.`. This makes simple mode
+        // useful for `String::`, `Vec::`, `env.`, etc. — no more "same
+        // 1855 results for anything::".
         //
-        // After `::` and `.`, only the LSP (rust-analyzer) can provide
-        // useful completions (via type inference). The simple provider
-        // should return empty and let Monaco show only LSP results.
+        // For `::`: typeBeforeColonsName holds the type name (e.g. "String")
+        // For `.`: we look up the variable's type via source parsing
         //
-        // Exception: after `use`, we DO show all symbols (user is importing).
+        // If the type isn't in our knowledge base, we return empty —
+        // better to show nothing than 1855 wrong symbols.
         const shouldSkipRustdoc = (isAfterDot || isInTypePath) && !isAfterUse;
 
         if (!shouldSkipRustdoc) {
@@ -575,6 +582,81 @@ export function registerAutocompleteProvider(monaco: typeof Monaco): { dispose: 
             } else {
               if (s.kind === "function" || s.kind === "macro") continue;
               add(s.name, kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Text, s.detail, s.docs, undefined, "1", ai);
+            }
+          }
+        }
+      }
+
+      // ─── §Intelligent (2026-08-16): type-aware completions after `::` and `.` ──
+      // Uses the curated TYPE_MEMBERS knowledge base + source-parsed variable
+      // types. This is what makes simple mode "intelligent" — it shows the
+      // actual members of String/Vec/Env/etc. instead of all 1855 symbols.
+      //
+      // For LSP mode this is also used as a fallback when RA returns 0 items
+      // (e.g. still indexing) — see registerLspProvider below.
+      if (isInTypePath && typeBeforeColonsName) {
+        // `String::` → show String's associated functions + constants
+        const members = getTypeMembers(typeBeforeColonsName);
+        if (members) {
+          const crate = getTypeCrate(typeBeforeColonsName);
+          // Pre-compute auto-import edit for the type itself (if not imported)
+          let typeImportEdit: Monaco.languages.TextEdit[] | undefined;
+          if (crate) {
+            const result = buildAutoImportEdit(source, {
+              crate,
+              symbol: typeBeforeColonsName,
+              kind: "struct", // struct/enum/trait — all auto-importable
+            });
+            if (result) typeImportEdit = [result.edit as Monaco.languages.TextEdit];
+          }
+          for (const m of members) {
+            // After `::`, only show associated functions + constants (not methods)
+            if (!m.is_associated) continue;
+            add(
+              m.name,
+              m.kind === "function" ? monaco.languages.CompletionItemKind.Function
+                : m.kind === "constant" ? monaco.languages.CompletionItemKind.Constant
+                : m.kind === "type_alias" ? monaco.languages.CompletionItemKind.TypeParameter
+                : monaco.languages.CompletionItemKind.Method,
+              m.signature,
+              m.docs,
+              m.name + (m.signature ? `(${m.signature.match(/\(([^)]*)\)/)?.[1] ?? ""})` : ""),
+              "0",
+              undefined, // don't auto-import the member, just the type
+            );
+            // Attach the type's auto-import edit to the last suggestion
+            if (typeImportEdit && suggestions.length > 0) {
+              suggestions[suggestions.length - 1].additionalTextEdits = typeImportEdit;
+            }
+          }
+        }
+      } else if (isAfterDot) {
+        // `my_var.` → look up my_var's type via source parsing, then show
+        // that type's methods.
+        // Match the variable name right before the `.` at the end of the line
+        const dotMatch = lineUntilPosition.match(/([a-z_][a-z0-9_]*)\s*\.\s*$/i);
+        if (dotMatch) {
+          const varName = dotMatch[1];
+          const typeName = lookupVariableType(source, varName);
+          if (typeName) {
+            const members = getTypeMembers(typeName);
+            if (members) {
+              for (const m of members) {
+                // After `.`, only show methods (not associated functions)
+                if (m.is_associated) continue;
+                add(
+                  m.name,
+                  m.kind === "function" ? monaco.languages.CompletionItemKind.Method
+                    : m.kind === "constant" ? monaco.languages.CompletionItemKind.Constant
+                    : m.kind === "type_alias" ? monaco.languages.CompletionItemKind.TypeParameter
+                    : monaco.languages.CompletionItemKind.Method,
+                  m.signature,
+                  m.docs,
+                  m.name + (m.signature ? `(${m.signature.match(/\(([^)]*)\)/)?.[1] ?? ""})` : ""),
+                  "0",
+                  undefined,
+                );
+              }
             }
           }
         }
@@ -1290,6 +1372,88 @@ export function registerLspProvider(monaco: typeof Monaco, workspaceId: string):
           }
 
           return { suggestions };
+        }
+
+        // ─── §Intelligent fallback (2026-08-16) ──────────────────────
+        // RA returned 0 items — likely still indexing deps (10-30s after
+        // connect). Fall back to the curated type-members knowledge base
+        // so the user gets useful completions for `String::`, `env.`, etc.
+        // even before RA is ready. This makes the editor usable during
+        // the RA warm-up period.
+        if (lspItems.length === 0) {
+          const lineUntilPositionForFallback = model.getValueInRange({
+            startLineNumber: position.lineNumber,
+            startColumn: 1,
+            endLineNumber: position.lineNumber,
+            endColumn: position.column,
+          });
+          const typePathMatch = lineUntilPositionForFallback.match(/([A-Za-z_][A-Za-z0-9_]*)\s*::\s*[A-Za-z0-9_]*$/);
+          const dotMatch = lineUntilPositionForFallback.match(/([a-z_][a-z0-9_]*)\s*\.\s*$/i);
+
+          const word = model.getWordUntilPosition(position);
+          const fallbackRange: Monaco.IRange = {
+            startLineNumber: position.lineNumber,
+            endLineNumber: position.lineNumber,
+            startColumn: position.column,
+            endColumn: position.column,
+          };
+
+          const fallbackSuggestions: Monaco.languages.CompletionItem[] = [];
+
+          if (typePathMatch) {
+            // `String::` fallback
+            const typeName = typePathMatch[1];
+            const members = getTypeMembers(typeName);
+            if (members) {
+              const crate = getTypeCrate(typeName);
+              let typeImportEdit: Monaco.languages.TextEdit[] | undefined;
+              if (crate) {
+                const result = buildAutoImportEdit(source, { crate, symbol: typeName, kind: "struct" });
+                if (result) typeImportEdit = [result.edit as Monaco.languages.TextEdit];
+              }
+              for (const m of members) {
+                if (!m.is_associated) continue;
+                fallbackSuggestions.push({
+                  label: m.name,
+                  kind: m.kind === "function" ? monaco.languages.CompletionItemKind.Function
+                    : m.kind === "constant" ? monaco.languages.CompletionItemKind.Constant
+                    : monaco.languages.CompletionItemKind.Method,
+                  detail: m.signature,
+                  documentation: m.docs ? { value: m.docs } : undefined,
+                  insertText: m.name,
+                  range: fallbackRange,
+                  sortText: "0",
+                  additionalTextEdits: typeImportEdit,
+                });
+              }
+            }
+          } else if (dotMatch) {
+            // `my_var.` fallback — look up variable type
+            const varName = dotMatch[1];
+            const typeName = lookupVariableType(source, varName);
+            if (typeName) {
+              const members = getTypeMembers(typeName);
+              if (members) {
+                for (const m of members) {
+                  if (m.is_associated) continue;
+                  fallbackSuggestions.push({
+                    label: m.name,
+                    kind: monaco.languages.CompletionItemKind.Method,
+                    detail: m.signature,
+                    documentation: m.docs ? { value: m.docs } : undefined,
+                    insertText: m.name,
+                    range: fallbackRange,
+                    sortText: "0",
+                  });
+                }
+              }
+            }
+          }
+
+          if (fallbackSuggestions.length > 0) {
+            console.log(`[lsp] RA returned 0 — using type-members fallback (${fallbackSuggestions.length} items)`);
+            return { suggestions: fallbackSuggestions };
+          }
         }
       }
 

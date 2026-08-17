@@ -54,130 +54,239 @@ const NETWORK_PASSPHRASE: Record<string, string> = {
 };
 
 /**
- * §Fix (2026-08-16) — Convert scValToNative() output to a JSON-serializable
- * primitive/object.
+ * §Fix (2026-08-16) — Manually decode an ScVal XDR object to a JSON-
+ * serializable JavaScript value.
  *
- * scValToNative() returns SDK-specific types that aren't JSON-serializable:
- *   - ScInt → { _value, _arm, ... } (raw XDR structure)
- *   - Address → "G..." string (this one is fine)
- *   - Buffer/Uint8Array → { type: "Buffer", data: [...] } (Node Buffer JSON)
- *   - XDR wrappers → { _switch, _arm, _value, ... } (raw XDR structure)
+ * scValToNative() from @stellar/stellar-sdk THROWS for many ScVal types:
+ *   "The first argument must be of type string, Buffer, ArrayBuffer, Array,
+ *    or Array-like Object. Received an instance of ChildUnion"
  *
- * This function handles all these cases + falls back to JSON.stringify
- * for anything unexpected.
+ * This happens because scValToNative tries to use Buffer.from() on XDR
+ * wrapper objects (ChildUnion) that aren't Buffer-compatible.
+ *
+ * Instead of using scValToNative, we decode the ScVal directly from its
+ * XDR structure. The ScVal has a `switch()` method that tells us the type,
+ * and arm-specific accessors to get the inner value.
  */
-function serializeScValResult(native: unknown, scVal: unknown): unknown {
-  // null / undefined / boolean / number / string — already serializable
-  if (native === null || native === undefined) return native;
-  if (typeof native === "boolean" || typeof native === "number" || typeof native === "string") {
-    return native;
-  }
+function decodeScVal(scVal: any): unknown {
+  if (!scVal) return null;
 
-  // BigInt (i128, u128, i64, u64) — convert to string
-  if (typeof native === "bigint") {
-    return native.toString();
-  }
+  const switchName = typeof scVal.switch === "function" ? scVal.switch().name : "";
+  
+  switch (switchName) {
+    case "scvVoid":
+      return null;
 
-  // Array — recurse
-  if (Array.isArray(native)) {
-    return native.map((item) => serializeScValResult(item, undefined));
-  }
-
-  // Plain object — recurse over values
-  if (typeof native === "object") {
-    // Address (stellar-sdk) — has toString() returning "G..." or "C..."
-    if (typeof (native as { toString?: () => string }).toString === "function") {
-      const str = (native as { toString: () => string }).toString();
-      // If toString returns a valid Stellar address (starts with G or C),
-      // return the string. This catches Address + ScVal types with toString.
-      if (/^[GC][A-Z0-9]{48,55}$/.test(str)) {
-        return str;
-      }
+    case "scvBool": {
+      const v = scVal.b();
+      return v;
     }
 
-    // Buffer / Uint8Array — convert to string (UTF-8 if printable, else hex)
-    if (typeof Buffer !== "undefined" && Buffer.isBuffer(native)) {
-      const buf = native as Buffer;
-      // Try UTF-8 first — if it's a Soroban String, the bytes are UTF-8
+    case "scvU32": {
+      return scVal.u32();
+    }
+
+    case "scvI32": {
+      return scVal.i32();
+    }
+
+    case "scvU64":
+    case "scvI64":
+    case "scvU128":
+    case "scvI128":
+    case "scvU256":
+    case "scvI256": {
+      // Large integers — return as string (JS can't represent >2^53)
       try {
-        const str = buf.toString("utf-8");
-        // Check if it's printable ASCII/UTF-8 (no null bytes, no control chars)
-        if (/^[\x20-\x7E\xA0-\xFF\n\r\t]*$/.test(str)) {
-          return str;
-        }
+        const bigIntVal = scVal.toBigInt ? scVal.toBigInt() : null;
+        if (bigIntVal !== null) return bigIntVal.toString();
       } catch {}
-      // Fallback: hex string
-      return buf.toString("hex");
-    }
-
-    // Uint8Array (not a Buffer) — same treatment
-    if (native instanceof Uint8Array) {
+      // Fallback: try to get the value via the arm accessor
       try {
-        const str = new TextDecoder().decode(native);
-        if (/^[\x20-\x7E\xA0-\xFF\n\r\t]*$/.test(str)) {
-          return str;
-        }
-      } catch {}
-      return Array.from(native).map(b => b.toString(16).padStart(2, "0")).join("");
-    }
-
-    // ScInt / large number types — have a toString() that returns the number
-    // Check for common SDK number-like types
-    const numStr = (native as { toString?: () => string }).toString?.();
-    if (numStr && /^\d+$/.test(numStr)) {
-      return numStr;
-    }
-
-    // Object with _value / _arm / _switch — raw XDR structure that
-    // scValToNative didn't fully convert. Try to extract the inner value.
-    const xdrObj = native as { _value?: unknown; _arm?: string; _switch?: { name?: string } };
-    if (xdrObj._arm !== undefined || xdrObj._switch !== undefined) {
-      // This is an XDR wrapper — try to get the inner value
-      if (xdrObj._value !== undefined) {
-        // For scvString, _value is a Buffer — convert to string
-        if (Buffer.isBuffer(xdrObj._value) || xdrObj._value instanceof Uint8Array) {
-          try {
-            const buf = Buffer.isBuffer(xdrObj._value)
-              ? xdrObj._value
-              : Buffer.from(xdrObj._value as Uint8Array);
-            return buf.toString("utf-8");
-          } catch {
-            return String(xdrObj._value);
+        const arm = switchName.replace("scv", "").toLowerCase();
+        const v = scVal[arm]();
+        if (v) {
+          // ScInt has toString()
+          if (typeof v.toString === "function") {
+            const s = v.toString();
+            if (/^-?\d+$/.test(s)) return s;
+          }
+          // Hi/Lo parts for 128/256
+          if (v.hi !== undefined && v.lo !== undefined) {
+            const hi = BigInt(v.hi.toString());
+            const lo = BigInt(v.lo.toString());
+            return (hi * (1n << 64n) + lo).toString();
           }
         }
-        // For other types, recurse
-        return serializeScValResult(xdrObj._value, undefined);
-      }
-      // No _value — return the switch name as a fallback
-      if (xdrObj._switch?.name) {
-        return `[${xdrObj._switch.name}]`;
-      }
+      } catch {}
+      return null;
     }
 
-    // Generic object — try to serialize its keys/values
-    try {
-      const result: Record<string, unknown> = {};
-      for (const [key, value] of Object.entries(native as Record<string, unknown>)) {
-        // Skip internal XDR fields (start with _)
-        if (key.startsWith("_")) continue;
-        result[key] = serializeScValResult(value, undefined);
-      }
-      if (Object.keys(result).length > 0) {
-        return result;
-      }
-    } catch {}
+    case "scvString": {
+      // Soroban String — stored as a Buffer of UTF-8 bytes
+      try {
+        const str = scVal.str();
+        if (str) {
+          // str() returns a Buffer-like object
+          if (Buffer.isBuffer(str)) return str.toString("utf-8");
+          if (str instanceof Uint8Array) return new TextDecoder().decode(str);
+          if (typeof str === "string") return str;
+          // XDR String type — has toString() or is array-like
+          if (typeof str.toString === "function") {
+            const s = str.toString();
+            if (s !== "[object Object]") return s;
+          }
+        }
+      } catch {}
+      // Try _value (raw XDR access)
+      try {
+        const v = scVal._value;
+        if (Buffer.isBuffer(v)) return v.toString("utf-8");
+        if (v instanceof Uint8Array) return new TextDecoder().decode(v);
+        if (v && typeof v.toString === "function") {
+          const s = v.toString();
+          if (s && s !== "[object Object]") return s;
+        }
+      } catch {}
+      return null;
+    }
 
-    // Last resort: stringify
-    try {
-      return JSON.parse(JSON.stringify(native, (_key, val) =>
-        typeof val === "bigint" ? val.toString() : val
-      ));
-    } catch {
-      return String(native);
+    case "scvSymbol":
+    case "scvSymbolSmall": {
+      try {
+        const sym = scVal.sym();
+        if (sym) {
+          if (Buffer.isBuffer(sym)) return sym.toString("utf-8");
+          if (sym instanceof Uint8Array) return new TextDecoder().decode(sym);
+          if (typeof sym === "string") return sym;
+          if (typeof sym.toString === "function") return sym.toString();
+        }
+      } catch {}
+      // Try _value
+      try {
+        const v = scVal._value;
+        if (Buffer.isBuffer(v)) return v.toString("utf-8");
+        if (v instanceof Uint8Array) return new TextDecoder().decode(v);
+        if (typeof v === "string") return v;
+        if (v && typeof v.toString === "function") {
+          const s = v.toString();
+          if (s && s !== "[object Object]") return s;
+        }
+      } catch {}
+      return null;
+    }
+
+    case "scvBytes": {
+      try {
+        const b = scVal.bytes();
+        if (b) {
+          if (Buffer.isBuffer(b)) {
+            const str = b.toString("utf-8");
+            if (/^[\x20-\x7E]*$/.test(str)) return str;
+            return b.toString("hex");
+          }
+          if (b instanceof Uint8Array) {
+            const str = new TextDecoder().decode(b);
+            if (/^[\x20-\x7E]*$/.test(str)) return str;
+            return Array.from(b).map(x => x.toString(16).padStart(2, "0")).join("");
+          }
+        }
+      } catch {}
+      return null;
+    }
+
+    case "scvAddress": {
+      try {
+        const addr = scVal.address();
+        if (addr) {
+          if (typeof addr.toString === "function") {
+            const s = addr.toString();
+            if (/^[GC][A-Z0-9]{48,55}$/.test(s)) return s;
+          }
+        }
+      } catch {}
+      // Try _value
+      try {
+        const v = scVal._value;
+        if (v && typeof v.toString === "function") {
+          const s = v.toString();
+          if (/^[GC][A-Z0-9]{48,55}$/.test(s)) return s;
+        }
+      } catch {}
+      return null;
+    }
+
+    case "scvVec": {
+      try {
+        const vec = scVal.vec();
+        if (vec && typeof vec.map === "function") {
+          return vec.map((item: any) => decodeScVal(item));
+        }
+      } catch {}
+      // Try _value
+      try {
+        const v = scVal._value;
+        if (Array.isArray(v)) return v.map((item: any) => decodeScVal(item));
+        if (v && typeof v.map === "function") return v.map((item: any) => decodeScVal(item));
+      } catch {}
+      return [];
+    }
+
+    case "scvMap": {
+      try {
+        const map = scVal.map();
+        if (map && typeof map.forEach === "function") {
+          const result: Record<string, unknown> = {};
+          map.forEach((entry: any) => {
+            try {
+              const key = decodeScVal(entry.key());
+              const val = decodeScVal(entry.val());
+              result[String(key)] = val;
+            } catch {}
+          });
+          return result;
+        }
+      } catch {}
+      return {};
+    }
+
+    case "scvContractInstance": {
+      try {
+        const inst = scVal.instance();
+        if (inst) {
+          return {
+            type: "contractInstance",
+            address: inst.address ? String(inst.address) : undefined,
+          };
+        }
+      } catch {}
+      return null;
+    }
+
+    default: {
+      // Unknown type — try common accessors
+      try {
+        if (typeof scVal.b === "function") return scVal.b();
+      } catch {}
+      try {
+        if (typeof scVal.u32 === "function") return scVal.u32();
+      } catch {}
+      try {
+        if (typeof scVal.i32 === "function") return scVal.i32();
+      } catch {}
+      // Last resort: try _value
+      try {
+        const v = scVal._value;
+        if (v !== undefined) {
+          if (Buffer.isBuffer(v)) return v.toString("utf-8");
+          if (v instanceof Uint8Array) return new TextDecoder().decode(v);
+          if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") return v;
+          if (typeof v === "bigint") return v.toString();
+        }
+      } catch {}
+      return `[${switchName || "unknown"}]`;
     }
   }
-
-  return String(native);
 }
 
 export async function POST(req: NextRequest) {
@@ -210,7 +319,7 @@ export async function POST(req: NextRequest) {
 
     // Load the Stellar SDK
     const StellarSdk = await import("@stellar/stellar-sdk");
-    const { rpc: stellarRpc, BASE_FEE, Operation, TransactionBuilder, nativeToScVal, scValToNative, Address } = StellarSdk;
+    const { rpc: stellarRpc, BASE_FEE, Operation, TransactionBuilder, nativeToScVal, Address } = StellarSdk;
 
     const server = new stellarRpc.Server(rpc);
 
@@ -358,26 +467,20 @@ export async function POST(req: NextRequest) {
         });
       }
 
-      // Parse the retval (base64 ScVal XDR) and convert to a
-      // JSON-serializable native value.
+      // Parse the retval (base64 ScVal XDR) and decode to JSON-serializable.
       //
-      // §Fix (2026-08-16) — scValToNative() returns SDK-specific types
-      // (ScInt, Address, Buffer-like objects, XDR wrappers) that are NOT
-      // directly JSON-serializable. When NextResponse.json() tries to
-      // serialize them, it produces the raw internal XDR structure
-      // (with _switch, _arm, _value, etc.) instead of the actual value.
+      // §Fix (2026-08-16) — DON'T use scValToNative() — it throws
+      // "The first argument must be of type string, Buffer, ArrayBuffer,
+      // Array, or Array-like Object. Received an instance of ChildUnion"
+      // for scvString and other types.
       //
-      // Fix: use scValToNative() for basic types, but manually convert
-      // SDK types to plain JS primitives/objects before returning.
+      // Instead, use decodeScVal() which manually reads the XDR structure
+      // via the arm accessors (str(), b(), u32(), vec(), etc.).
       try {
         const scVal = StellarSdk.xdr.ScVal.fromXDR(result.retval, "base64");
-        const native = scValToNative(scVal);
-
-        // Convert SDK-specific types to JSON-serializable primitives
-        const serialized = serializeScValResult(native, scVal);
-
+        const decoded = decodeScVal(scVal);
         return NextResponse.json({
-          result: serialized,
+          result: decoded,
           scvalType: scVal.switch().name,
         });
       } catch (err) {

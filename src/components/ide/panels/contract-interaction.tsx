@@ -199,14 +199,15 @@ export function ContractInteractionPanel({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          // §Fix (2026-08-16) — was sending "effectiveContractId" but the
-          // API expects "contractId". The field name mismatch caused:
-          //   "Missing required fields: contractId, network, function"
           contractId: effectiveContractId,
           network,
           function: fn.name,
           args,
           mode: "read",
+          // §Fix — pass walletAddress for read mode too, so the simulation
+          // runs as the user's account (matches how the tx would actually
+          // execute, and provides proper auth context for require_auth calls)
+          walletAddress: profile?.address || undefined,
         }),
       });
 

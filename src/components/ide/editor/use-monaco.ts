@@ -547,50 +547,35 @@ export function registerAutocompleteProvider(monaco: typeof Monaco): { dispose: 
 
       // Layer 1: Rustdoc symbols
       if (rustdocSymbols) {
-        for (const sym of rustdocSymbols) {
-          // Check cancellation periodically — if the user has typed more
-          // characters since this request started, abort early.
-          // (For sync iteration this is unlikely to trigger, but if the
-          // rustdoc index grows to 10k+ symbols, it could.)
-          if ((suggestions.length & 0xff) === 0 && token.isCancellationRequested) {
-            return { suggestions: [] };
-          }
+        // §Fix (2026-08-16) — when after `::` or `.`, DON'T add rustdoc
+        // symbols. The rustdoc index is FLAT (no parent-child relationships),
+        // so we can't know which symbols are members of the type before
+        // `::` or `.`. Adding all 1855 symbols makes `String::` show the
+        // same results as `Vec::` or `anything::` — completely useless.
+        //
+        // After `::` and `.`, only the LSP (rust-analyzer) can provide
+        // useful completions (via type inference). The simple provider
+        // should return empty and let Monaco show only LSP results.
+        //
+        // Exception: after `use`, we DO show all symbols (user is importing).
+        const shouldSkipRustdoc = (isAfterDot || isInTypePath) && !isAfterUse;
 
-          const s = sym as { name: string; kind: string; detail?: string; docs?: string; module?: string };
-          const canAutoImport = !isAfterDot && !isAfterDoubleColon && !isAfterUse && !!s.module;
-          const ai = canAutoImport ? { crate: s.module!, symbol: s.name, kind: s.kind } : undefined;
-
-          if (isAfterDot) {
-            if (s.kind === "function" || s.kind === "macro") {
-              add(s.name, kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Function, s.detail, s.docs, undefined, "1");
+        if (!shouldSkipRustdoc) {
+          for (const sym of rustdocSymbols) {
+            if ((suggestions.length & 0xff) === 0 && token.isCancellationRequested) {
+              return { suggestions: [] };
             }
-          } else if (isInTypePath) {
-            // Pass the pre-computed typeBeforeColonsEdit (already calculated above).
-            // We still pass autoImport so the `add` helper attaches the edit —
-            // but we override by reusing the pre-computed value.
-            if (typeBeforeColonsEdit) {
-              // Bypass the per-symbol cache — we already have the edit.
-              if (!seenLabels.has(s.name)) {
-                seenLabels.add(s.name);
-                suggestions.push({
-                  label: s.name,
-                  kind: kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Text,
-                  detail: s.detail,
-                  documentation: s.docs ? { value: s.docs } : undefined,
-                  insertText: s.name,
-                  range,
-                  sortText: "1",
-                  additionalTextEdits: typeBeforeColonsEdit,
-                });
-              }
+
+            const s = sym as { name: string; kind: string; detail?: string; docs?: string; module?: string };
+            const canAutoImport = !isAfterDot && !isAfterDoubleColon && !isAfterUse && !!s.module;
+            const ai = canAutoImport ? { crate: s.module!, symbol: s.name, kind: s.kind } : undefined;
+
+            if (isAfterUse) {
+              add(s.name, kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Text, s.detail, s.docs, undefined, "1");
             } else {
-              add(s.name, kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Text, s.detail, s.docs, undefined, "1", typeBeforeColonsImport);
+              if (s.kind === "function" || s.kind === "macro") continue;
+              add(s.name, kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Text, s.detail, s.docs, undefined, "1", ai);
             }
-          } else if (isAfterUse) {
-            add(s.name, kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Text, s.detail, s.docs, undefined, "1");
-          } else {
-            if (s.kind === "function" || s.kind === "macro") continue;
-            add(s.name, kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Text, s.detail, s.docs, undefined, "1", ai);
           }
         }
       }
@@ -1102,8 +1087,23 @@ export function registerLspProvider(monaco: typeof Monaco, workspaceId: string):
     });
   }
 
-  // Also keep the simple provider as fallback (snippets + SDK symbols)
-  const fallback = registerAutocompleteProvider(monaco);
+  // §Fix (2026-08-16) — DON'T register the simple provider as fallback in
+  // LSP mode. Previously, both providers were registered simultaneously,
+  // and Monaco merged their results. The simple provider dumps 1855
+  // rustdoc symbols on every keystroke — even after `::`, where it can't
+  // know which symbols belong to the type. This made `String::` show the
+  // same 1855 generic symbols as `Vec::` or `anything::`, drowning out
+  // RA's type-inferred completions.
+  //
+  // Now: in LSP mode, ONLY the LSP provider is registered. If RA returns
+  // 0 items (still indexing), the user sees empty completions instead of
+  // misleading generic ones. This is better UX — the user knows RA isn't
+  // ready yet, rather than getting wrong suggestions.
+  //
+  // The LSP provider still adds local snippets (from autocomplete store)
+  // as a supplement when NOT after `::` or `.` — see the supplement loop
+  // below.
+  // const fallback = registerAutocompleteProvider(monaco);  // REMOVED
 
   let currentItems: CompletionItem[] = useAutocompleteStore.getState().items;
   const unsubscribe = useAutocompleteStore.subscribe((state) => {
@@ -1303,7 +1303,7 @@ export function registerLspProvider(monaco: typeof Monaco, workspaceId: string):
   return {
     dispose: () => {
       provider.dispose();
-      fallback.dispose();
+      // §Fix — fallback removed, no longer needs disposal
       unsubscribe();
       lspRequestIds.clear();
       if (lspClient) {

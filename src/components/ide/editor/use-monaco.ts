@@ -684,6 +684,15 @@ class LspClient {
     return !!this.ws && this.ws.readyState === WebSocket.OPEN && this.initialized;
   }
 
+  /**
+   * §Fix (2026-08-16) — returns the URI of the currently-open file.
+   * Used by the completion provider to decide whether to send didOpen
+   * (new file) or didChange (same file, updated content).
+   */
+  getFileUri(): string | null {
+    return this.fileUri;
+  }
+
   onDiagnostics(handler: (diags: Array<{ line: number; message: string; severity: number }>) => void) {
     this.diagnosticsHandler = handler;
   }
@@ -1020,7 +1029,11 @@ class LspClient {
 // ── LSP-powered autocomplete provider ─────────────────────────────────
 
 let lspClient: LspClient | null = null;
-let currentFileUri: string | null = null;
+// §Fix (2026-08-16) — moved currentFileUri INTO the LspClient class (see
+// `fileUri` field + `didOpen`/`didChange` methods). The module-level
+// variable was a bug: it persisted across client recreations, causing the
+// new client to send `didChange` instead of `didOpen` for a file that RA
+// didn't know about (because the old client's session was gone).
 
 // LSP CompletionItemKind → Monaco CompletionItemKind mapping
 const LSP_KIND_MAP: Record<number, number> = {
@@ -1120,11 +1133,11 @@ export function registerLspProvider(monaco: typeof Monaco, workspaceId: string):
   };
 
   const provider = monaco.languages.registerCompletionItemProvider("rust", {
-    // Structural trigger characters only — single letters caused the
-    // completion widget to fire on every keystroke, which combined with
-    // the async LSP round-trip made typing feel laggy.
-    // (Same fix as registerAutocompleteProvider — Qwen AI flagged this.)
-    triggerCharacters: [".", ":", "::", "@", "#", '"', "/", "_", "-"],
+    // §Fix (2026-08-16) — trigger characters must be SINGLE characters.
+    // "::" is not a valid trigger character (LSP + Monaco expect single
+    // chars). Having it in the array was silently ignored. The ":" entry
+    // already handles "::" (typing the second ":" triggers again).
+    triggerCharacters: [".", ":", "@", "#", '"', "/", "_", "-"],
     provideCompletionItems: async (model, position, _context, token) => {
       const modelKey = model.uri.toString();
       const requestId = (lspRequestIds.get(modelKey) ?? 0) + 1;
@@ -1134,16 +1147,35 @@ export function registerLspProvider(monaco: typeof Monaco, workspaceId: string):
       if (token.isCancellationRequested) return { suggestions: [] };
 
       const source = model.getValue();
-      const uri = `file:///tmp/stellarforge-builds/${workspaceId}/${model.uri.path.split("/").pop() === "lib.rs" ? "src/lib.rs" : model.uri.path.replace("/", "")}`;
+
+      // §Fix (2026-08-16) — FIXED URI construction.
+      // Previously: model.uri.path.replace("/", "") only replaced the FIRST
+      // slash, mangling "src/test.rs" into "srctest.rs". Also had a hacky
+      // special-case for "lib.rs" that assumed a specific file layout.
+      //
+      // New approach: just strip the leading slash from model.uri.path and
+      // join with the workspace dir. This produces the correct file URI for
+      // ANY file path, matching what /workspace/:id/sync wrote to disk.
+      //
+      // Examples:
+      //   model.uri.path = "src/lib.rs"   → file:///tmp/.../local-project/src/lib.rs
+      //   model.uri.path = "/src/lib.rs"  → file:///tmp/.../local-project/src/lib.rs
+      //   model.uri.path = "Cargo.toml"   → file:///tmp/.../local-project/Cargo.toml
+      const cleanPath = model.uri.path.replace(/^\//, "");
+      const uri = `file:///tmp/stellarforge-builds/${workspaceId}/${cleanPath}`;
 
       // Sync document to LSP server
       if (lspClient) {
-        if (currentFileUri !== uri) {
-          // File changed — send didOpen
-          currentFileUri = uri;
+        // §Fix — use the client's own fileUri tracking (was a stale
+        // module-level variable that persisted across client recreations).
+        // The client sends didOpen when the URI changes, didChange when
+        // the same file's content changes. This matches the LSP spec.
+        const clientFileUri = lspClient.getFileUri();
+        if (clientFileUri !== uri) {
+          // File changed (or first time) — send didOpen
           await lspClient.didOpen(uri, "rust", source).catch(() => {});
         } else {
-          // Same file — send didChange
+          // Same file — send didChange with updated content
           await lspClient.didChange(source).catch(() => {});
         }
 
@@ -1158,12 +1190,15 @@ export function registerLspProvider(monaco: typeof Monaco, workspaceId: string):
         );
 
         // ─── Stale-response check ──────────────────────────────────
-        // If a newer request has started for this model (user typed more),
-        // discard our results. This is critical for LSP because the
-        // round-trip to rust-analyzer can take 100-500ms — by then the
-        // user may have typed 5+ more characters.
         if (lspRequestIds.get(modelKey) !== requestId || token.isCancellationRequested) {
           return { suggestions: [] };
+        }
+
+        // §Fix — log what RA returned so we can diagnose "empty completions"
+        if (lspItems.length > 0) {
+          console.log(`[lsp] RA returned ${lspItems.length} items for ${cleanPath}:${position.lineNumber}:${position.column} (first: "${lspItems[0].label}")`);
+        } else {
+          console.log(`[lsp] RA returned 0 items for ${cleanPath}:${position.lineNumber}:${position.column} — RA may still be indexing deps`);
         }
 
         if (lspItems.length > 0) {
@@ -1204,7 +1239,6 @@ export function registerLspProvider(monaco: typeof Monaco, workspaceId: string):
               : item.documentation?.value;
 
             // Convert LSP additionalTextEdits (0-based) to Monaco (1-based).
-            // rust-analyzer sends these for auto-import candidates.
             let monacoAdditionalEdits: Monaco.languages.TextEdit[] | undefined;
             if (item.additionalTextEdits && item.additionalTextEdits.length > 0) {
               monacoAdditionalEdits = item.additionalTextEdits.map((e) => ({

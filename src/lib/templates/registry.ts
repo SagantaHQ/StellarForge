@@ -103,9 +103,9 @@ export const TEMPLATES: Template[] = [
         language: "rust",
         content: `#![no_std]
 
-use soroban_sdk::{contract, contractimpl, Env, String, Bytes, Vec};
+use soroban_sdk::{contract, contractimpl, symbol_short, Bytes, Env, String, Symbol};
 
-const GREETING_KEY: &str = "Greeting";
+const GREETING_KEY: Symbol = symbol_short!("Greeting");
 
 #[contract]
 pub struct HelloWorld;
@@ -138,27 +138,17 @@ impl HelloWorld {
         if name.is_empty() {
             return greeting;
         }
-        // Soroban SDK 22+ String doesn't have concat. We build the
-        // combined string using Bytes (which supports push_back) and
-        // then convert to String via try_from_val.
-        let mut bytes = Bytes::new(&env);
-        // Append greeting bytes
-        for b in greeting.to_array() {
-            bytes.push_back(b);
-        }
-        // Append ", "
-        for b in b", " {
-            bytes.push_back(*b);
-        }
-        // Append name bytes
-        for b in name.to_array() {
-            bytes.push_back(b);
-        }
-        // Append "!"
-        bytes.push_back(b'!');
 
-        // Convert Bytes to String
-        String::try_from_val(&env, &bytes).unwrap_or_else(|| greeting)
+        // Build "<greeting>, <name>!" — Bytes is the only mutable buffer
+        // Soroban's String type gives you, so build it there first.
+        let mut buf = greeting.to_bytes();
+        buf.append(&Bytes::from_slice(&env, b", "));
+        buf.append(&name.to_bytes());
+        buf.append(&Bytes::from_slice(&env, b"!"));
+
+        // Bytes -> String goes through \`From\`, not \`String::from_bytes\`
+        // (that constructor is for compile-time \`&[u8]\` literals).
+        String::from(buf)
     }
 }
 `,

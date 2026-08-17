@@ -46,7 +46,11 @@ export function buildMonacoTheme(theme: ThemeDefinition): Monaco.editor.IStandal
       "editor.lineHighlightBorder": theme.tokens.monaco.lineHighlight,
       "editor.selectionBackground": theme.tokens.monaco.selection,
       "editor.inactiveSelectionBackground": theme.tokens.monaco.selection,
-      "editor.selectionHighlightBackground": theme.tokens.monaco.selection,
+      // §Fix — selectionHighlight (matching occurrences) should be SUBTLER
+      // than the main selection. Previously both used the same color, which
+      // made every occurrence of a selected word flash in the full selection
+      // color — too intense. Now we use a much lower opacity version.
+      "editor.selectionHighlightBackground": theme.tokens.monaco.selection.replace(/[\d.]+\)$/, "0.12)"),
       "editorCursor.foreground": theme.tokens.monaco.cursor,
       "editorWhitespace.foreground": theme.tokens.monaco.whitespace,
       "editorIndentGuide.background": theme.tokens.monaco.whitespace,

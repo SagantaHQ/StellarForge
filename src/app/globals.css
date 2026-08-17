@@ -380,9 +380,13 @@
     border-radius: 2px;
   }
 
-  /* Selection */
+  /* Selection — use a NEUTRAL subtle blue-gray, NOT the accent color.
+     The accent color (teal/orange/green per theme) was too jarring as a
+     text selection background — especially Ember (orange) and Contrast
+     (yellow) which looked red/harsh on dark surfaces. A neutral
+     semi-transparent fill works for ALL themes and is gentler on the eyes. */
   ::selection {
-    background: var(--accent-subtle);
+    background: rgba(120, 140, 160, 0.28);
     color: var(--text-primary);
   }
 }

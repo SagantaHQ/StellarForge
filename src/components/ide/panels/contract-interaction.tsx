@@ -367,7 +367,12 @@ export function ContractInteractionPanel({
   }
 
   return (
-    <div className="flex flex-col h-full overflow-hidden border-t border-[var(--border-subtle)]">
+    // §Fix (2026-08-16) — removed h-full + overflow-hidden. The panel was
+    // constrained to its parent's height, which made the function list
+    // tiny (especially after deploy when there's a lot of content above).
+    // Now the panel expands to its natural height, and the parent
+    // DeployPanel (which has overflow-y-auto) handles scrolling.
+    <div className="flex flex-col border-t border-[var(--border-subtle)]">
       {/* Header */}
       <div className="border-b border-[var(--border-subtle)] p-3">
         <div className="text-[10px] uppercase tracking-wide text-[var(--text-muted)] mb-1">
@@ -397,8 +402,10 @@ export function ContractInteractionPanel({
         </div>
       </div>
 
-      {/* Functions list */}
-      <div className="flex-1 overflow-y-auto p-3 space-y-2">
+      {/* Functions list — no longer scrollable internally; the parent
+          DeployPanel handles scrolling so all functions are visible
+          when the user scrolls the deploy panel. */}
+      <div className="p-3 space-y-2">
         {functions.map((fn) => (
           <FunctionInvoker
             key={fn.name}

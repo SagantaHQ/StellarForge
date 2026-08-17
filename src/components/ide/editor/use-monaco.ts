@@ -418,6 +418,7 @@ export function registerAutocompleteProvider(monaco: typeof Monaco): { dispose: 
     snippet: monaco.languages.CompletionItemKind.Snippet,
     static: monaco.languages.CompletionItemKind.Enum,
     macro: monaco.languages.CompletionItemKind.Function,
+    variable: monaco.languages.CompletionItemKind.Variable,
   };
 
   const provider = monaco.languages.registerCompletionItemProvider("rust", {
@@ -1457,6 +1458,7 @@ export function registerLspProvider(monaco: typeof Monaco, workspaceId: string):
     snippet: monaco.languages.CompletionItemKind.Snippet,
     static: monaco.languages.CompletionItemKind.Enum,
     macro: monaco.languages.CompletionItemKind.Function,
+    variable: monaco.languages.CompletionItemKind.Variable,
   };
 
   const provider = monaco.languages.registerCompletionItemProvider("rust", {

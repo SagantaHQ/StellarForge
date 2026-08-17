@@ -83,11 +83,11 @@
 
   --status-success: #6FA885;
   --status-warning: #C9A66B;
-  --status-error: #C97A7A;
+  --status-error: #B07A8A;
   --status-info: #7B96B3;
 
   /* comment priority palette (muted) */
-  --priority-urgent: #C97A7A;
+  --priority-urgent: #B07A8A;
   --priority-high: #D29464;
   --priority-normal: #C9A66B;
   --priority-low: #7B96B3;

@@ -16,7 +16,7 @@ import { flattenFiles, type TreeNode } from "@/lib/soroban/sample-project";
 
 export interface CompletionItem {
   label: string;
-  kind: "function" | "struct" | "enum" | "trait" | "constant" | "typeAlias" | "module" | "keyword" | "snippet";
+  kind: "function" | "struct" | "enum" | "trait" | "constant" | "typeAlias" | "module" | "keyword" | "snippet" | "variable";
   detail?: string;
   documentation?: string;
   insertText?: string;
@@ -108,11 +108,25 @@ const RUST_STD_ITEMS: CompletionItem[] = [
 
 /**
  * Parse a Rust source file to extract public items for autocomplete.
+ *
+ * §Intelligent (2026-08-16) — now also extracts:
+ *   - Local variables (let bindings): `let x = ...`, `let mut y: Type = ...`
+ *   - Function parameters: `fn foo(env: Env, counter: u32)`
+ *   - Struct fields: `pub struct Foo { name: String, ... }`
+ *   - Private functions (fn without pub)
+ *   - Static items: `static COUNTER: u32 = 0;`
+ *
+ * This makes simple-mode autocomplete show local variables when you type
+ * the first few letters — essential for a real editor experience.
  */
 function parseRustSource(source: string, filePath: string): CompletionItem[] {
   const items: CompletionItem[] = [];
   const lines = source.split("\n");
   let currentDoc: string[] = [];
+  // Track function scope so we know which `let` bindings are local to
+  // the current function. We don't do full scoping (too complex for a
+  // regex parser) — we just collect ALL let bindings from the file and
+  // let Monaco's built-in filtering handle relevance.
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
@@ -130,8 +144,8 @@ function parseRustSource(source: string, filePath: string): CompletionItem[] {
       currentDoc = [];
     }
 
-    // pub fn
-    const fnMatch = line.match(/^pub\s+(?:async\s+)?fn\s+(\w+)\s*\(([^)]*)\)\s*(?:->\s*([^{]+?))?\s*\{?/);
+    // pub fn OR fn (private functions too)
+    const fnMatch = line.match(/^(?:pub\s+)?(?:async\s+)?fn\s+(\w+)\s*\(([^)]*)\)\s*(?:->\s*([^{]+?))?\s*\{?/);
     if (fnMatch) {
       const name = fnMatch[1];
       const args = fnMatch[2].trim();
@@ -146,11 +160,36 @@ function parseRustSource(source: string, filePath: string): CompletionItem[] {
         insertTextRules: "InsertAsSnippet",
         module: filePath,
       });
+
+      // §Intelligent — also extract function parameters as completion items
+      // so the user can reference them by name. e.g. `fn greet(env: Env, name: String)`
+      // → adds `env` and `name` to the completion list.
+      if (args) {
+        const params = args.split(",").map(p => p.trim()).filter(Boolean);
+        for (const param of params) {
+          // Parse: `name: Type` or `name: &Type` or `mut name: Type` or `&self` / `&mut self`
+          const paramMatch = param.match(/^(?:mut\s+)?([a-z_][a-z0-9_]*)\s*:\s*(?:&\s*(?:mut\s+)?)?([A-Za-z_][A-Za-z0-9_<>,\s]*)/);
+          if (paramMatch) {
+            const varName = paramMatch[1];
+            const varType = paramMatch[2].trim();
+            // Don't add if it's a common keyword
+            if (varName !== "self" && varName !== "self_mut") {
+              items.push({
+                label: varName,
+                kind: "variable",
+                detail: `let ${varName}: ${varType}  // function param`,
+                documentation: `Parameter of \`${name}\``,
+                module: filePath,
+              });
+            }
+          }
+        }
+      }
       continue;
     }
 
-    // pub struct
-    const structMatch = line.match(/^pub\s+struct\s+(\w+)/);
+    // pub struct OR struct
+    const structMatch = line.match(/^(?:pub\s+)?struct\s+(\w+)/);
     if (structMatch) {
       items.push({
         label: structMatch[1],
@@ -162,8 +201,8 @@ function parseRustSource(source: string, filePath: string): CompletionItem[] {
       continue;
     }
 
-    // pub enum
-    const enumMatch = line.match(/^pub\s+enum\s+(\w+)/);
+    // pub enum OR enum
+    const enumMatch = line.match(/^(?:pub\s+)?enum\s+(\w+)/);
     if (enumMatch) {
       items.push({
         label: enumMatch[1],
@@ -175,8 +214,8 @@ function parseRustSource(source: string, filePath: string): CompletionItem[] {
       continue;
     }
 
-    // pub trait
-    const traitMatch = line.match(/^pub\s+trait\s+(\w+)/);
+    // pub trait OR trait
+    const traitMatch = line.match(/^(?:pub\s+)?trait\s+(\w+)/);
     if (traitMatch) {
       items.push({
         label: traitMatch[1],
@@ -188,8 +227,8 @@ function parseRustSource(source: string, filePath: string): CompletionItem[] {
       continue;
     }
 
-    // pub const
-    const constMatch = line.match(/^pub\s+const\s+(\w+)\s*:\s*(.+?)(?:\s*=|$)/);
+    // pub const OR const OR static
+    const constMatch = line.match(/^(?:pub\s+)?(?:const|static)\s+(?:mut\s+)?(\w+)\s*:\s*(.+?)(?:\s*=|$)/);
     if (constMatch) {
       items.push({
         label: constMatch[1],
@@ -201,14 +240,60 @@ function parseRustSource(source: string, filePath: string): CompletionItem[] {
       continue;
     }
 
-    // pub type
-    const typeMatch = line.match(/^pub\s+type\s+(\w+)\s*=\s*(.+?);/);
+    // pub type OR type
+    const typeMatch = line.match(/^(?:pub\s+)?type\s+(\w+)\s*=\s*(.+?);/);
     if (typeMatch) {
       items.push({
         label: typeMatch[1],
         kind: "typeAlias",
         detail: `type ${typeMatch[1]} = ${typeMatch[2].trim()}`,
         documentation: doc,
+        module: filePath,
+      });
+      continue;
+    }
+
+    // §Intelligent — let bindings (local variables)
+    // Matches:
+    //   let x = ...              → x (type inferred, no detail)
+    //   let mut y = ...          → y
+    //   let z: Type = ...        → z: Type
+    //   let _env: Env = ...      → _env: Env
+    // Does NOT match:
+    //   let _ = ...              → underscore bindings are intentionally ignored
+    //   let (_, x) = ...         → destructuring (too complex for regex)
+    const letMatch = line.match(/^\s*let\s+(?:mut\s+)?([a-z_][a-z0-9_]*)\s*(?::\s*([A-Za-z_][A-Za-z0-9_<>,\s&]*))?\s*=/);
+    if (letMatch) {
+      const varName = letMatch[1];
+      const varType = letMatch[2]?.trim();
+      // Skip underscore-prefixed variables (intentionally unused)
+      if (varName === "_" || varName.startsWith("_")) continue;
+      items.push({
+        label: varName,
+        kind: "variable",
+        detail: varType ? `let ${varName}: ${varType}` : `let ${varName}`,
+        documentation: `Local variable in ${filePath}`,
+        module: filePath,
+      });
+      continue;
+    }
+
+    // §Intelligent — struct fields (pub name: Type)
+    // Matches indented field declarations inside a struct body:
+    //   pub name: String,
+    //   counter: u32,
+    //   pub(crate) value: i64,
+    const fieldMatch = line.match(/^\s+(?:pub\s+)?(?:\([^)]+\)\s+)?([a-z_][a-z0-9_]*)\s*:\s*([A-Za-z_][A-Za-z0-9_<>,\s&]*)/);
+    if (fieldMatch && !line.includes("fn ") && !line.includes("let ") && !line.includes("use ")) {
+      const fieldName = fieldMatch[1];
+      const fieldType = fieldMatch[2].trim();
+      // Skip common false positives (keywords that look like field names)
+      if (["self", "return", "if", "else", "match", "for", "while", "loop", "break", "continue"].includes(fieldName)) continue;
+      items.push({
+        label: fieldName,
+        kind: "variable",
+        detail: `${fieldName}: ${fieldType}  // struct field`,
+        documentation: `Field in ${filePath}`,
         module: filePath,
       });
       continue;

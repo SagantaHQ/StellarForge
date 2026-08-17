@@ -115,7 +115,7 @@ function decodeScVal(scVal: any): unknown {
           if (v.hi !== undefined && v.lo !== undefined) {
             const hi = BigInt(v.hi.toString());
             const lo = BigInt(v.lo.toString());
-            return (hi * (1n << 64n) + lo).toString();
+            return (hi * (BigInt(1) << BigInt(64)) + lo).toString();
           }
         }
       } catch {}
@@ -123,74 +123,135 @@ function decodeScVal(scVal: any): unknown {
     }
 
     case "scvString": {
-      // Soroban String — stored as a Buffer of UTF-8 bytes
+      // Soroban String — the XDR structure stores it as a Buffer of UTF-8
+      // bytes. But depending on the SDK version, str() may return:
+      //   1. A Node Buffer (most common) → Buffer.isBuffer(str) === true
+      //   2. A Uint8Array → str instanceof Uint8Array === true
+      //   3. An XDR String wrapper (older SDKs) → has .buffer or ._value
+      //   4. A plain string (newer SDKs)
+      //
+      // We try ALL of these + fall back to _value (raw XDR field).
+      // Every access is try/catch'd so we never throw.
+      const tryDecodeBuffer = (b: any): string | null => {
+        if (!b) return null;
+        if (Buffer.isBuffer(b)) return b.toString("utf-8");
+        if (b instanceof Uint8Array) return new TextDecoder().decode(b);
+        if (Array.isArray(b)) return Buffer.from(b).toString("utf-8");
+        if (b && typeof b === "object" && b.type === "Buffer" && Array.isArray(b.data)) {
+          return Buffer.from(b.data).toString("utf-8");
+        }
+        if (typeof b === "string") return b;
+        if (b && typeof b.toString === "function") {
+          const s = b.toString();
+          if (s && s !== "[object Object]" && s !== "[object Uint8Array]") return s;
+        }
+        // XDR wrapper — try .buffer or ._value
+        if (b && typeof b === "object") {
+          if (b.buffer) return tryDecodeBuffer(b.buffer);
+          if (b._value) return tryDecodeBuffer(b._value);
+          if (b.data) return tryDecodeBuffer(b.data);
+        }
+        return null;
+      };
+
+      // Try str() accessor first
       try {
         const str = scVal.str();
-        if (str) {
-          // str() returns a Buffer-like object
-          if (Buffer.isBuffer(str)) return str.toString("utf-8");
-          if (str instanceof Uint8Array) return new TextDecoder().decode(str);
-          if (typeof str === "string") return str;
-          // XDR String type — has toString() or is array-like
-          if (typeof str.toString === "function") {
-            const s = str.toString();
-            if (s !== "[object Object]") return s;
-          }
-        }
+        const decoded = tryDecodeBuffer(str);
+        if (decoded !== null) return decoded;
       } catch {}
-      // Try _value (raw XDR access)
+
+      // Try _value (raw XDR field — same structure the user saw)
       try {
         const v = scVal._value;
-        if (Buffer.isBuffer(v)) return v.toString("utf-8");
-        if (v instanceof Uint8Array) return new TextDecoder().decode(v);
-        if (v && typeof v.toString === "function") {
-          const s = v.toString();
-          if (s && s !== "[object Object]") return s;
-        }
+        const decoded = tryDecodeBuffer(v);
+        if (decoded !== null) return decoded;
       } catch {}
+
+      // Try getting the XDR bytes directly and re-parsing
+      try {
+        const xdrBytes = scVal.toXDR();
+        // The string content is embedded in the XDR — extract it
+        // by looking for printable ASCII after the header
+        const str = xdrBytes.toString("utf-8").replace(/[^\x20-\x7E]/g, "");
+        if (str && str.length > 0) return str;
+      } catch {}
+
       return null;
     }
 
     case "scvSymbol":
     case "scvSymbolSmall": {
+      // Same approach as scvString — try sym(), then _value, then XDR bytes
+      const tryDecodeBuffer = (b: any): string | null => {
+        if (!b) return null;
+        if (Buffer.isBuffer(b)) return b.toString("utf-8");
+        if (b instanceof Uint8Array) return new TextDecoder().decode(b);
+        if (Array.isArray(b)) return Buffer.from(b).toString("utf-8");
+        if (b && typeof b === "object" && b.type === "Buffer" && Array.isArray(b.data)) {
+          return Buffer.from(b.data).toString("utf-8");
+        }
+        if (typeof b === "string") return b;
+        if (b && typeof b.toString === "function") {
+          const s = b.toString();
+          if (s && s !== "[object Object]" && s !== "[object Uint8Array]") return s;
+        }
+        if (b && typeof b === "object") {
+          if (b.buffer) return tryDecodeBuffer(b.buffer);
+          if (b._value) return tryDecodeBuffer(b._value);
+          if (b.data) return tryDecodeBuffer(b.data);
+        }
+        return null;
+      };
       try {
         const sym = scVal.sym();
-        if (sym) {
-          if (Buffer.isBuffer(sym)) return sym.toString("utf-8");
-          if (sym instanceof Uint8Array) return new TextDecoder().decode(sym);
-          if (typeof sym === "string") return sym;
-          if (typeof sym.toString === "function") return sym.toString();
-        }
+        const decoded = tryDecodeBuffer(sym);
+        if (decoded !== null) return decoded;
       } catch {}
-      // Try _value
       try {
         const v = scVal._value;
-        if (Buffer.isBuffer(v)) return v.toString("utf-8");
-        if (v instanceof Uint8Array) return new TextDecoder().decode(v);
-        if (typeof v === "string") return v;
-        if (v && typeof v.toString === "function") {
-          const s = v.toString();
-          if (s && s !== "[object Object]") return s;
-        }
+        const decoded = tryDecodeBuffer(v);
+        if (decoded !== null) return decoded;
       } catch {}
       return null;
     }
 
     case "scvBytes": {
+      const tryDecodeBytes = (b: any): string | null => {
+        if (!b) return null;
+        if (Buffer.isBuffer(b)) {
+          const str = b.toString("utf-8");
+          if (/^[\x20-\x7E]*$/.test(str)) return str;
+          return b.toString("hex");
+        }
+        if (b instanceof Uint8Array) {
+          const str = new TextDecoder().decode(b);
+          if (/^[\x20-\x7E]*$/.test(str)) return str;
+          return Array.from(b).map(x => x.toString(16).padStart(2, "0")).join("");
+        }
+        if (Array.isArray(b)) {
+          const buf = Buffer.from(b);
+          const str = buf.toString("utf-8");
+          if (/^[\x20-\x7E]*$/.test(str)) return str;
+          return buf.toString("hex");
+        }
+        if (b && typeof b === "object" && b.type === "Buffer" && Array.isArray(b.data)) {
+          const buf = Buffer.from(b.data);
+          const str = buf.toString("utf-8");
+          if (/^[\x20-\x7E]*$/.test(str)) return str;
+          return buf.toString("hex");
+        }
+        return null;
+      };
       try {
         const b = scVal.bytes();
-        if (b) {
-          if (Buffer.isBuffer(b)) {
-            const str = b.toString("utf-8");
-            if (/^[\x20-\x7E]*$/.test(str)) return str;
-            return b.toString("hex");
-          }
-          if (b instanceof Uint8Array) {
-            const str = new TextDecoder().decode(b);
-            if (/^[\x20-\x7E]*$/.test(str)) return str;
-            return Array.from(b).map(x => x.toString(16).padStart(2, "0")).join("");
-          }
-        }
+        const decoded = tryDecodeBytes(b);
+        if (decoded !== null) return decoded;
+      } catch {}
+      try {
+        const v = scVal._value;
+        const decoded = tryDecodeBytes(v);
+        if (decoded !== null) return decoded;
       } catch {}
       return null;
     }

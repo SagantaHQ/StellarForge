@@ -499,36 +499,33 @@ function FunctionInvoker({
             ))
           )}
 
-          {/* Action buttons — read-only functions show only "Query";
-              write functions show both "Query" + "Transact" */}
+          {/* Action buttons — always show BOTH Query + Transact.
+              The user can choose whether to simulate (free, instant) or
+              submit a real transaction (costs fee, but gives a receipt).
+              Previously read-only functions only showed Query, which was
+              too restrictive — the user might want to submit a tx even
+              for a read function (e.g. for auth verification). */}
           <div className="flex gap-1.5">
             <Button
               size="sm"
               onClick={onQuery}
               disabled={loading}
               className="flex-1 h-7 gap-1.5 bg-[var(--surface-raised)] hover:bg-[var(--surface-hover)] border border-[var(--border-subtle)] text-[var(--text-primary)] text-[11px] disabled:opacity-50"
-              title={fn.isReadonly
-                ? "Read-only function — simulate the call (free, no transaction)"
-                : "Simulate the call without submitting a transaction (read-only)"}
+              title="Simulate the call (free, no transaction, instant)"
             >
               <Eye size={10} strokeWidth={1.75} />
               {loading && !pendingSign ? "Querying…" : "Query"}
             </Button>
-            {/* Only show the Transact button for write functions —
-                read-only functions don't need a transaction (they don't
-                modify state, so simulating is equivalent to executing) */}
-            {!fn.isReadonly && (
-              <Button
-                size="sm"
-                onClick={onTransact}
+            <Button
+              size="sm"
+              onClick={onTransact}
               disabled={loading}
               className="flex-1 h-7 gap-1.5 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--accent-contrast)] text-[11px] disabled:opacity-50"
-              title="Write — submit a transaction (requires wallet signing)"
+              title="Submit a transaction (requires wallet signing, costs fee)"
             >
               {loading && pendingSign ? <AlertCircle size={10} strokeWidth={1.75} /> : <Send size={10} strokeWidth={1.75} />}
               {loading && pendingSign ? "Sign…" : loading ? "Submitting…" : "Transact"}
             </Button>
-            )}
           </div>
 
           {/* Pending-sign message */}

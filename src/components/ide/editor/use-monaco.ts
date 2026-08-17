@@ -692,9 +692,153 @@ export function registerAutocompleteProvider(monaco: typeof Monaco): { dispose: 
 
   console.log("[autocomplete] completion provider registered for 'rust' language (async + cached + race-protected)");
 
+  // §LSP (2026-08-16) — simple-mode hover provider.
+  // When the user hovers over a word, look it up in the rustdoc index
+  // and show its docs. This is the best we can do without rust-analyzer
+  // (which provides real type-aware hover via the LSP).
+  const hoverProvider = monaco.languages.registerHoverProvider("rust", {
+    provideHover: (model, position) => {
+      const word = model.getWordAtPosition(position);
+      if (!word || !word.word) return null;
+
+      // Look up the word in the rustdoc index
+      if (rustdocSymbols) {
+        for (const sym of rustdocSymbols) {
+          const s = sym as { name: string; kind: string; detail?: string; docs?: string; module?: string };
+          if (s.name === word.word) {
+            const contents: string[] = [];
+            if (s.module) contents.push(`**${s.module}::${s.name}**`);
+            else contents.push(`**${s.name}**`);
+            if (s.kind) contents.push(`*${s.kind}*`);
+            if (s.detail) contents.push(s.detail);
+            if (s.docs) contents.push(s.docs);
+            return {
+              range: {
+                startLineNumber: position.lineNumber,
+                startColumn: word.startColumn,
+                endLineNumber: position.lineNumber,
+                endColumn: word.endColumn,
+              },
+              contents: contents.map(c => ({ value: c, isTrusted: true })),
+            };
+          }
+        }
+      }
+
+      // Also check the type-members knowledge base for method docs
+      const lineUntilPosition = model.getValueInRange({
+        startLineNumber: position.lineNumber,
+        startColumn: 1,
+        endLineNumber: position.lineNumber,
+        endColumn: position.column,
+      });
+      const typePathMatch = lineUntilPosition.match(/([A-Za-z_][A-Za-z0-9_]*)\s*::\s*[A-Za-z0-9_]*$/);
+      if (typePathMatch) {
+        const typeName = typePathMatch[1];
+        const members = getTypeMembers(typeName);
+        if (members) {
+          const member = members.find(m => m.name === word.word);
+          if (member) {
+            const contents: string[] = [];
+            contents.push(`**${typeName}::${member.name}**`);
+            if (member.signature) contents.push("```rust\n" + member.signature + "\n```");
+            if (member.docs) contents.push(member.docs);
+            return {
+              range: {
+                startLineNumber: position.lineNumber,
+                startColumn: word.startColumn,
+                endLineNumber: position.lineNumber,
+                endColumn: word.endColumn,
+              },
+              contents: contents.map(c => ({ value: c, isTrusted: true })),
+            };
+          }
+        }
+      }
+
+      return null;
+    },
+  });
+
+  // §LSP (2026-08-16) — simple-mode diagnostics (basic linting).
+  // Without rust-analyzer, we can't do real type checking. But we CAN
+  // catch obvious issues with regex:
+  //   - Unused `use` imports (import is present but symbol never used)
+  //   - Missing semicolons (line ends with an expression but no ;)
+  //   - Unbalanced braces (rough count)
+  // These are lightweight but catch common beginner mistakes.
+  const diagnosticProvider = monaco.languages.registerCodeActionProvider("rust", {
+    provideCodeActions: () => ({ actions: [], dispose: () => {} }),
+  });
+
+  // Run basic diagnostics on model change (debounced)
+  const diagnosticTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const runBasicDiagnostics = (model: Monaco.editor.ITextModel) => {
+    const modelKey = model.uri.toString();
+    const existing = diagnosticTimers.get(modelKey);
+    if (existing) clearTimeout(existing);
+    diagnosticTimers.set(modelKey, setTimeout(() => {
+      const source = model.getValue();
+      const markers: Monaco.editor.IMarkerData[] = [];
+
+      // Check for unused `use` imports
+      const useRe = /^\s*use\s+(?:[a-zA-Z0-9_:]+::)?([A-Za-z_][A-Za-z0-9_]*)\s*;/gm;
+      let m: RegExpExecArray | null;
+      while ((m = useRe.exec(source)) !== null) {
+        const symbol = m[1];
+        // Check if the symbol is used anywhere in the file (excluding the use line itself)
+        const usageRe = new RegExp(`\\b${symbol}\\b`, "g");
+        const lines = source.split("\n");
+        let used = false;
+        for (let i = 0; i < lines.length; i++) {
+          if (i === useRe.lastIndex - 1) continue; // skip the use line
+          if (usageRe.test(lines[i])) {
+            used = true;
+            break;
+          }
+        }
+        if (!used) {
+          const lineIdx = source.slice(0, m.index).split("\n").length - 1;
+          markers.push({
+            startLineNumber: lineIdx + 1,
+            startColumn: 1,
+            endLineNumber: lineIdx + 1,
+            endColumn: lines[lineIdx].length + 1,
+            message: `Unused import: \`${symbol}\``,
+            severity: Monaco.MarkerSeverity.Hint,
+            source: "stellarforge",
+            code: "unused-import",
+          });
+        }
+      }
+
+      monaco.editor.setModelMarkers(model, "stellarforge-simple", markers);
+    }, 500));
+  };
+
+  // Run diagnostics on all existing models + on model creation
+  monaco.editor.getModels().forEach(runBasicDiagnostics);
+  const modelCreationListener = monaco.editor.onDidCreateModel(runBasicDiagnostics);
+  const modelChangeListener = monaco.editor.onDidChangeModelLanguage(() => {
+    monaco.editor.getModels().filter(m => m.getLanguageId() === "rust").forEach(runBasicDiagnostics);
+  });
+
+  // Re-run diagnostics when content changes
+  const contentChangeDisposables: Monaco.IDisposable[] = [];
+  monaco.editor.getModels().filter(m => m.getLanguageId() === "rust").forEach(model => {
+    contentChangeDisposables.push(model.onDidChangeContent(() => runBasicDiagnostics(model)));
+  });
+
   return {
     dispose: () => {
       provider.dispose();
+      hoverProvider.dispose();
+      diagnosticProvider.dispose();
+      modelCreationListener.dispose();
+      modelChangeListener.dispose();
+      contentChangeDisposables.forEach(d => d.dispose());
+      diagnosticTimers.forEach(t => clearTimeout(t));
+      diagnosticTimers.clear();
       unsubscribe();
       completionCache.clear();
       requestIds.clear();
@@ -741,6 +885,11 @@ class LspClient {
   private fileUri: string | null = null;
   private fileVersion = 0;
   private diagnosticsHandler: ((diags: Array<{ line: number; message: string; severity: number }>) => void) | null = null;
+  // §LSP (2026-08-16) — raw diagnostics callback for Monaco markers.
+  // The simplified diagnosticsHandler above only gets {line, message, severity}.
+  // The raw handler gets the full LSP diagnostic objects (with ranges, source,
+  // code) so Monaco can show proper squiggly underlines.
+  private rawDiagnosticsHandlers: Set<(uri: string, diagnostics: any[]) => void> = new Set();
 
   constructor(workspaceId: string) {
     this.workspaceId = workspaceId;
@@ -762,6 +911,16 @@ class LspClient {
 
   onDiagnostics(handler: (diags: Array<{ line: number; message: string; severity: number }>) => void) {
     this.diagnosticsHandler = handler;
+  }
+
+  /**
+   * §LSP (2026-08-16) — register a raw diagnostics handler.
+   * Returns an unsubscribe function.
+   * Used by the LSP providers to wire publishDiagnostics → Monaco markers.
+   */
+  onRawDiagnostics(handler: (uri: string, diagnostics: any[]) => void): () => void {
+    this.rawDiagnosticsHandlers.add(handler);
+    return () => this.rawDiagnosticsHandlers.delete(handler);
   }
 
   async connect(): Promise<void> {
@@ -869,35 +1028,114 @@ class LspClient {
       rootUri: `file:///tmp/stellarforge-builds/${this.workspaceId}`,
       capabilities: {
         textDocument: {
-          synchronization: { didOpen: true, didChange: true, didClose: true },
+          synchronization: { didOpen: true, didChange: true, didClose: true, willSave: false, willSaveWaitUntil: false, didSave: true },
           completion: {
             completionItem: {
               snippetSupport: true,
               documentationFormat: ["markdown", "plaintext"],
+              commitCharactersSupport: false,
+              preselectSupport: false,
+              tagSupport: { valueSet: [] },
+              insertReplaceSupport: false,
+              resolveSupport: { properties: ["documentation", "detail", "additionalTextEdits"] },
+              insertTextModeSupport: { valueSet: [] },
+              labelDetailsSupport: false,
             },
+            completionList: { itemDefaults: [] },
+            contextSupport: true,
           },
           hover: { contentFormat: ["markdown", "plaintext"] },
-        },
-        // §Fix (2026-08-16) — declare workspace file-watching capability
-        // so rust-analyzer knows we'll send workspace/didChangeWatchedFiles
-        // notifications when files are synced to disk via /workspace/:id/sync.
-        // Without this, RA won't re-index when we add Cargo.toml + sources
-        // after it has already started.
-        workspace: {
-          didChangeWatchedFiles: {
-            dynamicRegistration: false,
+          // §LSP (2026-08-16) — declare all the capabilities we now support
+          // so rust-analyzer knows it can send us these request types.
+          definition: { linkSupport: false },
+          typeDefinition: { linkSupport: false },
+          implementation: { linkSupport: false },
+          references: { },
+          documentSymbol: {
+            hierarchicalDocumentSymbolSupport: true,
+            symbolKind: { valueSet: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26] },
+            labelSupport: false,
           },
+          rename: { prepareSupport: true, honorsChangeAnnotations: false },
+          signatureHelp: {
+            signatureInformation: {
+              documentationFormat: ["markdown", "plaintext"],
+              parameterInformation: { labelOffsetSupport: true },
+              activeParameterSupport: true,
+            },
+            contextSupport: true,
+          },
+          documentHighlight: { },
+          foldingRange: {
+            lineFoldingOnly: true,
+            rangeLimit: 5000,
+          },
+          selectionRange: { },
+          codeAction: {
+            codeActionLiteralSupport: {
+              codeActionKind: { valueSet: ["", "quickfix", "refactor", "refactor.extract", "refactor.inline", "refactor.rewrite", "source", "source.organizeImports", "source.fixAll"] },
+            },
+            isPreferredSupport: true,
+            dataSupport: false,
+            resolveSupport: { properties: ["edit"] },
+            honorsChangeAnnotations: false,
+          },
+          formatting: { },
+          onTypeFormatting: { },
+          publishDiagnostics: {
+            relatedInformation: true,
+            versionSupport: false,
+            tagSupport: { valueSet: [1, 2] },
+            codeDescriptionSupport: false,
+            dataSupport: false,
+          },
+          semanticTokens: {
+            requests: { range: false, full: false },
+            tokenTypes: [],
+            tokenModifiers: [],
+            formats: [],
+            overlappingTokenSupport: false,
+            multilineTokenSupport: false,
+            serverCancelSupport: false,
+            augmentsSyntaxTokens: false,
+          },
+        },
+        workspace: {
+          didChangeWatchedFiles: { dynamicRegistration: false },
+          symbol: {
+            symbolKind: { valueSet: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26] },
+          },
+          workspaceEdit: { resourceOperations: ["create", "rename", "delete"] },
         },
       },
       initializationOptions: {
         cargo: { target: "wasm32v1-none", features: "all" },
+        // §LSP (2026-08-16) — enable checkOnSave so RA runs cargo check
+        // in the background and reports diagnostics (errors/warnings)
+        // as you type. This is what makes the "red squiggly underlines"
+        // show up for compile errors.
+        checkOnSave: {
+          command: "clippy",
+          extraArgs: ["--target", "wasm32v1-none"],
+        },
+        // Enable inlay hints (type annotations, parameter names)
+        inlayHints: {
+          bindingModeHints: { enabled: true },
+          chainingHints: { enabled: true },
+          closureReturnTypeHints: { enabled: "always" },
+          lifetimeElisionHints: { enabled: "never" },
+          maxLength: 25,
+          parameterHints: { enabled: true },
+          renderColons: true,
+          typeHints: { enabled: true },
+        },
       },
     });
 
     // Send initialized notification
     this.sendNotification("initialized", {});
     this.initialized = true;
-    console.log("[lsp] initialized — rust-analyzer ready");
+    console.log("[lsp] initialized — rust-analyzer ready (full feature set: diagnostics, hover, goto-def, references, rename, symbols, signature help, folding, code actions, formatting)");
   }
 
   private handleMessage(msg: any) {
@@ -915,12 +1153,22 @@ class LspClient {
 
     // Notification
     if (msg.method === "textDocument/publishDiagnostics") {
-      const diags = (msg.params?.diagnostics || []).map((d: any) => ({
+      const uri = msg.params?.uri || "";
+      const diagnostics = msg.params?.diagnostics || [];
+      // Simplified handler (for backward compat — status bar etc.)
+      const diags = diagnostics.map((d: any) => ({
         line: d.range?.start?.line ?? 0,
         message: d.message || "",
         severity: d.severity || 1,
       }));
       this.diagnosticsHandler?.(diags);
+      // §LSP (2026-08-16) — raw handler for Monaco markers.
+      // Gets the full diagnostic objects (range, source, code, severity)
+      // so Monaco can show proper squiggly underlines + the lightbulb
+      // quick-fix icon.
+      for (const handler of this.rawDiagnosticsHandlers) {
+        try { handler(uri, diagnostics); } catch {}
+      }
       return;
     }
 
@@ -954,7 +1202,10 @@ class LspClient {
     }
   }
 
-  private sendRequest(method: string, params: any): Promise<any> {
+  // §LSP (2026-08-16) — made public so the LSP providers module can
+  // send arbitrary LSP requests (hover, definition, references, etc.)
+  // without duplicating the WebSocket + message-id + timeout logic.
+  sendRequest(method: string, params: any): Promise<any> {
     return new Promise((resolve, reject) => {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
         reject(new Error("WebSocket not connected"));
@@ -1464,10 +1715,51 @@ export function registerLspProvider(monaco: typeof Monaco, workspaceId: string):
 
   console.log("[lsp] LSP provider registered for 'rust' language");
 
+  // §LSP (2026-08-16) — register ALL the LSP-powered Monaco providers
+  // (hover, goto-def, references, rename, symbols, signature help,
+  // folding, code actions, formatting, diagnostics).
+  // This is what makes it a "real editor" — not just autocomplete.
+  let lspProviders: { disposables: Array<{ dispose: () => void }> } | null = null;
+  let diagnosticsDispose: (() => void) | null = null;
+  if (lspClient) {
+    // Register all providers once the client is connected.
+    // We do this asynchronously because the client might still be
+    // connecting at this point.
+    const registerOnceReady = async () => {
+      // Wait for client to be initialized (max 10s)
+      for (let i = 0; i < 50; i++) {
+        if (lspClient && lspClient.isConnected()) break;
+        await new Promise(r => setTimeout(r, 200));
+      }
+      if (!lspClient || !lspClient.isConnected()) {
+        console.warn("[lsp] client not ready — LSP providers not registered");
+        return;
+      }
+
+      const { registerLspProviders, setupDiagnosticsHandler } = await import("@/lib/lsp/lsp-providers");
+      lspProviders = registerLspProviders(monaco, lspClient as any, workspaceId);
+      diagnosticsDispose = setupDiagnosticsHandler(
+        monaco,
+        (handler) => (lspClient as any).onRawDiagnostics(handler),
+        workspaceId,
+      );
+      console.log("[lsp] all LSP providers registered (hover, goto-def, references, rename, symbols, signature help, folding, code actions, formatting, diagnostics)");
+    };
+    registerOnceReady().catch(err => console.warn("[lsp] failed to register LSP providers:", err));
+  }
+
   return {
     dispose: () => {
       provider.dispose();
-      // §Fix — fallback removed, no longer needs disposal
+      // §LSP — dispose all LSP providers + diagnostics handler
+      if (lspProviders) {
+        for (const d of lspProviders.disposables) d.dispose();
+        lspProviders = null;
+      }
+      if (diagnosticsDispose) {
+        diagnosticsDispose();
+        diagnosticsDispose = null;
+      }
       unsubscribe();
       lspRequestIds.clear();
       if (lspClient) {

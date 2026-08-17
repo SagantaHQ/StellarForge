@@ -158,11 +158,23 @@ export async function POST(req: NextRequest) {
     // (no fee) and instant — perfect for view functions like get_count,
     // balance_of, etc.
     if (mode === "read") {
-      // For simulation, we still need a TransactionBuilder, but the source
-      // account doesn't need to be funded — we can use a fake account.
-      // Use the contract ID's derived account as a placeholder.
+      // §Fix (2026-08-16) — for simulation, we need a valid Stellar account
+      // ID (G...) as the source, NOT the contract ID (C...). The old code
+      // used contractAddress.toString() which starts with 'C' — the SDK's
+      // Account constructor accepted it, but the RPC server rejected it
+      // with "accountId is invalid" when simulating.
+      //
+      // For read-only simulation, the source account doesn't need to be
+      // funded or even exist on-ledger — the simulator just needs a
+      // syntactically valid G... address. We use the caller's wallet
+      // address if provided (write mode), or a well-known dummy address.
+      //
+      // The Stellar testnet account GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF is
+      // a commonly-used dummy — it's syntactically valid but not funded.
+      // Alternatively, if walletAddress is provided, use that.
+      const simSourceAccount = walletAddress || "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
       const fakeAccount = new StellarSdk.Account(
-        contractAddress.toString(),
+        simSourceAccount,
         "0" // sequence number — doesn't matter for simulation
       );
 

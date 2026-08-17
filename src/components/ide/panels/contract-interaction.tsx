@@ -199,7 +199,10 @@ export function ContractInteractionPanel({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          effectiveContractId,
+          // §Fix (2026-08-16) — was sending "effectiveContractId" but the
+          // API expects "contractId". The field name mismatch caused:
+          //   "Missing required fields: contractId, network, function"
+          contractId: effectiveContractId,
           network,
           function: fn.name,
           args,
@@ -267,7 +270,8 @@ export function ContractInteractionPanel({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          effectiveContractId,
+          // §Fix (2026-08-16) — was "effectiveContractId", API expects "contractId"
+          contractId: effectiveContractId,
           network,
           function: fn.name,
           args,

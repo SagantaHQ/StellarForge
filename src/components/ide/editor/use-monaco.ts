@@ -13,6 +13,12 @@ import {
   clearTypeCache,
   type TypeMember,
 } from "@/lib/autocomplete/type-members";
+import {
+  lintRustSource,
+  diagnosticsToMarkers,
+  diagnosticsToCodeActions,
+  type LintDiagnostic,
+} from "@/lib/autocomplete/rust-linter";
 
 // Monaco must be loaded client-side only via dynamic import in the consumer.
 // This hook sets up: theme registration, Rust/Soroban language config, dispose.
@@ -760,85 +766,73 @@ export function registerAutocompleteProvider(monaco: typeof Monaco): { dispose: 
     },
   });
 
-  // §LSP (2026-08-16) — simple-mode diagnostics (basic linting).
-  // Without rust-analyzer, we can't do real type checking. But we CAN
-  // catch obvious issues with regex:
-  //   - Unused `use` imports (import is present but symbol never used)
-  //   - Missing semicolons (line ends with an expression but no ;)
-  //   - Unbalanced braces (rough count)
-  // These are lightweight but catch common beginner mistakes.
-  const diagnosticProvider = monaco.languages.registerCodeActionProvider("rust", {
-    provideCodeActions: () => ({ actions: [], dispose: () => {} }),
+  // §Intelligent (2026-08-16) — simple-mode linting + quick fixes.
+  // Uses the rust-linter module which catches 8 categories of common
+  // Soroban contract mistakes, with lightbulb quick-fix code actions
+  // for each.
+  // Track diagnostics per-model so the code action provider can return them
+  const diagnosticsByModel = new Map<string, LintDiagnostic[]>();
+
+  // Code action provider — shows the lightbulb icon with quick fixes
+  const codeActionProvider = monaco.languages.registerCodeActionProvider("rust", {
+    provideCodeActions: (model, range, context) => {
+      const modelKey = model.uri.toString();
+      const diags = diagnosticsByModel.get(modelKey) ?? [];
+      // Filter to diagnostics within the requested range
+      const inRange = diags.filter(d =>
+        d.startLineNumber >= range.startLineNumber &&
+        d.endLineNumber <= range.endLineNumber
+      );
+      const actions = diagnosticsToCodeActions(monaco, inRange, model);
+      return { actions, dispose: () => {} };
+    },
   });
 
-  // Run basic diagnostics on model change (debounced)
+  // Run linting on model change (debounced 500ms)
   const diagnosticTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  const runBasicDiagnostics = (model: Monaco.editor.ITextModel) => {
+  const runLinting = (model: Monaco.editor.ITextModel) => {
     const modelKey = model.uri.toString();
     const existing = diagnosticTimers.get(modelKey);
     if (existing) clearTimeout(existing);
     diagnosticTimers.set(modelKey, setTimeout(() => {
       const source = model.getValue();
-      const markers: Monaco.editor.IMarkerData[] = [];
-
-      // Check for unused `use` imports
-      const useRe = /^\s*use\s+(?:[a-zA-Z0-9_:]+::)?([A-Za-z_][A-Za-z0-9_]*)\s*;/gm;
-      let m: RegExpExecArray | null;
-      while ((m = useRe.exec(source)) !== null) {
-        const symbol = m[1];
-        // Check if the symbol is used anywhere in the file (excluding the use line itself)
-        const usageRe = new RegExp(`\\b${symbol}\\b`, "g");
-        const lines = source.split("\n");
-        let used = false;
-        for (let i = 0; i < lines.length; i++) {
-          if (i === useRe.lastIndex - 1) continue; // skip the use line
-          if (usageRe.test(lines[i])) {
-            used = true;
-            break;
-          }
-        }
-        if (!used) {
-          const lineIdx = source.slice(0, m.index).split("\n").length - 1;
-          markers.push({
-            startLineNumber: lineIdx + 1,
-            startColumn: 1,
-            endLineNumber: lineIdx + 1,
-            endColumn: lines[lineIdx].length + 1,
-            message: `Unused import: \`${symbol}\``,
-            severity: Monaco.MarkerSeverity.Hint,
-            source: "stellarforge",
-            code: "unused-import",
-          });
-        }
+      try {
+        const diags = lintRustSource(source);
+        diagnosticsByModel.set(modelKey, diags);
+        const markers = diagnosticsToMarkers(diags);
+        monaco.editor.setModelMarkers(model, "stellarforge-simple", markers);
+      } catch (err) {
+        console.warn("[lint] failed:", err);
       }
-
-      monaco.editor.setModelMarkers(model, "stellarforge-simple", markers);
     }, 500));
   };
 
-  // Run diagnostics on all existing models + on model creation
-  monaco.editor.getModels().forEach(runBasicDiagnostics);
-  const modelCreationListener = monaco.editor.onDidCreateModel(runBasicDiagnostics);
-  const modelChangeListener = monaco.editor.onDidChangeModelLanguage(() => {
-    monaco.editor.getModels().filter(m => m.getLanguageId() === "rust").forEach(runBasicDiagnostics);
+  // Run linting on all existing rust models + on model creation
+  monaco.editor.getModels().filter(m => m.getLanguageId() === "rust").forEach(runLinting);
+  const modelCreationListener = monaco.editor.onDidCreateModel((model) => {
+    if (model.getLanguageId() === "rust") runLinting(model);
   });
 
-  // Re-run diagnostics when content changes
+  // Re-run linting when content changes
   const contentChangeDisposables: Monaco.IDisposable[] = [];
-  monaco.editor.getModels().filter(m => m.getLanguageId() === "rust").forEach(model => {
-    contentChangeDisposables.push(model.onDidChangeContent(() => runBasicDiagnostics(model)));
-  });
+  const attachContentListener = (model: Monaco.editor.ITextModel) => {
+    if (model.getLanguageId() !== "rust") return;
+    contentChangeDisposables.push(model.onDidChangeContent(() => runLinting(model)));
+  };
+  monaco.editor.getModels().forEach(attachContentListener);
+  const modelCreationListener2 = monaco.editor.onDidCreateModel(attachContentListener);
 
   return {
     dispose: () => {
       provider.dispose();
       hoverProvider.dispose();
-      diagnosticProvider.dispose();
+      codeActionProvider.dispose();
       modelCreationListener.dispose();
-      modelChangeListener.dispose();
+      modelCreationListener2.dispose();
       contentChangeDisposables.forEach(d => d.dispose());
       diagnosticTimers.forEach(t => clearTimeout(t));
       diagnosticTimers.clear();
+      diagnosticsByModel.clear();
       unsubscribe();
       completionCache.clear();
       requestIds.clear();

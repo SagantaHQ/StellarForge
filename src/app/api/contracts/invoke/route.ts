@@ -53,6 +53,133 @@ const NETWORK_PASSPHRASE: Record<string, string> = {
   local: "Standalone Network ; February 2017",
 };
 
+/**
+ * §Fix (2026-08-16) — Convert scValToNative() output to a JSON-serializable
+ * primitive/object.
+ *
+ * scValToNative() returns SDK-specific types that aren't JSON-serializable:
+ *   - ScInt → { _value, _arm, ... } (raw XDR structure)
+ *   - Address → "G..." string (this one is fine)
+ *   - Buffer/Uint8Array → { type: "Buffer", data: [...] } (Node Buffer JSON)
+ *   - XDR wrappers → { _switch, _arm, _value, ... } (raw XDR structure)
+ *
+ * This function handles all these cases + falls back to JSON.stringify
+ * for anything unexpected.
+ */
+function serializeScValResult(native: unknown, scVal: unknown): unknown {
+  // null / undefined / boolean / number / string — already serializable
+  if (native === null || native === undefined) return native;
+  if (typeof native === "boolean" || typeof native === "number" || typeof native === "string") {
+    return native;
+  }
+
+  // BigInt (i128, u128, i64, u64) — convert to string
+  if (typeof native === "bigint") {
+    return native.toString();
+  }
+
+  // Array — recurse
+  if (Array.isArray(native)) {
+    return native.map((item) => serializeScValResult(item, undefined));
+  }
+
+  // Plain object — recurse over values
+  if (typeof native === "object") {
+    // Address (stellar-sdk) — has toString() returning "G..." or "C..."
+    if (typeof (native as { toString?: () => string }).toString === "function") {
+      const str = (native as { toString: () => string }).toString();
+      // If toString returns a valid Stellar address (starts with G or C),
+      // return the string. This catches Address + ScVal types with toString.
+      if (/^[GC][A-Z0-9]{48,55}$/.test(str)) {
+        return str;
+      }
+    }
+
+    // Buffer / Uint8Array — convert to string (UTF-8 if printable, else hex)
+    if (typeof Buffer !== "undefined" && Buffer.isBuffer(native)) {
+      const buf = native as Buffer;
+      // Try UTF-8 first — if it's a Soroban String, the bytes are UTF-8
+      try {
+        const str = buf.toString("utf-8");
+        // Check if it's printable ASCII/UTF-8 (no null bytes, no control chars)
+        if (/^[\x20-\x7E\xA0-\xFF\n\r\t]*$/.test(str)) {
+          return str;
+        }
+      } catch {}
+      // Fallback: hex string
+      return buf.toString("hex");
+    }
+
+    // Uint8Array (not a Buffer) — same treatment
+    if (native instanceof Uint8Array) {
+      try {
+        const str = new TextDecoder().decode(native);
+        if (/^[\x20-\x7E\xA0-\xFF\n\r\t]*$/.test(str)) {
+          return str;
+        }
+      } catch {}
+      return Array.from(native).map(b => b.toString(16).padStart(2, "0")).join("");
+    }
+
+    // ScInt / large number types — have a toString() that returns the number
+    // Check for common SDK number-like types
+    const numStr = (native as { toString?: () => string }).toString?.();
+    if (numStr && /^\d+$/.test(numStr)) {
+      return numStr;
+    }
+
+    // Object with _value / _arm / _switch — raw XDR structure that
+    // scValToNative didn't fully convert. Try to extract the inner value.
+    const xdrObj = native as { _value?: unknown; _arm?: string; _switch?: { name?: string } };
+    if (xdrObj._arm !== undefined || xdrObj._switch !== undefined) {
+      // This is an XDR wrapper — try to get the inner value
+      if (xdrObj._value !== undefined) {
+        // For scvString, _value is a Buffer — convert to string
+        if (Buffer.isBuffer(xdrObj._value) || xdrObj._value instanceof Uint8Array) {
+          try {
+            const buf = Buffer.isBuffer(xdrObj._value)
+              ? xdrObj._value
+              : Buffer.from(xdrObj._value as Uint8Array);
+            return buf.toString("utf-8");
+          } catch {
+            return String(xdrObj._value);
+          }
+        }
+        // For other types, recurse
+        return serializeScValResult(xdrObj._value, undefined);
+      }
+      // No _value — return the switch name as a fallback
+      if (xdrObj._switch?.name) {
+        return `[${xdrObj._switch.name}]`;
+      }
+    }
+
+    // Generic object — try to serialize its keys/values
+    try {
+      const result: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(native as Record<string, unknown>)) {
+        // Skip internal XDR fields (start with _)
+        if (key.startsWith("_")) continue;
+        result[key] = serializeScValResult(value, undefined);
+      }
+      if (Object.keys(result).length > 0) {
+        return result;
+      }
+    } catch {}
+
+    // Last resort: stringify
+    try {
+      return JSON.parse(JSON.stringify(native, (_key, val) =>
+        typeof val === "bigint" ? val.toString() : val
+      ));
+    } catch {
+      return String(native);
+    }
+  }
+
+  return String(native);
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -231,12 +358,26 @@ export async function POST(req: NextRequest) {
         });
       }
 
-      // Parse the retval (base64 ScVal XDR) and convert to native
+      // Parse the retval (base64 ScVal XDR) and convert to a
+      // JSON-serializable native value.
+      //
+      // §Fix (2026-08-16) — scValToNative() returns SDK-specific types
+      // (ScInt, Address, Buffer-like objects, XDR wrappers) that are NOT
+      // directly JSON-serializable. When NextResponse.json() tries to
+      // serialize them, it produces the raw internal XDR structure
+      // (with _switch, _arm, _value, etc.) instead of the actual value.
+      //
+      // Fix: use scValToNative() for basic types, but manually convert
+      // SDK types to plain JS primitives/objects before returning.
       try {
         const scVal = StellarSdk.xdr.ScVal.fromXDR(result.retval, "base64");
         const native = scValToNative(scVal);
+
+        // Convert SDK-specific types to JSON-serializable primitives
+        const serialized = serializeScValResult(native, scVal);
+
         return NextResponse.json({
-          result: native,
+          result: serialized,
           scvalType: scVal.switch().name,
         });
       } catch (err) {

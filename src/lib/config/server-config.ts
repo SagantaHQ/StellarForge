@@ -25,7 +25,7 @@ export interface ServerConfig {
 }
 
 export const serverConfig: ServerConfig = {
-  autocompleteMode: "lsp", // "simple" or "lsp"
-  lspServerEnabled: true,    // set to true to enable rust-analyzer
+  autocompleteMode: "simple", // "simple" or "lsp"
+  lspServerEnabled: false,    // set to true to enable rust-analyzer
   lspPort: 3099,
 };
